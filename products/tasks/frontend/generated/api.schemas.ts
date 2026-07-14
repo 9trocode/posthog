@@ -3487,11 +3487,6 @@ export interface ModelCatalogueResponseApi {
     models: ModelChoiceApi[]
 }
 
-export interface PinnedTaskIdsResponseApi {
-    /** Visible task IDs pinned by the requester, newest pin first. */
-    task_ids: string[]
-}
-
 /**
  * The default AI run triple stored at team or user level.
  *
@@ -3516,7 +3511,8 @@ export interface TasksAIRunPreferencesApi {
      * * `medium` - medium
      * * `high` - high
      * * `xhigh` - xhigh
-     * * `max` - max */
+     * * `max` - max
+     * * `ultracode` - ultracode */
     reasoning_effort?: ReasoningEffortEnumApi | null
 }
 
@@ -3578,6 +3574,11 @@ export interface TasksUserConfigResponseApi {
     ai_run_preferences: TasksAIRunPreferencesApi
     /** The defaults a new run will use when no explicit runtime selection is sent. */
     resolved_ai_run_defaults: TasksResolvedAIRunDefaultsApi
+}
+
+export interface PinnedTaskIdsResponseApi {
+    /** Visible task IDs pinned by the requester, newest pin first. */
+    task_ids: string[]
 }
 
 export interface TaskRepositoriesResponseApi {

@@ -41,6 +41,9 @@ export interface ComposerModelEffortPickersProps {
      * offered as disabled. `null`/omitted means nothing is running and every harness is selectable.
      */
     lockedRuntimeAdapter?: string | null
+    /** The selection shown is the resolved default (user/project preference), not an explicit pick for
+     * this run — the model trigger renders a "Default ·" prefix so that's visible at a glance. */
+    isDefaultSelection?: boolean
 }
 
 /**
@@ -85,6 +88,7 @@ export function ComposerModelEffortPickers({
     onModelChange,
     onEffortChange,
     lockedRuntimeAdapter,
+    isDefaultSelection = false,
 }: ComposerModelEffortPickersProps): JSX.Element {
     const [open, setOpen] = useState(false)
 
@@ -115,7 +119,7 @@ export function ComposerModelEffortPickers({
             <DropdownMenuTrigger
                 render={
                     <Button variant="outline" size="sm">
-                        {modelLabel}
+                        {isDefaultSelection ? `Default · ${modelLabel}` : modelLabel}
                         {effortOptions.length > 0 && (
                             <span className="text-muted">{getEffortLabel(selectedEffort)}</span>
                         )}
