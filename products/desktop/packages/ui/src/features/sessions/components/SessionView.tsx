@@ -42,6 +42,7 @@ import { ReasoningLevelSelector } from "@posthog/ui/features/sessions/components
 import { RawLogsView } from "@posthog/ui/features/sessions/components/raw-logs/RawLogsView";
 import { SessionInitializingView } from "@posthog/ui/features/sessions/components/SessionInitializingView";
 import { SessionResourcesBar } from "@posthog/ui/features/sessions/components/SessionResourcesBar";
+import { SideQuestionCard } from "@posthog/ui/features/sessions/components/SideQuestionCard";
 import { SteerQueueToggle } from "@posthog/ui/features/sessions/components/SteerQueueToggle";
 import {
   isSubmittedContentUnchanged,
@@ -783,6 +784,7 @@ export function SessionView({
                       }`}
                     >
                       <ComposerWidth compact={compact}>
+                        {taskId && <SideQuestionCard taskId={taskId} />}
                         {taskId && <QueuedMessagesDock taskId={taskId} />}
                         <PromptInput
                           ref={editorRef}
