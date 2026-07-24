@@ -58,6 +58,29 @@ from products.warehouse_sources.backend.facade.models import DataWarehouseCreden
 
 from ee.models.rbac.access_control import AccessControl
 
+# Metrics for the "already-stored unknown event" regression tests. VA_NARRATOR_SELECTED
+# is never ingested (no EventDefinition row), mirroring the reported scenario where an
+# MCP-created experiment persists an unknown event.
+_STORED_UNKNOWN_METRIC_CASES = [
+    (
+        "mean",
+        {
+            "kind": "ExperimentMetric",
+            "metric_type": "mean",
+            "source": {"kind": "EventsNode", "event": "VA_NARRATOR_SELECTED"},
+        },
+    ),
+    (
+        "ratio",
+        {
+            "kind": "ExperimentMetric",
+            "metric_type": "ratio",
+            "numerator": {"kind": "EventsNode", "event": "VA_NARRATOR_SELECTED"},
+            "denominator": {"kind": "EventsNode", "event": "VA_NARRATOR_SHOWN"},
+        },
+    ),
+]
+
 
 # Note that we use allow_unknown_events here since allowing it was the behavior before validating it
 # and to continue allowing it here keeps test setup simple (instead of creating events before)
@@ -6513,6 +6536,51 @@ class TestExperimentService(APIBaseTest):
                     ],
                 },
             )
+
+    @parameterized.expand(
+        [
+            (f"{mname}_{field}", field, metric)
+            for field in ("metrics", "metrics_secondary")
+            for mname, metric in _STORED_UNKNOWN_METRIC_CASES
+        ]
+    )
+    def test_update_resending_stored_unknown_event_does_not_raise(self, name: str, field: str, metric: dict) -> None:
+        # Regression: a PATCH re-sends the FULL metrics list even for an unrelated edit
+        # (e.g. a rename). The update guard must not re-reject an unknown event that was
+        # already legitimately stored via allow_unknown_events, or the experiment gets
+        # stuck — every later metrics-touching PATCH fails on a value it already stores.
+        service = self._service()
+        experiment = service.create_experiment(
+            name=f"Resend Stored Unknown {name}",
+            feature_flag_key=f"resend-stored-unknown-{name.replace('_', '-')}-flag",
+            allow_unknown_events=True,
+            **{field: [deepcopy(metric)]},
+        )
+
+        # No allow_unknown_events here — the metadata-only edit re-sends the stored metric.
+        updated = service.update_experiment(experiment, {"name": "Renamed", field: [deepcopy(metric)]})
+        assert getattr(updated, field) is not None and len(getattr(updated, field)) == 1
+
+    @parameterized.expand(["metrics", "metrics_secondary"])
+    def test_update_introducing_new_unknown_event_still_raises(self, field: str) -> None:
+        # The exclusion only covers already-stored events: a newly added typo must still fail.
+        stored_metric = deepcopy(_STORED_UNKNOWN_METRIC_CASES[0][1])
+        service = self._service()
+        experiment = service.create_experiment(
+            name=f"Introduce Unknown {field}",
+            feature_flag_key=f"introduce-unknown-{field.replace('_', '-')}-flag",
+            allow_unknown_events=True,
+            **{field: [stored_metric]},
+        )
+
+        new_metric = {
+            "kind": "ExperimentMetric",
+            "metric_type": "mean",
+            "source": {"kind": "EventsNode", "event": "brand_new_typo"},
+        }
+        with self.assertRaises(ValidationError) as ctx:
+            service.update_experiment(experiment, {field: [deepcopy(stored_metric), new_metric]})
+        assert "brand_new_typo" in str(ctx.exception.detail)
 
     def test_update_experiment_with_nonexistent_action_raises(self):
         service = self._service()

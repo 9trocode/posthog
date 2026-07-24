@@ -856,7 +856,7 @@ class ExperimentService:
                 "Each ActionsNode must reference an existing action belonging to this project."
             )
 
-    def validate_metric_event_names(self, metrics: list[dict] | None) -> None:
+    def validate_metric_event_names(self, metrics: list[dict] | None, exclude_events: set[str] | None = None) -> None:
         """Validate that all EventsNode event names have been seen by this project.
 
         The frontend event picker already prevents selecting unknown events, so an
@@ -865,12 +865,19 @@ class ExperimentService:
         an experiment before deploying the emitting code) can pass
         ``allow_unknown_events=True`` to bypass this check.
 
+        ``exclude_events`` skips event names the caller already knows are legitimate —
+        used on update to avoid re-rejecting an unknown event that was already stored
+        on the experiment (a PATCH re-sends the full metrics list, so a metadata-only
+        edit would otherwise fail on a pre-existing not-yet-ingested event).
+
         Scope must match the picker: the EventDefinition list endpoint is
         project-scoped (see posthog/api/event_definition.py), so a user in a
         multi-team project can pick an event ingested by a sibling team. We
         mirror that scope here to avoid rejecting legitimate selections.
         """
         event_names, _ = self._extract_entity_nodes(metrics)
+        if exclude_events:
+            event_names -= exclude_events
         if not event_names:
             return
 
@@ -2800,12 +2807,19 @@ class ExperimentService:
         # _sync_ordering_with_metric_changes runs later and appends the new
         # regenerated uuids as additions; _sync_ordering_for_saved_metrics_on_update
         # handles saved-metric link uuids independently.
+        # Only validate event names that this PATCH newly introduces. A PATCH re-sends
+        # the full metrics list even for an unrelated edit, so re-validating already-stored
+        # events would re-reject one that was legitimately persisted with allow_unknown_events
+        # (e.g. via the MCP experiment-create tool). Newly added unknown events are still caught.
+        stored_event_names, _ = self._extract_entity_nodes(
+            [*(experiment.metrics or []), *(experiment.metrics_secondary or [])]
+        )
         if "metrics" in update_data:
             update_data["metrics"] = self._assign_uuids_to_metrics(update_data["metrics"], seen=seen_metric_uuids)
             self.validate_experiment_metrics(update_data["metrics"])
             self.validate_metric_action_ids(update_data["metrics"], self.team.id)
             if not allow_unknown_events:
-                self.validate_metric_event_names(update_data["metrics"])
+                self.validate_metric_event_names(update_data["metrics"], exclude_events=stored_event_names)
         if "metrics_secondary" in update_data:
             update_data["metrics_secondary"] = self._assign_uuids_to_metrics(
                 update_data["metrics_secondary"], seen=seen_metric_uuids
@@ -2813,7 +2827,7 @@ class ExperimentService:
             self.validate_experiment_metrics(update_data["metrics_secondary"])
             self.validate_metric_action_ids(update_data["metrics_secondary"], self.team.id)
             if not allow_unknown_events:
-                self.validate_metric_event_names(update_data["metrics_secondary"])
+                self.validate_metric_event_names(update_data["metrics_secondary"], exclude_events=stored_event_names)
 
         enforce_warehouse_metric_access(
             [
