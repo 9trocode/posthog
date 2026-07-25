@@ -6550,11 +6550,12 @@ class TestExperimentService(APIBaseTest):
         # already legitimately stored via allow_unknown_events, or the experiment gets
         # stuck — every later metrics-touching PATCH fails on a value it already stores.
         service = self._service()
+        metric_kwarg: dict[str, Any] = {field: [deepcopy(metric)]}
         experiment = service.create_experiment(
             name=f"Resend Stored Unknown {name}",
             feature_flag_key=f"resend-stored-unknown-{name.replace('_', '-')}-flag",
             allow_unknown_events=True,
-            **{field: [deepcopy(metric)]},
+            **metric_kwarg,
         )
 
         # No allow_unknown_events here — the metadata-only edit re-sends the stored metric.
@@ -6566,11 +6567,12 @@ class TestExperimentService(APIBaseTest):
         # The exclusion only covers already-stored events: a newly added typo must still fail.
         stored_metric = deepcopy(_STORED_UNKNOWN_METRIC_CASES[0][1])
         service = self._service()
+        metric_kwarg: dict[str, Any] = {field: [stored_metric]}
         experiment = service.create_experiment(
             name=f"Introduce Unknown {field}",
             feature_flag_key=f"introduce-unknown-{field.replace('_', '-')}-flag",
             allow_unknown_events=True,
-            **{field: [stored_metric]},
+            **metric_kwarg,
         )
 
         new_metric = {
