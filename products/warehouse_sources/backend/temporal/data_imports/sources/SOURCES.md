@@ -203,6 +203,7 @@ the row lists both.
 | dropbox_sign                     | HTTP                        | requests                                                        | ✅                          |
 | drip                             | HTTP                        | requests                                                        | ✅                          |
 | dub                              | HTTP                        | requests + `rest_source.RESTClient`                             | ✅                          |
+| dynamics365                      | HTTP                        | requests + `rest_source.RESTClient`                             | ✅                          |
 | dynatrace                        | HTTP                        | requests                                                        | ✅                          |
 | e2b                              | HTTP                        | requests                                                        | ✅                          |
 | e_conomic                        | HTTP                        | requests                                                        | ✅                          |
@@ -885,7 +886,6 @@ doesn't conflict with concurrent PRs.
 - dropbox
 - dubsado
 - dwolla
-- dynamics365
 - dynamics_365_business_central
 - dynamodb
 - e2b
