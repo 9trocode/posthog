@@ -460,6 +460,7 @@ the row lists both.
 | plaid                            | HTTP                        | requests                                                        | ✅                          |
 | postgres                         | DB protocol                 | psycopg                                                         | ➖                          |
 | postmark                         | HTTP                        | requests                                                        | ✅                          |
+| power_bi_admin                   | HTTP                        | requests                                                        | ✅                          |
 | prefect_cloud                    | HTTP                        | requests                                                        | ✅                          |
 | pretix                           | HTTP                        | requests                                                        | ✅                          |
 | printify                         | HTTP                        | requests                                                        | ✅                          |
@@ -1187,7 +1188,6 @@ doesn't conflict with concurrent PRs.
 - polygon
 - poplar
 - postscript
-- power_bi_admin
 - practicepanther
 - preset
 - prestashop
