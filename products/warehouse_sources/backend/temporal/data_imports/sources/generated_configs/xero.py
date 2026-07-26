@@ -6,4 +6,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common imp
 
 @config.config
 class XeroSourceConfig(config.Config):
-    pass
+    client_id: str
+    client_secret: str
+    refresh_token: str | None = None
+    tenant_id: str | None = None
