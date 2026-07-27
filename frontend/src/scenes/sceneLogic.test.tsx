@@ -10,7 +10,7 @@ import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
 
 import { initKeaTests } from '~/test/init'
-import type { AppContext } from '~/types'
+import { AccessControlLevel, AccessControlResourceType, type AppContext } from '~/types'
 
 import { sceneLogic } from './sceneLogic'
 import type { testLogicType } from './sceneLogic.testType'
@@ -28,6 +28,7 @@ const testLogic = kea<testLogicType>([path(['scenes', 'sceneLogic', 'test'])])
 const sceneImport = (): any => ({ scene: { component: Component, logic: testLogic } })
 
 const testScenes: Record<string, () => any> = {
+    [Scene.Alerts]: sceneImport,
     [Scene.DataManagement]: sceneImport,
     [Scene.Settings]: sceneImport,
 }
@@ -105,6 +106,28 @@ describe('sceneLogic', () => {
         })
     })
 
+    it('does not blanket deny the combined alerts scene without insight access', async () => {
+        const priorAppContext = window.POSTHOG_APP_CONTEXT
+        try {
+            window.POSTHOG_APP_CONTEXT = {
+                ...window.POSTHOG_APP_CONTEXT,
+                effective_resource_access_control: {
+                    ...window.POSTHOG_APP_CONTEXT?.effective_resource_access_control,
+                    [AccessControlResourceType.Insight]: AccessControlLevel.None,
+                },
+            } as AppContext
+
+            logic.actions.setScene(Scene.Alerts, 'alerts', { params: {}, searchParams: {}, hashParams: {} })
+
+            await expectLogic(logic).toMatchValues({
+                sceneId: Scene.Alerts,
+                activeSceneId: Scene.Alerts,
+            })
+        } finally {
+            window.POSTHOG_APP_CONTEXT = priorAppContext
+        }
+    })
+
     describe('/home honors the configured homepage', () => {
         const dashboardHomepage = {
             id: 'homepage-dashboard-42',
@@ -162,6 +185,43 @@ describe('sceneLogic', () => {
             }
             expect(bootstrappedHomepagePathname).toEqual(urls.dashboard(42))
             expect(redirectedPathname).toEqual(urls.dashboard(42))
+        })
+
+        // A homepage saved against a since-removed scene must be dropped, not followed. Following it
+        // sends every `/` visit to a dead route, and once that route has a compatibility redirect
+        // pointing back home the two bounce off each other forever.
+        it('ignores a bootstrapped homepage whose scene no longer ships', async () => {
+            logic.unmount()
+            const priorAppContext = window.POSTHOG_APP_CONTEXT
+            let hadBootstrappedHomepage = true
+            let redirectedPathname = ''
+            try {
+                initKeaTests()
+                window.POSTHOG_APP_CONTEXT = {
+                    ...window.POSTHOG_APP_CONTEXT,
+                    homepage: {
+                        ...dashboardHomepage,
+                        id: 'homepage-removed-scene',
+                        pathname: '/removed-scene',
+                        sceneId: 'RemovedScene',
+                    },
+                } as unknown as AppContext
+                ;(api.get as jest.Mock).mockResolvedValue({ tabs: [], homepage: null })
+                ;(api.update as jest.Mock).mockResolvedValue({ tabs: [], homepage: null })
+                await expectLogic(teamLogic).toDispatchActions(['loadCurrentTeamSuccess'])
+                featureFlagLogic.mount()
+                router.actions.push(urls.eventDefinitions())
+                const bootstrappedLogic = sceneLogic.build({ scenes: testScenes })
+                bootstrappedLogic.mount()
+                hadBootstrappedHomepage = bootstrappedLogic.values.homepage !== null
+                router.actions.push(urls.projectHomepage())
+                await expectLogic(bootstrappedLogic).delay(1)
+                redirectedPathname = removeProjectIdIfPresent(router.values.location.pathname)
+            } finally {
+                window.POSTHOG_APP_CONTEXT = priorAppContext
+            }
+            expect(hadBootstrappedHomepage).toBe(false)
+            expect(redirectedPathname).toEqual(urls.projectHomepage())
         })
 
         it('forwards allow-listed query params onto the homepage redirect and drops the rest', async () => {

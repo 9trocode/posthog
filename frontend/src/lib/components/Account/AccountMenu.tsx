@@ -15,6 +15,7 @@ import {
     IconLive,
     IconNight,
     IconPalette,
+    IconPeople,
     IconPlusSmall,
     IconReceipt,
     IconServer,
@@ -431,6 +432,18 @@ export function AccountMenu({ trigger, ...props }: AccountMenuProps): JSX.Elemen
                                 >
                                     <IconToggle />
                                     Flags staff tools
+                                </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                                <Link
+                                    to={urls.cohortsStaffTools()}
+                                    buttonProps={{
+                                        menuItem: true,
+                                    }}
+                                    data-attr="top-menu-cohorts-staff-tools"
+                                >
+                                    <IconPeople />
+                                    Cohorts staff tools
                                 </Link>
                             </DropdownMenuItem>
 

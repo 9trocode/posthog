@@ -1,17 +1,19 @@
 import { useActions, useValues } from 'kea'
 import { useEffect, useState } from 'react'
 
-import { IconChevronDown, IconPlusSmall } from '@posthog/icons'
+import { IconPerson, IconPlusSmall } from '@posthog/icons'
 import { LemonButton, LemonCheckbox, LemonDropdown, LemonInput } from '@posthog/lemon-ui'
 
 import { urls } from 'scenes/urls'
 
+import { clearFilterButtonProps } from '../clearFilterButtonProps'
 import { AssigneeIconDisplay, AssigneeLabelDisplay, AssigneeResolver } from './AssigneeDisplay'
 import { assigneeSelectLogic } from './assigneeSelectLogic'
 import { Assignee, AssigneeFilterEntry, MAX_ASSIGNEE_FILTER_ENTRIES } from './types'
 
 function isSameEntry(a: AssigneeFilterEntry, b: AssigneeFilterEntry): boolean {
-    if (a === 'unassigned' || b === 'unassigned') {
+    // String tokens ('unassigned', 'me') only match the identical token.
+    if (typeof a === 'string' || typeof b === 'string') {
         return a === b
     }
     return a.type === b.type && String(a.id) === String(b.id)
@@ -24,7 +26,8 @@ export function AssigneeMultiSelect({
     value: AssigneeFilterEntry[]
     onChange: (value: AssigneeFilterEntry[]) => void
 }): JSX.Element {
-    const { search, filteredRoles, filteredMembers, rolesLoading, membersLoading } = useValues(assigneeSelectLogic)
+    const { search, filteredRoles, filteredMembers, currentUserMember, rolesLoading, membersLoading } =
+        useValues(assigneeSelectLogic)
     const { setSearch, ensureAssigneeTypesLoaded } = useActions(assigneeSelectLogic)
     const [showPopover, setShowPopover] = useState(false)
 
@@ -63,6 +66,26 @@ export function AssigneeMultiSelect({
                         fullWidth
                     />
                     <ul className="deprecated-space-y-2">
+                        {currentUserMember && (
+                            <li>
+                                {/* Dynamic "me" entry — resolves to whoever is signed in, so a
+                                    saved view scoped to it stays each viewer's own tickets. */}
+                                <LemonButton
+                                    fullWidth
+                                    role="menuitem"
+                                    size="small"
+                                    icon={<LemonCheckbox checked={isSelected('me')} className="pointer-events-none" />}
+                                    disabledReason={isSelected('me') ? undefined : selectionCapReason}
+                                    onClick={() => toggleEntry('me')}
+                                >
+                                    <span className="flex items-center gap-1">
+                                        <MeIcon />
+                                        Me
+                                        <span className="text-secondary">(current user)</span>
+                                    </span>
+                                </LemonButton>
+                            </li>
+                        )}
                         <li>
                             <LemonButton
                                 fullWidth
@@ -99,24 +122,34 @@ export function AssigneeMultiSelect({
                                 </LemonButton>
                             }
                         />
-                        <Section
-                            title="Users"
-                            loading={membersLoading}
-                            search={!!search}
-                            items={filteredMembers.map((member) => ({
-                                id: member.user.id,
-                                type: 'user' as const,
-                                user: member.user,
-                            }))}
-                            isSelected={isSelected}
-                            onToggle={toggleEntry}
-                            selectionCapReason={selectionCapReason}
-                        />
+                        {(!!search || membersLoading || filteredMembers.length > 0) && (
+                            <Section
+                                title="Users"
+                                loading={membersLoading}
+                                search={!!search}
+                                // Include the current user here too (as their concrete
+                                // user:<id>), so they can filter to their own UUID
+                                // specifically — distinct from the dynamic "Me" row above.
+                                items={filteredMembers.map((member) => ({
+                                    id: member.user.id,
+                                    type: 'user' as const,
+                                    user: member.user,
+                                }))}
+                                isSelected={isSelected}
+                                onToggle={toggleEntry}
+                                selectionCapReason={selectionCapReason}
+                            />
+                        )}
                     </ul>
                 </div>
             }
         >
-            <LemonButton size="small" type="secondary" active={showPopover} sideIcon={<IconChevronDown />}>
+            <LemonButton
+                size="small"
+                type="secondary"
+                active={showPopover}
+                {...clearFilterButtonProps(value.length > 0 ? () => onChange([]) : null, 'Clear assignee filter')}
+            >
                 <TriggerLabel value={value} />
             </LemonButton>
         </LemonDropdown>
@@ -139,6 +172,14 @@ function TriggerLabel({ value }: { value: AssigneeFilterEntry[] }): JSX.Element 
             </span>
         )
     }
+    if (entry === 'me') {
+        return (
+            <span className="flex items-center gap-1">
+                <MeIcon />
+                Me
+            </span>
+        )
+    }
     return (
         <AssigneeResolver assignee={entry}>
             {({ assignee }) => (
@@ -148,6 +189,43 @@ function TriggerLabel({ value }: { value: AssigneeFilterEntry[] }): JSX.Element 
                 </span>
             )}
         </AssigneeResolver>
+    )
+}
+
+// Solid person glyph for the dynamic "me" entry — distinct from the dashed
+// "unassigned" icon and from any specific member's avatar.
+function MeIcon(): JSX.Element {
+    return <IconPerson className="rounded-full bg-accent-highlight text-accent p-0.5 h-4 w-4" />
+}
+
+const AssigneeFilterItem = ({
+    item,
+    isSelected,
+    onToggle,
+    selectionCapReason,
+    labelSuffix,
+}: {
+    item: NonNullable<Assignee>
+    isSelected: (entry: AssigneeFilterEntry) => boolean
+    onToggle: (entry: AssigneeFilterEntry) => void
+    selectionCapReason?: string
+    labelSuffix?: JSX.Element
+}): JSX.Element => {
+    return (
+        <LemonButton
+            fullWidth
+            role="menuitem"
+            size="small"
+            icon={<LemonCheckbox checked={isSelected(item)} className="pointer-events-none" />}
+            disabledReason={isSelected(item) ? undefined : selectionCapReason}
+            onClick={() => onToggle({ type: item.type, id: item.id })}
+        >
+            <span className="flex items-center gap-1">
+                <AssigneeIconDisplay assignee={item} size="small" />
+                <AssigneeLabelDisplay assignee={item} />
+                {labelSuffix}
+            </span>
+        </LemonButton>
     )
 }
 
@@ -176,19 +254,12 @@ const Section = ({
                 <h5 className="mx-2 my-0.5">{title}</h5>
                 {items.map((item) => (
                     <li key={item.id}>
-                        <LemonButton
-                            fullWidth
-                            role="menuitem"
-                            size="small"
-                            icon={<LemonCheckbox checked={isSelected(item)} className="pointer-events-none" />}
-                            disabledReason={isSelected(item) ? undefined : selectionCapReason}
-                            onClick={() => onToggle({ type: item.type, id: item.id })}
-                        >
-                            <span className="flex items-center gap-1">
-                                <AssigneeIconDisplay assignee={item} size="small" />
-                                <AssigneeLabelDisplay assignee={item} />
-                            </span>
-                        </LemonButton>
+                        <AssigneeFilterItem
+                            item={item}
+                            isSelected={isSelected}
+                            onToggle={onToggle}
+                            selectionCapReason={selectionCapReason}
+                        />
                     </li>
                 ))}
 
