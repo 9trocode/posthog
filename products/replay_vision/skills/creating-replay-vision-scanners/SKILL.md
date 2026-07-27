@@ -73,16 +73,30 @@ Before creating, run both checks and reason about them together:
    `other_enabled_scanners_monthly_credits` (what the org's other enabled scanners are already projected to
    spend). When editing an existing scanner, pass its `scanner_id` so its own estimate isn't counted twice.
 2. **Check budget** — call `vision-quota-retrieve` for `remaining` and `exhausted` against the org's
-   `credit_limit` (credits, 1 credit = $0.01; `null` when uncapped).
+   `credit_limit` (credits, 1 credit = $0.01; `null` when uncapped), plus the `period_start`/`period_end`
+   of the current period.
 
-Compare credits with credits: `estimated_credits_per_month` plus `other_enabled_scanners_monthly_credits`
-against `remaining`. Then decide:
+Compare credits with credits over the same horizon, the way the product UI does.
+`remaining` is what's left for the rest of the current period, so prorate the monthly projection to that
+window rather than comparing a full month against it:
 
-- If the projection comfortably fits within `remaining`, proceed.
+```text
+fleet_monthly    = estimated_credits_per_month + other_enabled_scanners_monthly_credits
+period_days      = period_end - period_start        (in days)
+days_left        = period_end - now                 (in days, floored at 0)
+rest_of_period   = fleet_monthly * days_left / period_days
+```
+
+Then decide on `rest_of_period` against `remaining`:
+
+- If it comfortably fits within `remaining`, proceed.
 - If it's a large fraction of (or exceeds) `remaining`, **stop and tell the user the concrete numbers**
-  (e.g. "This scanner is projected to spend ~X credits/month, about $Y; you have Z left this period."), then
-  confirm before creating. Tightening the `query`, switching `sampling_mode` to `focused`, lowering
-  `sampling_rate`, or picking a cheaper `model` are all ways to bring it down.
+  (e.g. "This scanner is projected to spend ~X credits/month, about $Y; over the N days left this period
+  that's ~R credits against the Z you have left."), then confirm before creating. Tightening the `query`,
+  switching `sampling_mode` to `focused`, lowering `sampling_rate`, or picking a cheaper `model` are all
+  ways to bring it down.
+- Quote `estimated_credits_per_month` too, since it's what the scanner costs in a full period once this
+  one resets. Mid-period a scanner can fit in `remaining` and still blow the next period's budget.
 - If the org is already `exhausted`, say so. A new enabled scanner won't produce anything until the budget
   resets: its scheduled observations are silently skipped, and on-demand scans are rejected outright.
 
