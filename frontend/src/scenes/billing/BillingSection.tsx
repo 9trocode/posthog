@@ -28,7 +28,7 @@ const tabs: { key: BillingSectionId; label: string }[] = [
 
 export function BillingSection(): JSX.Element {
     const { location, searchParams } = useValues(router)
-    const { canAccessBilling, canOnlyViewBillingUsage } = useValues(billingLogic)
+    const { canAccessBilling, canOnlyViewUsageAndSpend } = useValues(billingLogic)
 
     const section = location.pathname.includes('spend')
         ? 'spend'
@@ -37,12 +37,12 @@ export function BillingSection(): JSX.Element {
           : 'overview'
 
     // View-only members have no access to the Overview tab, so send them to Usage instead.
-    // canOnlyViewBillingUsage is only true once org membership and flags are loaded, so admins never bounce.
+    // canOnlyViewUsageAndSpend is only true once org membership and flags are loaded, so admins never bounce.
     useEffect(() => {
-        if (section === 'overview' && canOnlyViewBillingUsage) {
+        if (section === 'overview' && canOnlyViewUsageAndSpend) {
             router.actions.replace(urls.organizationBillingSection('usage'))
         }
-    }, [section, canOnlyViewBillingUsage])
+    }, [section, canOnlyViewUsageAndSpend])
 
     const visibleTabs = tabs.filter((tab) => tab.key !== 'overview' || canAccessBilling)
 
