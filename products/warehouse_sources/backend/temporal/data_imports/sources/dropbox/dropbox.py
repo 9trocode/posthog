@@ -86,10 +86,14 @@ class DropboxClient:
         self._logger = logger or structlog.get_logger(__name__)
         self._access_token: str | None = None
         redact = (credentials.app_secret, credentials.refresh_token)
+        # Dropbox responses carry customer file/audit metadata and shared-link URLs (bearer
+        # capabilities anyone can redeem) that the name-based sample scrubbers can't recognise,
+        # so keep the whole content session out of sample capture. Requests stay metered and logged.
         self._session = make_tracked_session(
             headers={"Content-Type": "application/json"},
             redact_values=redact,
             retry=DROPBOX_RETRY,
+            capture=False,
         )
         # The token exchange's response body carries the minted access token, which the
         # name-based sample scrubbers can't recognise — keep it out of sample capture.
