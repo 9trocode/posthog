@@ -28,8 +28,8 @@ tools:
         title: List vision actions
         description: >
             List the vision actions (the "and then…" automations that run over a scanner's observations) for the current
-            project. A vision action in `mode: group_summary` produces the group summary shown on the "Summaries and
-            alerts" tab — one report synthesized from up to `max_observations` observations of its bound scanner; `mode:
+            project. A vision action in `mode: group_summary` produces the group summary shown on the scanner's "Digests
+            and alerts" tab — one report synthesized from up to `max_observations` observations of its bound scanner; `mode:
             alert` delivers only when its alert condition holds. Each row carries the bound `scanner`, `mode`,
             `trigger_type`, cadence, and `is_scanner_digest` (the built-in daily digest). Pass `?scanner=<id>` to filter
             to one scanner. To read a specific action's produced reports, list its runs with `vision-actions-runs-list`.

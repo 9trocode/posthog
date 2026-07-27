@@ -35,6 +35,10 @@ the inbox path — see _Acting on findings_ below.
 If the user gave a `/project/<id>/replay-vision/<scanner-id>` URL, that path segment is the scanner ID.
 Otherwise list them with `vision-scanners-list` and pick the relevant one.
 
+A `?tab=` on that URL tells you which surface they're looking at, which usually says what they want:
+`overview` (the default, charts and stat panels), `observations` (the list), `on-demand` (scan a session now),
+`configuration`, `quality` (ratings and the prompt recommendation), or `actions` (digests and alerts).
+
 Then call `vision-scanners-get` to read its configuration **before** reading results — the `scanner_type` and
 `scanner_config.prompt` tell you how to interpret `scanner_result` (a `verdict` field only makes sense once you
 know it's a monitor; a score only means something against the scorer's `scale`).

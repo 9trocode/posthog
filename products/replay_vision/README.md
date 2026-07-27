@@ -20,6 +20,29 @@ Usage (receipts + in-flight rows + in-flight prompt tests) counts against the or
 Per-scanner volume estimates are credit-weighted and summed into a projected-spend prognosis shown at configuration time.
 Scheduled observations over budget are skipped; on-demand ones are rejected.
 
+## Scenes and tabs
+
+**Scanner list** (`/replay-vision`), two tabs switched through `?tab=`:
+
+| Tab      | `?tab=` | What it shows                                                             |
+| -------- | ------- | ------------------------------------------------------------------------- |
+| Scanners | (none)  | The team's scanner roster plus the team-wide vision metrics.              |
+| Usage    | `usage` | Credit spend over time for the org, bucketed daily/weekly/monthly/yearly. |
+
+**Scanner** (`/replay-vision/<scanner-id>`), six tabs switched through `?tab=`. Overview is the default and writes no param.
+
+| Tab                | `?tab=`         | What it shows                                                                                                                                          |
+| ------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Overview           | `overview`      | At-a-glance panels: impact, verdict mix, top fixed and freeform tags, score distribution. Leads with the daily digest card when vision actions are on. |
+| Observations       | `observations`  | The scanner's observations, filterable by status, verdict, tags, and date.                                                                             |
+| On-demand          | `on-demand`     | Scan now: by session ID, or by picking from recent recordings.                                                                                         |
+| Configuration      | `configuration` | Read-only view of the scanner's current config.                                                                                                        |
+| Quality            | `quality`       | Thumbs up/down ratings, accuracy over time, feedback themes, and the AI prompt recommendation with its prompt test.                                    |
+| Digests and alerts | `actions`       | The vision actions bound to this scanner. Only rendered behind the `replay-vision-actions` flag.                                                       |
+
+**Scanner editor** (`/replay-vision/<scanner-id>/<step>`) is a stepper rather than tabs: Template, Configure, Scan conditions (`triggers`), Self-driving.
+Observations, vision actions, and action runs each have their own scene under `/replay-vision/observations/…` and `/replay-vision/actions/…`.
+
 ## Layout
 
 - `backend/models/` — `ReplayScanner`, `ReplayObservation`, observation labels (ratings), usage receipts, quota grants, prompt suggestions, vision actions.
