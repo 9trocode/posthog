@@ -121,12 +121,14 @@ class XeroClient:
         self._client_secret = client_secret
         self._refresh_token = refresh_token or None
         secrets = tuple(secret for secret in (client_secret, self._refresh_token) if secret)
-        # The token exchange answers with the access token in a plain `access_token` field, so
-        # its traffic is metered but never sampled.
+        # Both sessions disable HTTP sample capture: the token exchange returns the access token in
+        # a plain `access_token` field, and the data responses carry financial and contact records
+        # the generic scrubber would not strip. Traffic stays metered but is never sampled.
         self._token_session = make_tracked_session(redact_values=secrets, capture=False)
         self._session = make_tracked_session(
             headers={"Accept": "application/json"},
             redact_values=secrets,
+            capture=False,
         )
         self._token: Optional[str] = None
 

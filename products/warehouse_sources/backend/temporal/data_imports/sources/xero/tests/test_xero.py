@@ -159,6 +159,13 @@ class TestXeroTransport:
     def test_format_modified_since(self, value: Any, expected: Optional[str]) -> None:
         assert format_modified_since(value) == expected
 
+    def test_both_sessions_disable_http_sample_capture(self) -> None:
+        with mock.patch(SESSION_PATCH, return_value=mock.MagicMock()) as make_session:
+            XeroClient(client_id="cid", client_secret="sec", refresh_token="refresh-1")
+
+        assert make_session.call_count == 2
+        assert all(call.kwargs.get("capture") is False for call in make_session.call_args_list)
+
     def test_mint_token_uses_client_credentials_without_refresh_token(self) -> None:
         client, _, token_session = _wire([])
         assert client.mint_token() == "access-1"
