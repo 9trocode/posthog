@@ -101,7 +101,10 @@ def _parse_service_account_key(raw: str) -> dict[str, Any]:
     if not isinstance(info, dict) or not info.get("client_email") or not info.get("private_key"):
         raise GoogleDriveAuthError(INVALID_SERVICE_ACCOUNT_KEY_ERROR)
 
-    info.setdefault("token_uri", GOOGLE_TOKEN_URL)
+    # Pin the token endpoint rather than honoring a caller-supplied one: google-auth calls it
+    # during credential refresh, so a submitted key naming an internal URL would turn this worker
+    # into an SSRF vector. This source only ever talks to Google's token endpoint.
+    info["token_uri"] = GOOGLE_TOKEN_URL
     return info
 
 
@@ -142,8 +145,8 @@ class GoogleDriveClient:
     """Minted-token Drive client over the tracked session.
 
     Both auth methods produce a short-lived bearer token, so the client owns minting, caching, and
-    re-minting it. The token exchange rides a separate session with sample capture disabled — its
-    response body is the access token itself, which the name-based scrubbers can't recognise.
+    re-minting it. Neither session captures HTTP samples: the token exchange body is the access
+    token itself, and Drive responses carry tenant metadata the name-based scrubbers can't recognise.
     """
 
     def __init__(
@@ -159,7 +162,14 @@ class GoogleDriveClient:
             _parse_service_account_key(auth.service_account_key) if auth.service_account_key else None
         )
         redact_values = self._redact_values()
-        self._session = make_tracked_session(headers={"Accept": "application/json"}, redact_values=redact_values)
+        # Both sessions disable sample capture. Drive responses carry tenant file names, owner and
+        # sharing identities, permission email addresses, and access URLs that the name-based
+        # scrubbers can't recognise, so keeping them out of the shared sample prefix is the only way
+        # to hold them to the warehouse table's access controls. The token exchange is excluded for
+        # the same reason: its body is the access token itself.
+        self._session = make_tracked_session(
+            headers={"Accept": "application/json"}, redact_values=redact_values, capture=False
+        )
         self._token_session = make_tracked_session(redact_values=redact_values, capture=False)
         self._access_token: Optional[str] = None
         self._token_expires_at: float = 0.0

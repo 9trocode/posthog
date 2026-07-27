@@ -420,8 +420,26 @@ def test_secret_values_are_registered_for_redaction() -> None:
 
     for call in make_session.call_args_list:
         assert "-----KEY-----" in call.kwargs["redact_values"]
-    # The token exchange returns the bearer token in its body, so it stays out of sample capture
-    assert make_session.call_args_list[1].kwargs["capture"] is False
+    # Neither session may capture HTTP samples: the token exchange body is the bearer token, and the
+    # Drive API responses carry tenant file names, owner/sharing identities, and permission emails
+    # the name-based scrubbers can't recognise. Both must stay out of the shared sample prefix.
+    api_call, token_call = make_session.call_args_list
+    assert api_call.kwargs["capture"] is False
+    assert token_call.kwargs["capture"] is False
+
+
+def test_a_caller_supplied_token_uri_is_overridden() -> None:
+    # google-auth calls token_uri during credential refresh, so honoring a submitted one would let a
+    # malicious key point the worker at an internal host (SSRF). It must be pinned to Google's.
+    raw_key = json.dumps(
+        {
+            "client_email": "sa@project.iam.gserviceaccount.com",
+            "private_key": "-----KEY-----",
+            "token_uri": "http://169.254.169.254/",
+        }
+    )
+    info = google_drive._parse_service_account_key(raw_key)
+    assert info["token_uri"] == google_drive.GOOGLE_TOKEN_URL
 
 
 def test_top_level_pagination_follows_page_tokens_and_terminates() -> None:
