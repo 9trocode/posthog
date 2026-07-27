@@ -15,7 +15,7 @@ from posthog.views import api_key_search_view, redis_edit_ttl_view, redis_values
 
 from products.cdp.backend.api import hooks
 
-from ee.admin.loginas_views import loginas_user, loginas_user_from_ticket, upgrade_impersonation
+from ee.admin.loginas_views import loginas_user, upgrade_impersonation
 from ee.admin.oauth_views import admin_auth_check, admin_oauth_success
 from ee.api import integration
 from ee.api.agentic_provisioning import views as agentic_provisioning_views
@@ -227,7 +227,6 @@ if settings.ADMIN_PORTAL_ENABLED:
         ),
         path("admin/login/user/<str:user_id>/", loginas_user, name="loginas-user-login"),
         path("admin/impersonation/upgrade/", upgrade_impersonation, name="impersonation-upgrade"),
-        path("admin/impersonation/from-ticket/", loginas_user_from_ticket, name="impersonation-from-ticket"),
         path("admin/", include("loginas.urls")),
         path("admin/", admin.site.urls),
     ]
@@ -276,17 +275,9 @@ urlpatterns: list[Any] = [
         name="scim_resource_types",
     ),
     path("scim/v2/<uuid:domain_id>/Schemas", csrf_exempt(scim_views.SCIMSchemasView.as_view()), name="scim_schemas"),
-    # Agentic Provisioning Protocol (APP 0.1d)
-    path(
-        "api/agentic/provisioning/health",
-        csrf_exempt(agentic_provisioning_views.provisioning_health),
-        name="agentic_provisioning_health",
-    ),
-    path(
-        "api/agentic/provisioning/services",
-        csrf_exempt(agentic_provisioning_views.provisioning_services),
-        name="agentic_provisioning_services",
-    ),
+    # Stripe Projects provisioning (APP 0.1d)
+    path("api/partners/stripe/", include("ee.partners.stripe.api.provisioning.urls")),
+    # Account Provisioning
     path(
         "api/agentic/provisioning/account_requests",
         csrf_exempt(agentic_provisioning_views.account_requests),
@@ -321,11 +312,6 @@ urlpatterns: list[Any] = [
         "api/agentic/provisioning/resources/<str:resource_id>/rotate_credentials",
         csrf_exempt(agentic_provisioning_views.provisioning_rotate_credentials),
         name="agentic_provisioning_rotate_credentials",
-    ),
-    path(
-        "api/agentic/provisioning/resources/<str:resource_id>/update_service",
-        csrf_exempt(agentic_provisioning_views.provisioning_update_service),
-        name="agentic_provisioning_update_service",
     ),
     path(
         "api/agentic/provisioning/resources/<str:resource_id>/remove",
@@ -369,16 +355,6 @@ urlpatterns: list[Any] = [
     ),
     # Generic provisioning URL aliases (keep /api/agentic/... for backward compat)
     path(
-        "api/provisioning/health",
-        csrf_exempt(agentic_provisioning_views.provisioning_health),
-        name="provisioning_health",
-    ),
-    path(
-        "api/provisioning/services",
-        csrf_exempt(agentic_provisioning_views.provisioning_services),
-        name="provisioning_services",
-    ),
-    path(
         "api/provisioning/account_requests",
         csrf_exempt(agentic_provisioning_views.account_requests),
         name="provisioning_account_requests",
@@ -397,11 +373,6 @@ urlpatterns: list[Any] = [
         "api/provisioning/resources/<str:resource_id>/rotate_credentials",
         csrf_exempt(agentic_provisioning_views.provisioning_rotate_credentials),
         name="provisioning_rotate_credentials",
-    ),
-    path(
-        "api/provisioning/resources/<str:resource_id>/update_service",
-        csrf_exempt(agentic_provisioning_views.provisioning_update_service),
-        name="provisioning_update_service",
     ),
     path(
         "api/provisioning/resources/<str:resource_id>/remove",
