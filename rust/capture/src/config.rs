@@ -58,21 +58,20 @@ impl std::str::FromStr for EnvelopeCompression {
     }
 }
 
-/// Routing mode for AI capture events between the primary cluster and a
-/// secondary (e.g. WarpStream) cluster. Only consulted in `CaptureMode::Ai`.
+/// Routing mode for diverting `$ai_*` events on analytics deployments into
+/// the dedicated AI topic (`capture_analytics_ai_events_mode`).
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum AiSinkMode {
-    /// All AI events stay on the primary sink (current behavior).
+    /// No `$ai_*` events are diverted (current behavior).
     #[default]
     Primary,
-    /// Only tokens listed in `ai_secondary_allowlist_tokens` go to the
-    /// secondary sink; everything else stays on the primary.
+    /// Only tokens listed in `capture_analytics_ai_events_allowlist_tokens`
+    /// are diverted; everything else stays on the primary topic.
     SecondaryAllowlist,
     /// Tokens whose deterministic hash bucket falls under the configured
-    /// percentage go to the secondary sink; everything else stays on the
-    /// primary.
+    /// percentage are diverted; everything else stays on the primary topic.
     SecondaryPercentage,
-    /// All AI events go to the secondary sink.
+    /// All `$ai_*` events are diverted.
     Secondary,
 }
 
@@ -92,8 +91,9 @@ impl std::str::FromStr for AiSinkMode {
 
 /// Resolved AI routing policy: the configured `AiSinkMode` with the token
 /// allowlist or percentage it needs attached to the variant that uses it.
-/// Built from the raw `ai_sink_mode` + companion config in `setup` and
-/// carried by `SplitKafkaSink`, so routing needs nothing but the event's token.
+/// Built from the raw `capture_analytics_ai_events_mode` + companion config in
+/// `setup` and carried in `router::State`, so routing needs nothing but the
+/// event's token.
 #[derive(Debug, Clone)]
 pub enum AiRouting {
     Primary,
@@ -320,29 +320,6 @@ pub struct Config {
     // (all $ai_gateway* props are stripped as untrusted).
     pub ai_gateway_signing_secret: Option<String>,
 
-    // --- AI secondary sink (e.g. WarpStream cluster) routing ---
-    /// `primary` keeps all AI events on the primary sink; `secondary_allowlist`
-    /// sends only `ai_secondary_allowlist_tokens` to the secondary; `secondary`
-    /// sends every AI event to the secondary. `secondary_percentage` is not
-    /// supported here (it exists for `capture_analytics_ai_events_mode`).
-    /// Only consulted in `CaptureMode::Ai`.
-    #[envconfig(default = "primary")]
-    pub ai_sink_mode: AiSinkMode,
-
-    /// Comma-separated tokens routed to the secondary AI sink when
-    /// `ai_sink_mode = secondary_allowlist`.
-    pub ai_secondary_allowlist_tokens: Option<String>,
-
-    /// Secondary AI Kafka cluster connection. When `ai_sink_mode` is not
-    /// `primary`, `ai_secondary_kafka_hosts` and `ai_secondary_kafka_topic` are
-    /// required; the secondary producer inherits all other tuning from `kafka`.
-    pub ai_secondary_kafka_hosts: Option<String>,
-    pub ai_secondary_kafka_topic: Option<String>,
-    #[envconfig(default = "false")]
-    pub ai_secondary_kafka_tls: bool,
-    #[envconfig(default = "")]
-    pub ai_secondary_kafka_client_id: String,
-
     // --- Dedicated $ai_* topic routing on analytics deployments ---
     /// Routing mode for `$ai_*` events into the dedicated AI topic
     /// (`kafka.capture_analytics_ai_events_topic`, i.e. `CAPTURE_ANALYTICS_AI_EVENTS_TOPIC`): `primary` (default)
@@ -467,10 +444,9 @@ pub struct KafkaConfig {
     pub kafka_replay_overflow_topic: String,
     #[envconfig(default = "events_plugin_ingestion_dlq")]
     pub kafka_dlq_topic: String,
-    /// Dedicated Kafka topic for `$ai_*` events (env: `CAPTURE_ANALYTICS_AI_EVENTS_TOPIC`).
-    /// Unlike the `ai_secondary_*` family on `Config` (which picks a secondary
-    /// CLUSTER on `CaptureMode::Ai` deployments), this picks a TOPIC on the
-    /// same sink: per `Config::capture_analytics_ai_events_mode`, both the v0 pipeline
+    /// Dedicated Kafka topic for `$ai_*` events (env: `CAPTURE_ANALYTICS_AI_EVENTS_TOPIC`),
+    /// on the same sink as every other topic: per
+    /// `Config::capture_analytics_ai_events_mode`, both the v0 pipeline
     /// (via `DataType::AiEvents`) and the v1 pipeline (via
     /// `Destination::AiEvents`) divert `$ai_*` events here instead of the
     /// analytics main topic. Setup also injects it into every v1 sink config.
@@ -652,9 +628,9 @@ mod tests {
 
     #[test]
     fn ai_sink_mode_from_str() {
-        // Locks the AI_SINK_MODE env contract: accepted spellings (incl. the
-        // dash/underscore allowlist alias), case-insensitivity, and rejection
-        // of anything else.
+        // Locks the CAPTURE_ANALYTICS_AI_EVENTS_MODE env contract: accepted
+        // spellings (incl. the dash/underscore allowlist alias),
+        // case-insensitivity, and rejection of anything else.
         let ok = [
             ("primary", AiSinkMode::Primary),
             ("PRIMARY", AiSinkMode::Primary),
@@ -694,7 +670,7 @@ mod tests {
     fn ai_routing_routes_to_secondary() {
         // Locks the routing decision: a flipped arm or the allowlist being
         // consulted in the wrong variant would send AI traffic to the wrong
-        // cluster mid-cutover.
+        // topic mid-rollout.
         use std::collections::HashSet;
         let allowlist: HashSet<String> = ["tok_a".to_string()].into_iter().collect();
 
