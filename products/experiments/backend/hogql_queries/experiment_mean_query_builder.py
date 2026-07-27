@@ -12,7 +12,7 @@ from posthog.hogql import ast
 from posthog.hogql.parser import parse_expr, parse_select
 
 from posthog.hogql_queries.insights.trends.utils import get_properties_chain
-from posthog.hogql_queries.insights.utils.breakdowns import BREAKDOWN_NULL_STRING_LABEL
+from posthog.hogql_queries.insights.utils.breakdowns import BREAKDOWN_NULL_STRING_LABEL, BREAKDOWN_OTHER_STRING_LABEL
 
 from products.experiments.backend.hogql_queries.base_query_utils import (
     is_session_property_metric,
@@ -22,6 +22,9 @@ from products.experiments.backend.hogql_queries.metric_source import MetricSourc
 
 if TYPE_CHECKING:
     from products.experiments.backend.hogql_queries.experiment_query_builder import ExperimentQueryBuilder
+
+# ponytail: top-20 fixed; make configurable if anyone asks
+VALUE_BREAKDOWN_MAX_BUCKETS = 20
 
 
 class MeanQueryBuilder:
@@ -451,6 +454,9 @@ class MeanQueryBuilder:
 
         Only valid for count ('total') and 'sum' math, with an event/action source — both enforced
         by the runner before this is called.
+
+        High-cardinality properties are capped: only the top VALUE_BREAKDOWN_MAX_BUCKETS values by
+        total |contribution| keep their own bucket; the rest roll into the shared "Other" label.
         """
         assert isinstance(self._b.metric, ExperimentMeanMetric)
         assert isinstance(self._b.metric.source, (ActionsNode, EventsNode)), (
@@ -469,6 +475,8 @@ class MeanQueryBuilder:
             "breakdown_value_expr": self._build_value_breakdown_expr(breakdown_property, source_info.table_name),
             "value_agg": self._b._build_value_aggregation_expr(),
             "conversion_window_predicate": self._b._build_conversion_window_predicate(),
+            "other_label": ast.Constant(value=BREAKDOWN_OTHER_STRING_LABEL),
+            "max_buckets": ast.Constant(value=VALUE_BREAKDOWN_MAX_BUCKETS),
         }
 
         query = parse_select(
@@ -478,7 +486,7 @@ class MeanQueryBuilder:
                 {exposure_select_query}
             ),
 
-            metric_events AS (
+            raw_metric_events AS (
                 SELECT
                     {entity_key} AS entity_id,
                     {metric_timestamp_field} AS timestamp,
@@ -486,6 +494,35 @@ class MeanQueryBuilder:
                     {breakdown_value_expr} AS breakdown_value
                 FROM {metric_table}
                 WHERE {metric_predicate}
+            ),
+
+            -- The values that keep their own bucket, ranked by total |contribution|. Ranked over the
+            -- raw event scan (pre-join, so it can include never-exposed users) — which values are
+            -- named vs rolled into "Other" is a display choice; the per-value sums still add back to
+            -- the un-split total either way.
+            top_buckets AS (
+                SELECT breakdown_value
+                FROM raw_metric_events
+                GROUP BY breakdown_value
+                ORDER BY sum(abs(value)) DESC, breakdown_value ASC
+                LIMIT {max_buckets}
+            ),
+
+            -- The remap to "Other" happens here, before the per-entity aggregation below, so the
+            -- Other bucket's sum-of-squares is computed from per-entity Other totals. Merging
+            -- already-aggregated buckets instead would drop the cross terms and understate its
+            -- variance.
+            metric_events AS (
+                SELECT
+                    raw_metric_events.entity_id AS entity_id,
+                    raw_metric_events.timestamp AS timestamp,
+                    raw_metric_events.value AS value,
+                    if(
+                        raw_metric_events.breakdown_value IN (SELECT breakdown_value FROM top_buckets),
+                        raw_metric_events.breakdown_value,
+                        {other_label}
+                    ) AS breakdown_value
+                FROM raw_metric_events
             ),
 
             -- One row per (user, variant, property value): the user's accumulated metric value for

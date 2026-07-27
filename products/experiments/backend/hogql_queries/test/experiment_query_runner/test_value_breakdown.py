@@ -20,8 +20,9 @@ from posthog.schema import (
     ExperimentVariantResultFrequentist,
 )
 
-from posthog.hogql_queries.insights.utils.breakdowns import BREAKDOWN_NULL_STRING_LABEL
+from posthog.hogql_queries.insights.utils.breakdowns import BREAKDOWN_NULL_STRING_LABEL, BREAKDOWN_OTHER_STRING_LABEL
 
+from products.experiments.backend.hogql_queries.experiment_mean_query_builder import VALUE_BREAKDOWN_MAX_BUCKETS
 from products.experiments.backend.hogql_queries.experiment_query_runner import ExperimentQueryRunner
 from products.experiments.backend.hogql_queries.test.experiment_query_runner.base import ExperimentQueryRunnerBaseTest
 
@@ -189,6 +190,77 @@ class TestExperimentValueBreakdown(ExperimentQueryRunnerBaseTest):
         )
         self.assertEqual(test_variant.number_of_samples, 3)
         self.assertAlmostEqual(test_variant.sum, 0.0, places=6)
+
+    @freeze_time("2020-01-01T12:00:00Z")
+    def test_value_breakdown_rolls_up_beyond_max_buckets(self):
+        # MAX+2 distinct plan values: the two smallest contributors must roll into the shared
+        # "Other" bucket without breaking the sums-add-back guarantee. Both small values belong to
+        # the same user, so Other's sum_squares must be (3+4)^2 = 49 — computed per entity before
+        # squaring. A rollup that merges already-aggregated buckets would report 3^2 + 4^2 = 25.
+        feature_flag = self.create_feature_flag()
+        experiment = self.create_experiment(feature_flag=feature_flag)
+        experiment.stats_config = {"method": "frequentist"}
+        experiment.save()
+
+        feature_flag_property = f"$feature/{feature_flag.key}"
+        exposed = {"control": ["c0", "c1", "c2"], "test": ["t0", "t1", "t2"]}
+        top_plans = [f"plan_{i:02d}" for i in range(VALUE_BREAKDOWN_MAX_BUCKETS)]
+        purchases = [("control", "c0", 3, "tiny_a"), ("control", "c0", 4, "tiny_b")] + [
+            ("control", "c0", 10, plan) for plan in top_plans
+        ]
+        purchases.append(("test", "t0", 5, top_plans[0]))
+
+        for variant, distinct_ids in exposed.items():
+            for distinct_id in distinct_ids:
+                _create_person(distinct_ids=[distinct_id], team_id=self.team.pk)
+                _create_event(
+                    team=self.team,
+                    event="$feature_flag_called",
+                    distinct_id=distinct_id,
+                    timestamp="2020-01-02T12:00:00Z",
+                    properties={
+                        feature_flag_property: variant,
+                        "$feature_flag_response": variant,
+                        "$feature_flag": feature_flag.key,
+                    },
+                )
+        for variant, distinct_id, amount, plan in purchases:
+            _create_event(
+                team=self.team,
+                event="purchase",
+                distinct_id=distinct_id,
+                timestamp="2020-01-02T12:01:00Z",
+                properties={feature_flag_property: variant, "amount": amount, "plan": plan},
+            )
+        flush_persons_and_events()
+
+        metric = ExperimentMeanMetric(
+            source=EventsNode(event="purchase", math=ExperimentMetricMathType.SUM, math_property="amount"),
+            value_breakdown_property="plan",
+        )
+        result = self._run(experiment, metric)
+
+        assert result.breakdown_results is not None
+        by_bucket = {tuple(br.breakdown_value): br for br in result.breakdown_results}
+        expected_buckets = {(plan,) for plan in top_plans} | {(BREAKDOWN_OTHER_STRING_LABEL,)}
+        self.assertEqual(set(by_bucket.keys()), expected_buckets)
+
+        other = by_bucket[(BREAKDOWN_OTHER_STRING_LABEL,)]
+        self.assertEqual(other.baseline.number_of_samples, 3)
+        self.assertAlmostEqual(other.baseline.sum, 7.0, places=6)
+        self.assertAlmostEqual(other.baseline.sum_squares, 49.0, places=6)
+        self.assertAlmostEqual(
+            sum(br.baseline.sum for br in result.breakdown_results),
+            sum(amount for variant, _, amount, _ in purchases if variant == "control"),
+            places=6,
+        )
+        # Test arm never hit a rolled-up value: its Other split is backfilled with the full denominator.
+        other_test = cast(
+            ExperimentVariantResultFrequentist,
+            next(variant for variant in other.variants if variant.key == "test"),
+        )
+        self.assertEqual(other_test.number_of_samples, 3)
+        self.assertAlmostEqual(other_test.sum, 0.0, places=6)
 
     @freeze_time("2020-01-01T12:00:00Z")
     def test_value_breakdown_headline_matches_unsplit_metric(self):

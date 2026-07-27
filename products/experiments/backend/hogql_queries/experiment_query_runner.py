@@ -54,7 +54,7 @@ from products.experiments.backend.hogql_queries.base_query_utils import (
     experiment_window_end,
     is_session_property_metric,
 )
-from products.experiments.backend.hogql_queries.cuped_config import CupedQueryConfig, get_cuped_config
+from products.experiments.backend.hogql_queries.cuped_config import get_cuped_config
 from products.experiments.backend.hogql_queries.error_handling import experiment_error_handler
 from products.experiments.backend.hogql_queries.experiment_query_builder import (
     ExperimentQueryBuilder,
@@ -301,11 +301,10 @@ class ExperimentQueryRunner(QueryRunner):
         )
 
         # Effect-decomposition by a metric-event property (separate from breakdownFilter).
+        # CUPED stays on for the headline: the decomposition query carries no covariate columns,
+        # so the splits pass through cuped_adjust with zero covariate variance (theta=0, a no-op)
+        # and report raw sums, while the headline keeps its variance-reduced estimate.
         self._value_breakdown_property = self._resolve_value_breakdown_property()
-        if self._value_breakdown_property is not None:
-            # A CUPED-adjusted headline would not decompose cleanly into the un-adjusted per-value
-            # splits, so the whole result is computed without CUPED while value breakdown is active.
-            self.cuped_config = CupedQueryConfig()
 
         self.clickhouse_sql: str | None = None
         self.hogql: str | None = None
@@ -743,7 +742,8 @@ class ExperimentQueryRunner(QueryRunner):
         """Build and execute the per-value decomposition query (always a direct scan)."""
         assert self._value_breakdown_property is not None
         query_ast = self._build_query_builder().build_mean_value_breakdown_query(self._value_breakdown_property)
-        return self._execute_query_ast(query_ast)
+        with tags_context(experiment_query_surface="value_breakdown"):
+            return self._execute_query_ast(query_ast)
 
     def _prepare_variant_results(self) -> list[tuple[tuple[str, ...] | None, ExperimentStatsBase]]:
         """Fetch and prepare variant results with missing variants added."""
