@@ -20,6 +20,7 @@ from posthog.schema import (
     PropertyOperator,
 )
 
+from posthog.hogql.errors import QueryError
 from posthog.hogql.query import HogQLQueryExecutor
 
 from posthog.clickhouse.client import sync_execute
@@ -82,6 +83,134 @@ class TestAttributeFilters(APIBaseTest):
         # Log attributes DO NOT use resource_fingerprint filtering for optimization
         # this optimization was premature and needs more thought, and probably has very little benefit anyway
         self.assertNotIn("in(resource_fingerprint", query_str)
+
+    def _to_clickhouse_sql(self, query: LogsQuery) -> str:
+        runner = LogsQueryRunner(query=query, team=self.team)
+        executor = HogQLQueryExecutor(
+            query_type="LogsQuery",
+            query=runner.to_query(),
+            modifiers=runner.modifiers,
+            team=runner.team,
+            workload=Workload.LOGS,
+            timings=runner.timings,
+            limit_context=runner.limit_context,
+            filters=HogQLFilters(dateRange=runner.query.dateRange),
+            settings=runner.settings,
+        )
+        executor.generate_clickhouse_sql()
+        assert executor.clickhouse_prepared_ast is not None
+        return executor.clickhouse_prepared_ast.to_hogql()
+
+    def test_nested_or_group_ors_across_attribute_keys(self):
+        # The person profile Logs tab pins an OR group so one person's distinct_ids
+        # match against every configured distinct-id attribute key. A regression that
+        # drops nested groups would silently return unfiltered logs.
+        query = LogsQuery(
+            dateRange=DateRange(date_from="2024-01-10T00:00:00Z", date_to="2024-01-15T23:59:59Z"),
+            serviceNames=[],
+            severityLevels=[],
+            filterGroup=PropertyGroupFilter(
+                type=FilterLogicalOperator.AND_,
+                values=[
+                    PropertyGroupFilterValue(
+                        type=FilterLogicalOperator.AND_,
+                        values=[
+                            PropertyGroupFilterValue(
+                                type=FilterLogicalOperator.OR_,
+                                values=[
+                                    LogPropertyFilter(
+                                        key="posthogDistinctId",
+                                        operator=PropertyOperator.EXACT,
+                                        type=LogPropertyFilterType.LOG_ATTRIBUTE,
+                                        value=["distinct-1", "distinct-2"],
+                                    ),
+                                    LogPropertyFilter(
+                                        key="user.id",
+                                        operator=PropertyOperator.EXACT,
+                                        type=LogPropertyFilterType.LOG_ATTRIBUTE,
+                                        value=["distinct-1", "distinct-2"],
+                                    ),
+                                ],
+                            )
+                        ],
+                    )
+                ],
+            ),
+            kind="LogsQuery",
+        )
+
+        query_str = self._to_clickhouse_sql(query)
+
+        self.assertIn("posthogDistinctId", query_str)
+        self.assertIn("user.id", query_str)
+        self.assertIn("or(", query_str.lower())
+
+    def test_nested_group_with_single_filter_needs_no_or(self):
+        query = LogsQuery(
+            dateRange=DateRange(date_from="2024-01-10T00:00:00Z", date_to="2024-01-15T23:59:59Z"),
+            serviceNames=[],
+            severityLevels=[],
+            filterGroup=PropertyGroupFilter(
+                type=FilterLogicalOperator.AND_,
+                values=[
+                    PropertyGroupFilterValue(
+                        type=FilterLogicalOperator.AND_,
+                        values=[
+                            PropertyGroupFilterValue(
+                                type=FilterLogicalOperator.OR_,
+                                values=[
+                                    LogPropertyFilter(
+                                        key="posthogDistinctId",
+                                        operator=PropertyOperator.EXACT,
+                                        type=LogPropertyFilterType.LOG_ATTRIBUTE,
+                                        value="distinct-1",
+                                    ),
+                                ],
+                            )
+                        ],
+                    )
+                ],
+            ),
+            kind="LogsQuery",
+        )
+
+        query_str = self._to_clickhouse_sql(query)
+
+        self.assertIn("posthogDistinctId", query_str)
+
+    def test_nested_group_rejects_non_attribute_filters(self):
+        # Only log_attribute leaves are supported inside nested groups; anything else
+        # must fail loudly rather than be silently dropped from the WHERE clause.
+        query = LogsQuery(
+            dateRange=DateRange(date_from="2024-01-10T00:00:00Z", date_to="2024-01-15T23:59:59Z"),
+            serviceNames=[],
+            severityLevels=[],
+            filterGroup=PropertyGroupFilter(
+                type=FilterLogicalOperator.AND_,
+                values=[
+                    PropertyGroupFilterValue(
+                        type=FilterLogicalOperator.AND_,
+                        values=[
+                            PropertyGroupFilterValue(
+                                type=FilterLogicalOperator.OR_,
+                                values=[
+                                    LogPropertyFilter(
+                                        key="message",
+                                        operator=PropertyOperator.ICONTAINS,
+                                        type=LogPropertyFilterType.LOG,
+                                        value="error",
+                                    ),
+                                ],
+                            )
+                        ],
+                    )
+                ],
+            ),
+            kind="LogsQuery",
+        )
+
+        with self.assertRaises(QueryError):
+            LogsQueryRunner(query=query, team=self.team).to_query()
 
     def test_resource_attribute_filters(self):
         """Test that resource attribute filters are properly handled"""
@@ -472,6 +601,25 @@ class TestLogsQueryRunner(ClickhouseTestMixin, APIBaseTest):
             response = self._make_logs_api_request(query_params)
         self.assertEqual(len(response["results"]), 101)
         self.assertEqual(len(queries), 2)
+
+    @parameterized.expand(
+        [
+            ("utc_aware", "2025-12-16T00:00:00+00:00"),
+            ("naive", "2025-12-16T00:00:00"),
+        ]
+    )
+    @freeze_time("2025-12-16T10:33:00Z")
+    def test_live_tail_checkpoint_iso_string(self, _name, checkpoint):
+        query_params = {
+            "dateRange": {"date_from": "2025-12-16 09:32:36.178572Z", "date_to": None},
+            "limit": 50,
+            "orderBy": "latest",
+            "liveLogsCheckpoint": checkpoint,
+            "filterGroup": {"type": "AND", "values": [{"type": "AND", "values": []}]},
+        }
+
+        response = self._make_logs_api_request(query_params)
+        self.assertGreater(len(response["results"]), 0)
 
     @freeze_time("2025-12-16T10:33:00Z")
     def test_resource_filters(self):
