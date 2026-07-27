@@ -896,13 +896,16 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
         # verbatim even after the vendor retires that version from supported_versions, so a
         # full-payload PATCH (the sources list spreads the GET response straight back) never 400s
         # on an unrelated edit. `null` clears the pin back to the source type's default.
-        if "api_version" in attrs and instance is not None and pinned and pinned != instance.api_version:
+        if "api_version" in attrs and instance is not None and pinned != instance.api_version:
             try:
                 source_impl = SourceRegistry.get_source(ExternalDataSourceType(instance.source_type))
             except ValueError:
-                raise ValidationError({"api_version": "API versions are not supported for this source type."})
+                if pinned:
+                    raise ValidationError({"api_version": "API versions are not supported for this source type."})
+                # Clearing on an unregistered legacy type must never brick the row.
+                return attrs
             supported = source_impl.supported_versions
-            if pinned not in supported:
+            if pinned and pinned not in supported:
                 raise ValidationError(
                     {
                         "api_version": f"'{pinned}' is not a supported {instance.source_type} API version. "
@@ -910,16 +913,21 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
                     }
                 )
             # Upgrade-only: `supported_versions` is declared oldest→newest, so "newer" is positional.
-            # A pin the vendor has since retired sits outside the tuple — moving off it to any
-            # supported version is allowed (that's escaping a dead version, not downgrading).
+            # A `null` target clears to the default and is gated the same way — on sources whose
+            # default is held back from the newest entry, clearing would otherwise be a downgrade
+            # in disguise. A pin the vendor has since retired sits outside the tuple — moving off
+            # it to any supported version is allowed (escaping a dead version, not downgrading).
             current = source_impl.resolve_api_version(instance.api_version)
-            if current in supported and supported.index(pinned) < supported.index(current):
-                raise ValidationError(
-                    {
-                        "api_version": f"'{pinned}' is older than the current version '{current}'. "
-                        "Sources can only move to a newer API version."
-                    }
+            target = source_impl.resolve_api_version(pinned)
+            if current in supported and target in supported and supported.index(target) < supported.index(current):
+                detail = (
+                    f"Clearing the pin resolves to '{target}', which is older than the current version "
+                    f"'{current}'. Sources can only move to a newer API version."
+                    if pinned is None
+                    else f"'{target}' is older than the current version '{current}'. "
+                    "Sources can only move to a newer API version."
                 )
+                raise ValidationError({"api_version": detail})
         return attrs
 
     def to_representation(self, instance):

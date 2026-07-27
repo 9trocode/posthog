@@ -270,6 +270,27 @@ class TestExternalDataSource(APIBaseTest):
         source.refresh_from_db()
         assert source.api_version == "2026-02-25.clover"
 
+    def test_clearing_the_pin_cannot_downgrade_past_a_held_back_default(self):
+        # On sources whose default_version is held back from the newest entry (Hubspot, Kustomer),
+        # clearing the pin resolves to the older default — a downgrade in disguise, so it must 400.
+        source = self._create_external_data_source()
+        source.api_version = "2026-02-25.clover"
+        source.save(update_fields=["api_version"])
+
+        with (
+            patch.object(StripeSource, "supported_versions", ("2024-09-30.acacia", "2026-02-25.clover")),
+            patch.object(StripeSource, "default_version", "2024-09-30.acacia"),
+        ):
+            response = self.client.patch(
+                f"/api/environments/{self.team.pk}/external_data_sources/{source.pk}",
+                data={"api_version": None},
+            )
+
+        assert response.status_code == 400, response.json()
+        assert "Clearing the pin resolves to" in str(response.json())
+        source.refresh_from_db()
+        assert source.api_version == "2026-02-25.clover"
+
     def test_retired_pin_can_move_to_any_supported_version(self):
         # A pin the vendor removed from supported_versions sits outside the tuple, so ordering
         # against it is meaningless — escaping a dead version to any supported one is allowed.
