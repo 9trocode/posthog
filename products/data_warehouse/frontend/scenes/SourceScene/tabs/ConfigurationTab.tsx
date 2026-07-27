@@ -96,56 +96,65 @@ function UpdateSourceConnectionFormContainer(): JSX.Element {
                     initialAccessMethod={source.access_method ?? 'warehouse'}
                     setSourceConfigValue={setSourceConfigValue}
                 />
-                {/* Show whenever there's a real choice, or a pin is already set (so a pin the vendor
-                    has since retired can still be seen and moved off — mirrors the schema-level picker). */}
-                {((source.supported_api_versions?.length ?? 0) > 1 || !!source.api_version) && (
-                    <>
-                        <LemonDivider className="my-4" />
-                        <LemonField
-                            name="api_version"
-                            label="API version"
-                            help="The vendor API version this source syncs with. Moving to another version changes the data the vendor returns, so a full resync is recommended afterwards. Any sync running now will be cancelled. Tables with their own version override are unaffected."
-                        >
-                            {({ value, onChange }) => {
-                                const supported = source.supported_api_versions ?? []
-                                const options = supported.map((version) => {
-                                    // Deprecated versions stay selectable so a source stuck on one can be
-                                    // moved off it, but they must never look like an equal choice.
-                                    const deprecation = source.deprecated_api_versions?.find(
-                                        (candidate) => candidate.version === version
-                                    )
-                                    return {
-                                        value: version,
-                                        label: deprecation
-                                            ? `${version} (deprecated${
-                                                  deprecation.sunset_at
-                                                      ? `, stops working ${dayjs(deprecation.sunset_at).format('LL')}`
-                                                      : ''
-                                              })`
-                                            : version,
-                                    }
-                                })
-                                // A stored pin can outlive its version's removal from supported_versions —
-                                // the backend keeps honoring it verbatim. Keep it representable so the
-                                // select isn't blank; re-saving it is blocked by validation.
-                                if (source.api_version && !supported.includes(source.api_version)) {
-                                    options.push({
-                                        value: source.api_version,
-                                        label: `${source.api_version} (no longer supported)`,
-                                    })
-                                }
-                                return (
+                {/* Upgrade-only: shown when a newer version than the current pin exists ("newer" is
+                    positional — supported_api_versions is declared oldest→newest), or when the pin
+                    was retired from the supported list (so the source can still be moved off it).
+                    An unpinned source follows the default and upgrades with it, so there's nothing
+                    to offer. */}
+                {(() => {
+                    const supported = source.supported_api_versions ?? []
+                    if (!source.api_version) {
+                        return null
+                    }
+                    const pinIndex = supported.indexOf(source.api_version)
+                    const pinRetired = pinIndex === -1
+                    const upgradeTargets = pinRetired ? supported : supported.slice(pinIndex + 1)
+                    if (upgradeTargets.length === 0) {
+                        return null
+                    }
+                    const options = upgradeTargets.map((version) => {
+                        // Deprecated versions stay selectable so a source stuck behind one can still
+                        // move off its own, but they must never look like an equal choice.
+                        const deprecation = source.deprecated_api_versions?.find(
+                            (candidate) => candidate.version === version
+                        )
+                        return {
+                            value: version,
+                            label: deprecation
+                                ? `${version} (deprecated${
+                                      deprecation.sunset_at
+                                          ? `, stops working ${dayjs(deprecation.sunset_at).format('LL')}`
+                                          : ''
+                                  })`
+                                : version,
+                        }
+                    })
+                    // The current pin is not an upgrade target, but the select must be able to
+                    // represent it. Retired pins get flagged as such.
+                    options.unshift({
+                        value: source.api_version,
+                        label: pinRetired ? `${source.api_version} (no longer supported)` : source.api_version,
+                    })
+                    return (
+                        <>
+                            <LemonDivider className="my-4" />
+                            <LemonField
+                                name="api_version"
+                                label="API version"
+                                help="The vendor API version this source syncs with. Upgrading changes the data the vendor returns, so a full resync is recommended afterwards, and downgrading back is not possible. Any sync running now will be cancelled. Tables with their own version override are unaffected."
+                            >
+                                {({ value, onChange }) => (
                                     <LemonSelect
                                         data-attr="source-api-version"
                                         value={value ?? null}
                                         onChange={onChange}
                                         options={options}
                                     />
-                                )
-                            }}
-                        </LemonField>
-                    </>
-                )}
+                                )}
+                            </LemonField>
+                        </>
+                    )
+                })()}
                 {source.access_method !== 'direct' && (
                     <>
                         <LemonDivider className="my-4" />

@@ -30451,7 +30451,7 @@ export namespace Schemas {
       /** Whether this source supports per-column sync selection via `enabled_columns`. */
       readonly supports_column_selection: boolean;
       /**
-         * Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation.
+         * Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation.
          * @maxLength 128
          * @nullable
          */
@@ -48343,7 +48343,7 @@ export namespace Schemas {
       /** Whether this source supports per-column sync selection via `enabled_columns`. */
       readonly supports_column_selection?: boolean;
       /**
-         * Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation.
+         * Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation.
          * @maxLength 128
          * @nullable
          */

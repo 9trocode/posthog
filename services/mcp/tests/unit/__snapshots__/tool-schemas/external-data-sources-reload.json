@@ -11,7 +11,7 @@
                     "type": "null"
                 }
             ],
-            "description": "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation."
+            "description": "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation."
         },
         "auto_sync_new_schemas": {
             "description": "Automatically enable syncing for schemas discovered on this source after creation, on both the scheduled discovery pass and manual schema refreshes. Defaults to false. Not supported for direct-query sources.",

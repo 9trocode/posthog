@@ -810,8 +810,8 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
         help_text=(
             "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe "
             "date version). Null resolves to the source type's default version at sync time. "
-            "Set it to any of the source type's supported versions to move an existing source to a "
-            "newer version, or back to an older one. New sources always start on the newest "
+            "Upgrade-only: set it to a newer supported version to move an existing source forward; "
+            "downgrading to an older version is rejected. New sources always start on the newest "
             "version and cannot pick a pin at creation."
         ),
     )
@@ -901,11 +901,23 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
                 source_impl = SourceRegistry.get_source(ExternalDataSourceType(instance.source_type))
             except ValueError:
                 raise ValidationError({"api_version": "API versions are not supported for this source type."})
-            if pinned not in source_impl.supported_versions:
+            supported = source_impl.supported_versions
+            if pinned not in supported:
                 raise ValidationError(
                     {
                         "api_version": f"'{pinned}' is not a supported {instance.source_type} API version. "
-                        f"Supported versions: {', '.join(source_impl.supported_versions)}"
+                        f"Supported versions: {', '.join(supported)}"
+                    }
+                )
+            # Upgrade-only: `supported_versions` is declared oldest→newest, so "newer" is positional.
+            # A pin the vendor has since retired sits outside the tuple — moving off it to any
+            # supported version is allowed (that's escaping a dead version, not downgrading).
+            current = source_impl.resolve_api_version(instance.api_version)
+            if current in supported and supported.index(pinned) < supported.index(current):
+                raise ValidationError(
+                    {
+                        "api_version": f"'{pinned}' is older than the current version '{current}'. "
+                        "Sources can only move to a newer API version."
                     }
                 )
         return attrs

@@ -1930,7 +1930,7 @@ export const ExternalDataSourcesPartialUpdateBody = /* @__PURE__ */ zod
             .max(externalDataSourcesPartialUpdateBodyApiVersionMax)
             .nullish()
             .describe(
-                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation."
+                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation."
             ),
     })
     .describe('Mixin for serializers to add user access control fields')
@@ -2018,7 +2018,7 @@ export const ExternalDataSourcesCreateWebhookCreateBody = /* @__PURE__ */ zod
             .max(externalDataSourcesCreateWebhookCreateBodyApiVersionMax)
             .nullish()
             .describe(
-                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation."
+                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation."
             ),
     })
     .describe('Mixin for serializers to add user access control fields')
@@ -2094,7 +2094,7 @@ export const ExternalDataSourcesDeleteWebhookCreateBody = /* @__PURE__ */ zod
             .max(externalDataSourcesDeleteWebhookCreateBodyApiVersionMax)
             .nullish()
             .describe(
-                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation."
+                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation."
             ),
     })
     .describe('Mixin for serializers to add user access control fields')
@@ -2161,7 +2161,7 @@ export const ExternalDataSourcesRefreshSchemasCreateBody = /* @__PURE__ */ zod
             .max(externalDataSourcesRefreshSchemasCreateBodyApiVersionMax)
             .nullish()
             .describe(
-                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation."
+                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation."
             ),
     })
     .describe('Mixin for serializers to add user access control fields')
@@ -2228,7 +2228,7 @@ export const ExternalDataSourcesReloadCreateBody = /* @__PURE__ */ zod
             .max(externalDataSourcesReloadCreateBodyApiVersionMax)
             .nullish()
             .describe(
-                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation."
+                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation."
             ),
     })
     .describe('Mixin for serializers to add user access control fields')
@@ -2325,7 +2325,7 @@ export const ExternalDataSourcesUpdateWebhookInputsCreateBody = /* @__PURE__ */ 
             .max(externalDataSourcesUpdateWebhookInputsCreateBodyApiVersionMax)
             .nullish()
             .describe(
-                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Set it to any of the source type's supported versions to move an existing source to a newer version, or back to an older one. New sources always start on the newest version and cannot pick a pin at creation."
+                "Vendor API version this source is pinned to (an opaque vendor label, e.g. a Stripe date version). Null resolves to the source type's default version at sync time. Upgrade-only: set it to a newer supported version to move an existing source forward; downgrading to an older version is rejected. New sources always start on the newest version and cannot pick a pin at creation."
             ),
     })
     .describe('Mixin for serializers to add user access control fields')

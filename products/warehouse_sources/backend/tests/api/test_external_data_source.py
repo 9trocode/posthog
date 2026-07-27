@@ -237,8 +237,8 @@ class TestExternalDataSource(APIBaseTest):
         source = ExternalDataSource.objects.get(id=response.json()["id"])
         assert source.api_version == "2024-09-30.acacia"
 
-    def test_api_version_pin_can_be_upgraded_and_rolled_back(self):
-        # An existing source moves to a newer vendor version, and back again if it doesn't work out.
+    def test_api_version_pin_can_be_upgraded(self):
+        # An existing source moves forward to a newer vendor version.
         source = self._create_external_data_source()
         with (
             patch.object(StripeSource, "supported_versions", ("2024-09-30.acacia", "2026-02-25.clover")),
@@ -252,13 +252,43 @@ class TestExternalDataSource(APIBaseTest):
             source.refresh_from_db()
             assert source.api_version == "2026-02-25.clover"
 
-            rollback = self.client.patch(
+    def test_api_version_downgrade_is_rejected(self):
+        # Upgrade-only: "newer" is positional in supported_versions (declared oldest→newest), so a
+        # move to an earlier entry is a downgrade and must 400 without touching the pin.
+        source = self._create_external_data_source()
+        source.api_version = "2026-02-25.clover"
+        source.save(update_fields=["api_version"])
+
+        with patch.object(StripeSource, "supported_versions", ("2024-09-30.acacia", "2026-02-25.clover")):
+            response = self.client.patch(
                 f"/api/environments/{self.team.pk}/external_data_sources/{source.pk}",
                 data={"api_version": "2024-09-30.acacia"},
             )
-            assert rollback.status_code == 200, rollback.json()
-            source.refresh_from_db()
-            assert source.api_version == "2024-09-30.acacia"
+
+        assert response.status_code == 400, response.json()
+        assert "older than the current version" in str(response.json())
+        source.refresh_from_db()
+        assert source.api_version == "2026-02-25.clover"
+
+    def test_retired_pin_can_move_to_any_supported_version(self):
+        # A pin the vendor removed from supported_versions sits outside the tuple, so ordering
+        # against it is meaningless — escaping a dead version to any supported one is allowed.
+        source = self._create_external_data_source()
+        source.api_version = "2020-01-01"
+        source.save(update_fields=["api_version"])
+
+        with (
+            patch.object(StripeSource, "supported_versions", ("2024-09-30.acacia", "2026-02-25.clover")),
+            patch.object(StripeSource, "validate_credentials", return_value=(True, None)),
+        ):
+            response = self.client.patch(
+                f"/api/environments/{self.team.pk}/external_data_sources/{source.pk}",
+                data={"api_version": "2024-09-30.acacia"},
+            )
+
+        assert response.status_code == 200, response.json()
+        source.refresh_from_db()
+        assert source.api_version == "2024-09-30.acacia"
 
     def test_clearing_the_pin_persists_null_not_blank(self):
         source = self._create_external_data_source()
