@@ -56,6 +56,7 @@ from products.warehouse_sources.backend.facade.models import (
 from products.warehouse_sources.backend.facade.types import IncrementalFieldType
 from products.warehouse_sources.backend.presentation.views.external_data_schema import ExternalDataSchemaSerializer
 from products.warehouse_sources.backend.presentation.views.external_data_source import (
+    ExternalDataSourceSerializers,
     get_direct_connection_metadata,
     get_nonsensitive_and_sensitive_field_names,
     get_oauth_integration_kinds,
@@ -290,6 +291,79 @@ class TestExternalDataSource(APIBaseTest):
         assert "Clearing the pin resolves to" in str(response.json())
         source.refresh_from_db()
         assert source.api_version == "2026-02-25.clover"
+
+    def _stale_serializer(self, stale_instance, data):
+        # Drives the serializer directly with a deliberately stale instance, simulating a request
+        # that loaded the row before a concurrent repin committed. A stub request keeps update()'s
+        # access-method guard quiet without pulling in the full view stack.
+        request_stub = MagicMock()
+        request_stub.user = self.user
+        request_stub.data = {}
+        return ExternalDataSourceSerializers(
+            instance=stale_instance, data=data, partial=True, context={"request": request_stub}
+        )
+
+    @patch(
+        "products.warehouse_sources.backend.temporal.data_imports.sources.stripe.source.StripeSource.validate_credentials",
+        return_value=(True, None),
+    )
+    def test_concurrent_repin_cannot_commit_an_older_target(self, _mock_validate):
+        # TOCTOU: both requests validate against the same loaded pin; the slower, older-target one
+        # must be rejected at the locked re-check instead of committing last and downgrading.
+        source = self._create_external_data_source()
+        stale = ExternalDataSource.objects.get(pk=source.pk)  # what the slow request loaded (acacia)
+        ExternalDataSource.objects.filter(pk=source.pk).update(api_version="2026-06-01.next")  # fast request wins
+
+        with patch.object(
+            StripeSource, "supported_versions", ("2024-09-30.acacia", "2026-02-25.clover", "2026-06-01.next")
+        ):
+            serializer = self._stale_serializer(stale, {"api_version": "2026-02-25.clover"})
+            assert serializer.is_valid(), serializer.errors  # passes: clover is newer than acacia
+            with self.assertRaises(ValidationError):
+                serializer.save()
+
+        source.refresh_from_db()
+        assert source.api_version == "2026-06-01.next"
+
+    @patch(
+        "products.warehouse_sources.backend.temporal.data_imports.sources.stripe.source.StripeSource.validate_credentials",
+        return_value=(True, None),
+    )
+    def test_stale_pin_echo_does_not_revert_a_concurrent_repin(self, _mock_validate):
+        # A full-payload PATCH echoes the pin it loaded; if another repin committed meanwhile, the
+        # echo must be dropped (and the full-instance save must carry the committed pin forward).
+        source = self._create_external_data_source()
+        stale = ExternalDataSource.objects.get(pk=source.pk)
+        ExternalDataSource.objects.filter(pk=source.pk).update(api_version="2026-02-25.clover")
+
+        with patch.object(StripeSource, "supported_versions", ("2024-09-30.acacia", "2026-02-25.clover")):
+            serializer = self._stale_serializer(stale, {"api_version": stale.api_version, "description": "renamed"})
+            assert serializer.is_valid(), serializer.errors
+            serializer.save()
+
+        source.refresh_from_db()
+        assert source.api_version == "2026-02-25.clover"
+        assert source.description == "renamed"
+
+    @patch(
+        "products.warehouse_sources.backend.temporal.data_imports.sources.stripe.source.StripeSource.validate_credentials",
+        return_value=(True, None),
+    )
+    def test_config_only_edit_does_not_revert_a_concurrent_repin(self, _mock_validate):
+        # ModelSerializer saves every field, so a config-only edit on a stale instance would write
+        # the old pin back over a concurrent repin unless the committed value is carried forward.
+        source = self._create_external_data_source()
+        stale = ExternalDataSource.objects.get(pk=source.pk)
+        ExternalDataSource.objects.filter(pk=source.pk).update(api_version="2026-02-25.clover")
+
+        with patch.object(StripeSource, "supported_versions", ("2024-09-30.acacia", "2026-02-25.clover")):
+            serializer = self._stale_serializer(stale, {"description": "renamed"})
+            assert serializer.is_valid(), serializer.errors
+            serializer.save()
+
+        source.refresh_from_db()
+        assert source.api_version == "2026-02-25.clover"
+        assert source.description == "renamed"
 
     def test_retired_pin_can_move_to_any_supported_version(self):
         # A pin the vendor removed from supported_versions sits outside the tuple, so ordering

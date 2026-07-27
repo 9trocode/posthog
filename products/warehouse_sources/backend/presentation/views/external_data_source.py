@@ -730,6 +730,28 @@ class ExternalDataJobSerializers(serializers.ModelSerializer):
         ).data
 
 
+def _reject_api_version_downgrade(source_impl: Any, current_pin: str | None, incoming_pin: str | None) -> None:
+    """400 when moving from ``current_pin`` to ``incoming_pin`` is a positional downgrade.
+
+    Upgrade-only: ``supported_versions`` is declared oldest→newest, so "newer" is tuple position.
+    ``None`` resolves to the default on both sides — on sources whose default is held back from the
+    newest entry, clearing an upgraded pin would otherwise be a downgrade in disguise. A retired
+    ``current_pin`` sits outside the tuple, so any supported target is allowed from it (escaping a
+    dead version, not downgrading)."""
+    supported = source_impl.supported_versions
+    current = source_impl.resolve_api_version(current_pin)
+    target = source_impl.resolve_api_version(incoming_pin)
+    if current in supported and target in supported and supported.index(target) < supported.index(current):
+        detail = (
+            f"Clearing the pin resolves to '{target}', which is older than the current version "
+            f"'{current}'. Sources can only move to a newer API version."
+            if incoming_pin is None
+            else f"'{target}' is older than the current version '{current}'. "
+            "Sources can only move to a newer API version."
+        )
+        raise ValidationError({"api_version": detail})
+
+
 class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializers.ModelSerializer):
     account_id = serializers.CharField(write_only=True)
     client_secret = serializers.CharField(write_only=True)
@@ -913,22 +935,7 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
                         f"Supported versions: {', '.join(supported)}"
                     }
                 )
-            # Upgrade-only: `supported_versions` is declared oldest→newest, so "newer" is positional.
-            # A `null` target clears to the default and is gated the same way — on sources whose
-            # default is held back from the newest entry, clearing would otherwise be a downgrade
-            # in disguise. A pin the vendor has since retired sits outside the tuple — moving off
-            # it to any supported version is allowed (escaping a dead version, not downgrading).
-            current = source_impl.resolve_api_version(instance.api_version)
-            target = source_impl.resolve_api_version(pinned)
-            if current in supported and target in supported and supported.index(target) < supported.index(current):
-                detail = (
-                    f"Clearing the pin resolves to '{target}', which is older than the current version "
-                    f"'{current}'. Sources can only move to a newer API version."
-                    if pinned is None
-                    else f"'{target}' is older than the current version '{current}'. "
-                    "Sources can only move to a newer API version."
-                )
-                raise ValidationError({"api_version": detail})
+            _reject_api_version_downgrade(source_impl, instance.api_version, pinned)
         return attrs
 
     def to_representation(self, instance):
@@ -1326,7 +1333,33 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
         if namespaced_adapter is not None and job_inputs_were_submitted:
             old_namespaced_resources = namespaced_adapter.resources_for_job_inputs(existing_job_inputs)
 
-        updated_source: ExternalDataSource = super().update(instance, validated_data)
+        # Serialize the write against concurrent repins. validate() gated against the pin this
+        # request loaded, but another repin may have committed since, and ModelSerializer's save
+        # writes every field — an unconditional save would let a slower, older-target request (or a
+        # stale full-payload echo, or a config-only edit) silently revert the newer pin. Re-check
+        # against the locked row and persist while still holding it. The block contains only the DB
+        # write: probes ran before it, Temporal cancels run after it.
+        with transaction.atomic():
+            stored_pin: str | None = (
+                ExternalDataSource.objects.select_for_update()
+                .filter(pk=instance.pk)
+                .values_list("api_version", flat=True)
+                .first()
+            )
+            if "api_version" in validated_data and stored_pin != instance.api_version:
+                incoming_pin = validated_data["api_version"]
+                if incoming_pin == instance.api_version:
+                    # Stale echo of the pin this request loaded — keep the concurrently committed one.
+                    validated_data.pop("api_version")
+                elif incoming_pin != stored_pin:
+                    _reject_api_version_downgrade(source, stored_pin, incoming_pin)
+            if "api_version" not in validated_data:
+                # The full-instance save would otherwise write back the stale in-memory pin.
+                instance.api_version = stored_pin
+            api_version_changed = "api_version" in validated_data and source.resolve_api_version(
+                validated_data["api_version"]
+            ) != source.resolve_api_version(stored_pin)
+            updated_source: ExternalDataSource = super().update(instance, validated_data)
 
         # A repin invalidates any in-flight import: retried/resumed activities re-resolve the
         # version from the DB, so letting a run finish would mix two vendor API versions in one
