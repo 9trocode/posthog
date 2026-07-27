@@ -8,12 +8,14 @@ A sub-product of Session Replay. Users configure named **scanners** that PostHog
 Carries a prompt, a scanner type (`monitor` / `classifier` / `scorer` / `summarizer`), a `RecordingsQuery` that selects matching sessions, a Gemini model (which sets the per-observation credit price), and two volume levers: `sampling_mode` (a quality pre-filter over the matched sessions) and `sampling_rate` (a random downsample applied after it).
 Each enabled scanner has a Temporal schedule that fires every 5 minutes and sweeps for newly settled recordings past the scanner's watermark (`last_swept_at`); disabling a scanner removes its schedule, and re-enabling restarts the sweep from now rather than backfilling the gap.
 Summarizers always emit per-facet embeddings for downstream free-text search.
+A scanner with `emits_signals` also pushes one signal per finding into the Signals inbox (`replay_vision` / `scanner_finding`), which is what the editor's Self-driving step turns on.
 
 **Observation** — one application of a scanner to a session, unique per (scanner, session).
 Created in `pending` when triggered (by the scanner's schedule, the `/observe/` and `/bulk_observe/` actions, or a retry of a failed observation), transitions to `running` while `ApplyScannerWorkflow` executes (rasterize the recording to video → upload to Gemini → multi-turn scan), and lands in `succeeded` (result persisted under `scanner_result.model_output`, then a `$recording_observed` event plus embeddings/tags emitted fail-soft), `failed` (with a `kind:message` `error_reason`), or `ineligible` (the session doesn't qualify — too short, too idle, no recording).
 Each observation snapshots the full scanner state (`scanner_snapshot`) that produced it, so subsequent edits to the scanner don't retro-mutate history.
 Rows stranded in `pending`/`running` by a dead workflow are failed as `orphaned` by a reaper on the reconciler tick.
 Teams rate observations thumbs up/down, and those ratings drive the scanner's quality view and its AI prompt suggestions.
+A finding can also be turned into a PostHog Task once (the observation remembers the task it minted).
 
 **Quota** — succeeded observations write an immutable usage receipt priced in credits (1 credit = $0.01, set by the observation's model).
 Usage (receipts + in-flight rows + in-flight prompt tests) counts against the organization's credit limit for the current billing period, falling back to the calendar month when billing hasn't synced the product.
@@ -42,6 +44,8 @@ Scheduled observations over budget are skipped; on-demand ones are rejected.
 
 **Scanner editor** (`/replay-vision/<scanner-id>/<step>`) is a stepper rather than tabs: Template, Configure, Scan conditions (`triggers`), Self-driving.
 Observations, vision actions, and action runs each have their own scene under `/replay-vision/observations/…` and `/replay-vision/actions/…`.
+
+Outside these scenes, the product also renders inside the session replay player: with the `replay-vision` flag on, `ObservationsDock` replaces the player's summary dock and shows what the team's scanners found about the recording being watched.
 
 ## Layout
 

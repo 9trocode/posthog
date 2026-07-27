@@ -109,6 +109,11 @@ Call `vision-scanners-create`. Minimal example:
 `name` must be unique within the team. Set `enabled: false` if the user wants to create it paused (no
 schedule, no quota consumption) and turn it on later.
 
+`emits_signals: true` is the other switch worth knowing: it augments the prompt with the Signals side mission
+and pushes one signal per finding into the PostHog Signals inbox, where findings corroborate across sessions
+into reports. Turn it on when the user wants the scanner to feed their inbox rather than just accumulate
+observations they have to go read.
+
 ## After creation
 
 - Show the scanner's PostHog URL from the response so the user can review it in the UI.

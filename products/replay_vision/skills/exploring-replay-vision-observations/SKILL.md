@@ -56,6 +56,11 @@ Pick the axis that matches the question:
 - **The distribution, not the rows?** → `vision-scanners-observations-stats` gives one scanner's status mix
   and success rate, distinct sessions covered, rating totals, and the per-type distributions (monitor verdict
   counts, classifier tag rankings, scorer score summary and histogram) without paging through observations.
+- **Has something already summarized this?** → if the scanner has digests or alerts attached, read them instead of
+  re-deriving the pattern: `vision-actions-list` (`?scanner=<id>`, or `vision-actions-retrieve` for one
+  action's selection and cadence), then `vision-actions-runs-list` and
+  `vision-actions-runs-retrieve` for a run's `synthesized_markdown`. The report cites its sources inline as
+  `[obs N]`, matching `observations[N-1]`, so you can check each claim against the observation it came from.
 - **The full detail of one finding** → `vision-scanners-observations-get` or `vision-observations-retrieve` —
   returns the frozen `scanner_snapshot` (config at run time) and the complete `scanner_result`, including any
   event citations that link the finding back to specific events in the recording.
@@ -94,17 +99,26 @@ Match the action to the user's intent, and **corroborate before you create work*
 
 - **Summarize a pattern.** Report the finding back with the numbers and a few representative `session_id`s
   (e.g. "12 of 40 succeeded observations flagged checkout confusion; sessions A, B, C"). Cite, don't assert.
+- **Size it.** `vision-scanners-impact-retrieve` counts the sessions and users a scanner hit over a trailing
+  window, so the finding lands as "this affected N users", not "here are some sessions". Monitors take no
+  qualifier, classifiers need `tag`, scorers need `min_score`/`max_score`. Watch `sessions_without_user`:
+  sessions with no distinct ID are why the user count can trail the session count.
 - **Make it trackable.** When a finding is corroborated across several sessions (not one low-confidence
   hit), capture it durably with the tools that exist: create an `insight` or `notebook` to track its
   frequency, bundle the supporting recordings into a session-recording playlist so a human can watch the
-  evidence, and add an `annotation` if it marks a regression. There is **no MCP tool to open a PostHog
+  evidence, and add an `annotation` if it marks a regression. To act on the affected people rather than the
+  sessions, `vision-scanners-affected-cohort-create` snapshots them into a static cohort (dated, not
+  live-updating) you can use for funnels, retention, surveys, or experiment exclusion. There is **no MCP tool to open a PostHog
   task directly** — to route a finding into tracked work, use the Inbox path below (for signal-emitting
   scanners) or hand the summary to a human or coding agent to act on. Group by distinct issue, not per
   observation.
 - **Fix the scanner instead.** When the findings are wrong rather than interesting, rate the observations
-  with `vision-observations-label-create` (thumbs up/down plus written feedback), then have the scanner's
-  prompt rewritten from those ratings with `vision-scanners-prompt-suggestions-generate` and applied with
-  `vision-scanners-prompt-suggestions-apply`. Ratings are team-wide and last write wins.
+  with `vision-observations-label-create` (thumbs up/down plus written feedback; team-wide, last write wins,
+  clearable with `vision-observations-label-destroy`). Then check
+  `vision-scanners-prompt-suggestions-current` — it returns the newest suggestion, whether it's `stale`, and
+  the `rated_count` behind it — before spending a `vision-scanners-prompt-suggestions-generate` call. Apply
+  the rewrite with `vision-scanners-prompt-suggestions-apply`, or leave it with
+  `vision-scanners-prompt-suggestions-dismiss`. Applying is team-wide and takes effect from the next sweep.
 - **Work the Inbox.** If the scanner emits signals, its findings may already be clustered into signal reports —
   read and act on those with `inbox-reports-list` + `inbox-report-artefacts-list` (the report's work log is the
   evidence). See the [[inbox-exploration]] skill; that path also records your work against the report.
