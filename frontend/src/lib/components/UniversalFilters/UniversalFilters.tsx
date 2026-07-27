@@ -122,16 +122,23 @@ const Value = ({
 
     const negationSelect =
         allowEntityNegation && (isEvent || isAction) ? (
-            <div className="px-2 py-1">
+            <div className="px-2 py-1" data-attr="universal-filters-entity-negation">
                 <LemonSegmentedButton
                     size="xsmall"
                     value={(filter as ActionFilter).negation ? 'exclude' : 'include'}
                     onChange={(value) => onChange({ ...filter, negation: value === 'exclude' } as UniversalFilterValue)}
                     options={[
-                        { value: 'include', label: 'Performed' },
-                        { value: 'exclude', label: 'Did not perform' },
+                        {
+                            value: 'include',
+                            label: 'Performed',
+                            'data-attr': 'universal-filters-entity-negation-include',
+                        },
+                        {
+                            value: 'exclude',
+                            label: 'Did not perform',
+                            'data-attr': 'universal-filters-entity-negation-exclude',
+                        },
                     ]}
-                    data-attr="universal-filters-entity-negation"
                 />
             </div>
         ) : null

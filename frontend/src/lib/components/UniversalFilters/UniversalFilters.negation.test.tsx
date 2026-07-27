@@ -57,6 +57,14 @@ describe('UniversalFilters entity negation', () => {
         expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ negation: true }))
     })
 
+    // LemonSegmentedButton only accepts data-attr per option, so a top-level one is silently dropped.
+    it('exposes the control and its options as data-attr selectors', async () => {
+        const container = renderValue(true, jest.fn())
+        await openChipPopover(container)
+        expect(document.querySelector('[data-attr="universal-filters-entity-negation"]')).not.toBeNull()
+        expect(document.querySelector('[data-attr="universal-filters-entity-negation-exclude"]')).not.toBeNull()
+    })
+
     it('does not render the control when negation is not allowed', async () => {
         const container = renderValue(false, jest.fn())
         await openChipPopover(container)
