@@ -1078,7 +1078,7 @@ class TestSessionRecordingsListFromQuery(ClickhouseTestMixin, APIBaseTest):
             properties={"$session_id": session_clean, "$window_id": "1", "$current_url": "https://app.io/home"},
         )
 
-        # A negated entity and a negative event property both feed the single AND blocklist; a session
+        # A negated entity and a negative event property both feed the single AND blocklist. A session
         # matching either (did purchase, or visited /internal) is excluded.
         self._assert_query_matches_session_ids(
             {
