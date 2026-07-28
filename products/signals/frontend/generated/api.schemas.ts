@@ -1895,6 +1895,8 @@ export interface ScoutNoteApi {
      * @nullable
      */
     created_by_name: string | null
+    /** Where the note came from: `human` for one left directly through this API, or `report_dismissal` for one forwarded from the note someone typed when they dismissed, snoozed, or restored one or more inbox reports. A `report_dismissal` note is one reviewer's verdict on the reports its content names, so weigh it as evidence about those reports rather than as fleet-level steering. */
+    origin: string
 }
 
 /**
@@ -3468,6 +3470,10 @@ export type SignalsReportsListParams = {
      * Case-insensitive substring match against report title and summary.
      */
     search?: string
+    /**
+     * Comma-separated list of source record ids. Reports are kept if at least one of their contributing signals came from one of these records — e.g. pass a support ticket's UUID to see what the inbox already found for that ticket. Requires exactly one source_product, since a source id is only unique within its product.
+     */
+    source_id?: string
     /**
      * Comma-separated list of source products to include. Reports are kept if at least one of their contributing signals comes from one of these products (e.g. error_tracking, session_replay).
      */
