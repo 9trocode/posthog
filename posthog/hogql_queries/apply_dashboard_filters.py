@@ -269,7 +269,7 @@ def _has_data_warehouse_series(query: dict) -> bool:
 class EffectiveDashboardFilters:
     """Result of combining dashboard and tile filter layers.
 
-    `query` is the input query with any properties the filters override stripped out; `filters` is
+    `query` is the input query with any properties the filters override stripped out. `filters` is
     the merged filter layer to apply and to reconstruct for display. Deliberately not a tuple so a
     positional unpack at a call site can't silently swap the two dicts.
     """

@@ -1303,7 +1303,7 @@ def references_joined_table(
 class PredicatePushdown:
     """A WHERE clause split for pushdown into an events subquery.
 
-    `inner` is pushed into the subquery (None when nothing is pushable); `outer` stays in the outer
+    `inner` is pushed into the subquery (None when nothing is pushable). `outer` stays in the outer
     query (None when empty). Deliberately not a tuple so a positional unpack can't swap the two.
     """
 
