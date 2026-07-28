@@ -174,7 +174,7 @@ pub struct FlagRequest {
 
 Unless `geoip_disable: true` is set in the body, `handler::properties::get_person_property_overrides` looks up the request IP in MaxMind and adds the resulting `$geoip_*` properties to `person_properties` before evaluation.
 
-GeoIP only fills gaps — a `$geoip_*` key present in the request body is left alone.
+GeoIP only fills gaps. A `$geoip_*` key present in the request body is left alone.
 This matters for server-side evaluation: the IP we geolocate is whoever made the HTTP request, so a call from a backend or an SSR render resolves the server's own location, not the end user's.
 A caller that resolved geo itself (from `CF-IPCountry`, `X-Forwarded-For`, or similar) is the authority for those keys.
 It also keeps precedence consistent with database person properties, which request overrides already win over.

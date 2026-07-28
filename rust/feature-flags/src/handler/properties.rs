@@ -51,11 +51,12 @@ pub fn prepare_overrides(
 /// Builds the person property overrides for a request, filling in GeoIP-derived properties
 /// unless GeoIP is disabled.
 ///
-/// GeoIP only fills gaps: a `$geoip_*` key the caller sent explicitly is kept as-is. We
-/// geolocate the IP the request came from, which for a server-side call is the caller's own
-/// server rather than the end user — so a caller that resolved geo itself (e.g. from request
-/// headers during SSR) knows better than we do. This also keeps precedence consistent with
-/// database person properties, which request overrides already win over.
+/// GeoIP only fills gaps: a `$geoip_*` key the caller sent explicitly is kept as-is. The IP
+/// we geolocate belongs to whoever made the HTTP request, so a server-side evaluation resolves
+/// the caller's own server instead of the end user, which makes a caller that resolved geo
+/// itself (from request headers during SSR, say) the authority for those keys. Keeping the
+/// caller's value also matches database person properties, which request overrides already
+/// win over.
 pub fn get_person_property_overrides(
     geoip_disabled: bool,
     person_properties: Option<HashMap<String, Value>>,

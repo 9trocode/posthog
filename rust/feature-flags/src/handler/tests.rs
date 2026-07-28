@@ -197,7 +197,7 @@ fn test_supplied_geoip_properties_win_over_lookup(#[case] key: &str) {
     .expect("expected property overrides");
 
     assert_eq!(result.get(key), Some(&supplied));
-    // The rest of the lookup still fills gaps, so nothing else is lost.
+    // Equal length means the keys the caller didn't send were still filled in from the lookup.
     assert_eq!(result.len(), resolved.len());
 }
 
