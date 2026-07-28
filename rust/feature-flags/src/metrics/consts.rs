@@ -68,6 +68,10 @@ pub const DB_PERSON_AND_GROUP_PROPERTIES_READS_COUNTER: &str =
     "flags_db_person_and_group_properties_reads_total";
 pub const FLAG_REQUESTS_COUNTER: &str = "flags_requests_total";
 pub const FLAG_REQUESTS_LATENCY: &str = "flags_requests_duration_ms";
+// Incremented once per request where GeoIP resolved at least one property the caller had
+// already supplied in `person_properties`, so the caller's value was kept instead. Mostly a
+// server-side-evaluation signal, since those requests geolocate the caller's own server IP.
+pub const GEOIP_PROPERTIES_NOT_APPLIED_COUNTER: &str = "flags_geoip_properties_not_applied_total";
 
 // Internal batch flag evaluation endpoint (static cohort generation). Dedicated
 // `flags_batch_eval_*` names keep batch traffic separable from live `/flags` metrics.

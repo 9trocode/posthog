@@ -1,7 +1,14 @@
-use crate::{api::errors::FlagError, flags::flag_request::FlagRequest};
+use crate::{
+    api::errors::FlagError, flags::flag_request::FlagRequest,
+    metrics::consts::GEOIP_PROPERTIES_NOT_APPLIED_COUNTER,
+};
 use common_geoip::GeoIpClient;
+use metrics::counter;
 use serde_json::Value;
-use std::{collections::HashMap, net::IpAddr};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    net::IpAddr,
+};
 
 use super::types::{RequestContext, RequestPropertyOverrides};
 
@@ -41,6 +48,14 @@ pub fn prepare_overrides(
     })
 }
 
+/// Builds the person property overrides for a request, filling in GeoIP-derived properties
+/// unless GeoIP is disabled.
+///
+/// GeoIP only fills gaps: a `$geoip_*` key the caller sent explicitly is kept as-is. We
+/// geolocate the IP the request came from, which for a server-side call is the caller's own
+/// server rather than the end user — so a caller that resolved geo itself (e.g. from request
+/// headers during SSR) knows better than we do. This also keeps precedence consistent with
+/// database person properties, which request overrides already win over.
 pub fn get_person_property_overrides(
     geoip_disabled: bool,
     person_properties: Option<HashMap<String, Value>>,
@@ -50,7 +65,18 @@ pub fn get_person_property_overrides(
     match (!geoip_disabled, person_properties) {
         (true, Some(mut props)) => {
             if let Some(geoip_props) = geoip_service.get_geoip_properties(&ip.to_string()) {
-                props.extend(geoip_props.into_iter().map(|(k, v)| (k, Value::String(v))));
+                let mut not_applied = 0;
+                for (key, value) in geoip_props {
+                    match props.entry(key) {
+                        Entry::Vacant(slot) => {
+                            slot.insert(Value::String(value));
+                        }
+                        Entry::Occupied(_) => not_applied += 1,
+                    }
+                }
+                if not_applied > 0 {
+                    counter!(GEOIP_PROPERTIES_NOT_APPLIED_COUNTER).increment(1);
+                }
             }
             Some(props)
         }

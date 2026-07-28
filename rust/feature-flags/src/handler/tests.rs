@@ -176,6 +176,31 @@ fn test_geoip_person_property_overrides(
     }
 }
 
+#[rstest]
+#[case("$geoip_country_code")]
+#[case("$geoip_country_name")]
+fn test_supplied_geoip_properties_win_over_lookup(#[case] key: &str) {
+    let geoip_service = create_test_geoip_service();
+    let ip = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+
+    let resolved = properties::get_person_property_overrides(false, None, &ip, &geoip_service)
+        .expect("expected geoip to resolve for a public IP");
+    assert!(resolved.contains_key(key), "test IP should resolve {key}");
+
+    let supplied = Value::String("supplied-by-caller".to_string());
+    let result = properties::get_person_property_overrides(
+        false,
+        Some(HashMap::from([(key.to_string(), supplied.clone())])),
+        &ip,
+        &geoip_service,
+    )
+    .expect("expected property overrides");
+
+    assert_eq!(result.get(key), Some(&supplied));
+    // The rest of the lookup still fills gaps, so nothing else is lost.
+    assert_eq!(result.len(), resolved.len());
+}
+
 #[tokio::test]
 async fn test_evaluate_feature_flags() {
     let reader: Arc<dyn Client + Send + Sync> = setup_pg_reader_client(None);

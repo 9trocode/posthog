@@ -65,6 +65,9 @@ pub struct FlagRequest {
     pub distinct_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sent_at: Option<DateTime<Utc>>,
+    /// Skips the MaxMind lookup that adds `$geoip_*` properties to `person_properties`.
+    /// The lookup uses the IP the request came from, so it's worth disabling for server-side
+    /// evaluation, where that's the caller's own server rather than the end user.
     pub geoip_disable: Option<bool>,
     // Web and mobile clients can configure this parameter to disable flags for a request.
     // It's mostly used for folks who want to save money on flag evaluations while still using
