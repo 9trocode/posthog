@@ -85,6 +85,10 @@ class TestDisplayVideo360Source:
         # get_schemas walks a static endpoint catalog with no I/O, so the public docs can render it.
         assert self.source.lists_tables_without_credentials is True
 
+    def test_account_scope_fields_require_credential_reentry(self) -> None:
+        # Changing the partner or advertiser scope must re-require the credential (exfiltration gate).
+        assert self.source.connection_host_fields == ["partner_id", "advertiser_ids"]
+
     def test_source_config_fields(self) -> None:
         auth_field, partner_field, advertiser_field = self.source.get_source_config.fields
 

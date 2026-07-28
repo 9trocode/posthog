@@ -151,6 +151,13 @@ Performance tables are generated as Bid Manager reports, so they only reach as f
             ),
         )
 
+    @property
+    def connection_host_fields(self) -> list[str]:
+        # `partner_id` and `advertiser_ids` decide which Google account the stored credential acts
+        # on. Changing either must re-require the credential so an editor who can't read it can't
+        # silently repoint the connection at a different partner or advertiser scope.
+        return ["partner_id", "advertiser_ids"]
+
     def get_non_retryable_errors(self) -> dict[str, str | None]:
         return {
             "401 Client Error": "Google rejected your Display & Video 360 credentials. Update the service account key or OAuth client details and reconnect.",
