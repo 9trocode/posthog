@@ -57,6 +57,11 @@ REPORT_POLL_MAX_ATTEMPTS = 60
 POST_MAX_ATTEMPTS = 4
 POST_BACKOFF_BASE_SECONDS = 2.0
 
+# The whole report CSV is buffered, parsed, and sorted in memory, so a run-away report could
+# exhaust the import worker. Cap the download and fail loudly rather than OOM the worker.
+REPORT_DOWNLOAD_CHUNK_BYTES = 1 << 20
+REPORT_MAX_DOWNLOAD_BYTES = 512 * (1 << 20)
+
 
 class DisplayVideo360CredentialsError(Exception):
     """The configured credentials are unusable — no request was made."""
@@ -117,6 +122,15 @@ def parse_service_account_key(raw: str | None) -> dict[str, Any]:
         raise DisplayVideo360CredentialsError(
             f"The service account key is missing required fields: {', '.join(missing)}."
         )
+    # `from_service_account_info` honors the key's `token_uri`, POSTing a signed JWT there when the
+    # session first refreshes. A tampered key could point that at an internal or attacker host, so
+    # pin the exchange to Google's endpoint before any credential is built or request is made.
+    token_uri = parsed.get("token_uri")
+    if token_uri and token_uri != GOOGLE_TOKEN_URI:
+        raise DisplayVideo360CredentialsError(
+            f"The service account key has an unexpected token_uri; only {GOOGLE_TOKEN_URI} is allowed."
+        )
+    parsed["token_uri"] = GOOGLE_TOKEN_URI
     return parsed
 
 
@@ -430,9 +444,21 @@ def download_report_rows(download: requests.Session, path: str, logger: Filterin
         # The download URL comes back inside the API response; only ever follow an https URL so a
         # tampered response can't redirect the fetch at something local.
         raise DisplayVideo360ReportError(f"Display & Video 360 returned an unexpected report path: {path!r}")
-    response = download.get(path, timeout=REQUEST_TIMEOUT_SECONDS)
-    _raise_for_status(response, logger)
-    return parse_report_csv(response.text)
+    with download.get(path, timeout=REQUEST_TIMEOUT_SECONDS, stream=True) as response:
+        _raise_for_status(response, logger)
+        buffer = io.BytesIO()
+        total = 0
+        for chunk in response.iter_content(chunk_size=REPORT_DOWNLOAD_CHUNK_BYTES):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > REPORT_MAX_DOWNLOAD_BYTES:
+                raise DisplayVideo360ReportError(
+                    f"Display & Video 360 report exceeded the "
+                    f"{REPORT_MAX_DOWNLOAD_BYTES // (1 << 20)} MiB download limit."
+                )
+            buffer.write(chunk)
+    return parse_report_csv(buffer.getvalue().decode("utf-8", errors="replace"))
 
 
 def _delete_query(session: AuthorizedSession, query_id: str, logger: FilteringBoundLogger) -> None:

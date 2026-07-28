@@ -85,6 +85,17 @@ class FakeResponse:
             kind = "Client Error" if self.status_code < 500 else "Server Error"
             raise requests.HTTPError(f"{self.status_code} {kind}: for url: {self.url}", response=cast(Any, self))
 
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int = 1) -> Iterable[bytes]:
+        data = self.text.encode("utf-8")
+        for start in range(0, len(data), chunk_size or len(data) or 1):
+            yield data[start : start + (chunk_size or len(data) or 1)]
+
 
 class FakeSession:
     """Stand-in for the authorized/tracked session, replaying queued responses in order."""
@@ -165,6 +176,19 @@ class TestServiceAccountKeyParsing:
     def test_unusable_keys_are_rejected(self, raw: str | None, expected_fragment: str) -> None:
         with pytest.raises(DisplayVideo360CredentialsError, match=expected_fragment):
             parse_service_account_key(raw)
+
+    def test_custom_token_uri_is_rejected(self) -> None:
+        # A tampered key pointing token_uri at an internal host is an SSRF vector via the JWT
+        # refresh; it must be refused before any credential is built or request is made.
+        raw = (
+            '{"client_email": "sa@example.iam.gserviceaccount.com", "private_key": "-----BEGIN PRIVATE KEY-----", '
+            '"token_uri": "http://169.254.169.254/token"}'
+        )
+        with pytest.raises(DisplayVideo360CredentialsError, match="token_uri"):
+            parse_service_account_key(raw)
+
+    def test_absent_token_uri_is_pinned_to_google(self) -> None:
+        assert parse_service_account_key(SERVICE_ACCOUNT_KEY)["token_uri"] == dv.GOOGLE_TOKEN_URI
 
 
 class TestCredentials:
@@ -669,6 +693,14 @@ class TestReportPipeline:
     def test_non_https_report_paths_are_refused(self, path: str) -> None:
         with pytest.raises(DisplayVideo360ReportError, match="unexpected report path"):
             dv.download_report_rows(cast(Any, FakeSession()), path, mock.MagicMock())
+
+    def test_oversized_report_download_is_refused(self) -> None:
+        download = FakeSession(get_responses=[FakeResponse(text="x" * 1024)])
+        with mock.patch.object(dv, "REPORT_MAX_DOWNLOAD_BYTES", 64):
+            with pytest.raises(DisplayVideo360ReportError, match="download limit"):
+                dv.download_report_rows(
+                    cast(Any, download), "https://storage.googleapis.com/report.csv", mock.MagicMock()
+                )
 
 
 class TestPostRetries:
