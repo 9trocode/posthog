@@ -702,6 +702,16 @@ class TestReportPipeline:
                     cast(Any, download), "https://storage.googleapis.com/report.csv", mock.MagicMock()
                 )
 
+    def test_signed_url_is_scrubbed_from_error_logs(self) -> None:
+        # A failed report download logs response.url, which is a replayable pre-signed URL.
+        signed = "https://storage.googleapis.com/b/r.csv?X-Goog-Credential=sa&X-Goog-Signature=deadbeef"
+        logger = mock.MagicMock()
+        with pytest.raises(requests.HTTPError):
+            dv._raise_for_status(cast(Any, FakeResponse(status_code=403, url=signed)), logger)
+        logged = logger.error.call_args[0][0]
+        assert "deadbeef" not in logged
+        assert "X-Goog-Signature=REDACTED" in logged
+
 
 class TestPostRetries:
     def test_transient_failures_are_retried_then_succeed(self) -> None:

@@ -22,6 +22,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.htt
     make_tracked_adapter,
     make_tracked_session,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.http.url_utils import scrub_url
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.display_video_360.settings import (
     BID_MANAGER_API_VERSION,
@@ -219,8 +220,11 @@ def _entity_url(api_version: str, path: str, params: dict[str, Any]) -> str:
 def _raise_for_status(response: requests.Response, logger: FilteringBoundLogger) -> None:
     if response.ok:
         return
+    # `response.url` can be a pre-signed report download URL carrying replayable signing params;
+    # scrub it before it reaches the log line (the tracked transport scrubs its own telemetry).
     logger.error(
-        f"Display & Video 360 API error: status={response.status_code}, url={response.url}, body={response.text}"
+        f"Display & Video 360 API error: status={response.status_code}, "
+        f"url={scrub_url(response.url or '')}, body={response.text}"
     )
     response.raise_for_status()
 
