@@ -880,8 +880,6 @@ doesn't conflict with concurrent PRs.
 - develocity
 - dialpad
 - discord
-- display_video_360
-- docusign
 - dodopayments
 - dolibarr
 - donorbox
