@@ -939,8 +939,8 @@ def _timed_query(name, fn, *args, **kwargs):
 
 @dataclass(frozen=True)
 class BillingQuotaUpdateResult:
-    """Outcome of a quota-limiting run. The two org maps have the same shape, so returning them
-    positionally is easy to get backwards. Named fields keep them straight."""
+    """Outcome of a quota-limiting run. Deliberately not a tuple: the two org maps have the same
+    shape, so a positional unpack could silently swap them."""
 
     quota_limited_orgs: dict[str, dict[str, int]]
     quota_limiting_suspended_orgs: dict[str, dict[str, int]]
