@@ -693,8 +693,8 @@ def parse_clickhouse_type(type_name: str) -> RuntimeType:
 
 # Scalar constant types whose runtime type is fully determined by (class, nullable) — used to
 # dedupe before unification so large homogeneous literal arrays don't allocate per element.
-# Only families where unifying N identical types equals unifying one belong here; UUIDType and
-# IntervalType don't (a lone uuid keeps its family, but several unify to string via the subset rule).
+# Only families where unifying N identical types equals unifying one belong here; IntervalType
+# doesn't (a lone interval keeps its family, but several unify via the subset rules).
 _SIMPLE_CONSTANT_TYPE_CLASSES = frozenset(
     {
         ast.BooleanType,
@@ -706,6 +706,7 @@ _SIMPLE_CONSTANT_TYPE_CLASSES = frozenset(
         ast.StringArrayType,
         ast.DateType,
         ast.DateTimeType,
+        ast.UUIDType,
     }
 )
 
@@ -758,6 +759,8 @@ def least_common_runtime_type(runtime_types: list[RuntimeType], dialect: HogQLDi
             if "datetime" in families
             else DATE_RUNTIME_TYPE.with_nullable(nullable)
         )
+    if families == {"uuid"}:
+        return RuntimeType(family="uuid", nullable=nullable, dialect=cast(RuntimeTypeDialect, dialect))
     if families <= {"string", "fixed_string", "enum", "uuid"}:
         return STRING_RUNTIME_TYPE.with_nullable(nullable)
     if families == {"json"}:
@@ -1261,6 +1264,59 @@ def _infer_generic_function_type(
 
     if normalized_name == "arrayreduce":
         return _infer_array_reduce_type(arg_types=arg_types, args=args)
+
+    if (
+        normalized_name
+        in {
+            "arrayresize",
+            "arrayrotateleft",
+            "arrayrotateright",
+            "arraycumsum",
+            "arraycumsumnonnegative",
+            "arraydifference",
+        }
+        and arg_types
+    ):
+        # Return an array whose element type matches the input. Width/sign details (e.g. a cumulative
+        # sum widening, or a difference turning unsigned into signed) aren't tracked by the
+        # compatibility layer, so the family-preserving input type is the precise-enough answer.
+        return infer_array_slice_constant_type(arg_types[0])
+
+    # Array-returning helpers: array-level nullability propagates from the arguments (a nullable input
+    # can make the whole result NULL), while the element type comes from _array_element_type so array
+    # nullability isn't folded into the element. Matches _infer_array_concat_type.
+    if normalized_name in {"arraypushback", "arraypushfront"} and len(arg_types) >= 2:
+        item_type = least_common_supertype([_array_element_type(arg_types[0]), arg_types[1]], dialect=dialect)
+        return ast.ArrayType(nullable=any(arg_type.nullable for arg_type in arg_types), item_type=item_type)
+
+    if normalized_name == "arraywithconstant" and len(arg_types) >= 2:
+        return ast.ArrayType(
+            nullable=any(arg_type.nullable for arg_type in arg_types), item_type=dataclasses.replace(arg_types[1])
+        )
+
+    if normalized_name == "arrayintersect" and arg_types:
+        return ast.ArrayType(
+            nullable=any(arg_type.nullable for arg_type in arg_types),
+            item_type=least_common_supertype(
+                [_array_element_type(arg_type) for arg_type in arg_types], dialect=dialect
+            ),
+        )
+
+    # Fixed result families. Propagate input nullability (matching arraySum/arrayAvg) rather than
+    # asserting non-null: over a nullable array these can be NULL, and claiming non-null would let the
+    # printer drop a load-bearing null wrapper. Keeping the wrapper when unsure is the safe direction.
+    if normalized_name == "arrayuniq":
+        return ast.IntegerType(nullable=any(arg_type.nullable for arg_type in arg_types))
+
+    if normalized_name == "arraystringconcat":
+        return ast.StringType(nullable=any(arg_type.nullable for arg_type in arg_types))
+
+    if normalized_name in {"arrayproduct", "arrayauc"}:
+        return ast.FloatType(nullable=any(arg_type.nullable for arg_type in arg_types))
+
+    if normalized_name == "reverse" and arg_types:
+        # reverse is polymorphic identity: String -> String, Array[T] -> Array[T].
+        return dataclasses.replace(arg_types[0])
 
     if normalized_name == "tuple":
         return ast.TupleType(nullable=False, item_types=[dataclasses.replace(arg_type) for arg_type in arg_types])
