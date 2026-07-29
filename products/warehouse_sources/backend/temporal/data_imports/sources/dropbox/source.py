@@ -7,6 +7,7 @@ from posthog.schema import (
     SourceConfig,
     SourceFieldInputConfig,
     SourceFieldInputConfigType,
+    SourceFieldOauthConfig,
 )
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import (
@@ -17,6 +18,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.bas
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.canonical_descriptions import (
     CanonicalDescriptions,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.mixins import OAuthMixin
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.registry import SourceRegistry
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.schema import (
@@ -43,7 +45,7 @@ from products.warehouse_sources.backend.types import ExternalDataSourceType
 
 
 @SourceRegistry.register
-class DropboxSource(ResumableSource[DropboxSourceConfig, DropboxResumeConfig]):
+class DropboxSource(ResumableSource[DropboxSourceConfig, DropboxResumeConfig], OAuthMixin):
     api_docs_url = "https://www.dropbox.com/developers/documentation/http/documentation"
     supported_versions = ("v2",)
     default_version = "v2"
@@ -56,12 +58,14 @@ class DropboxSource(ResumableSource[DropboxSourceConfig, DropboxResumeConfig]):
 
     def get_non_retryable_errors(self) -> dict[str, str | None]:
         return {
-            "400 Client Error: Bad Request for url: https://api.dropboxapi.com/oauth2/token": "Dropbox rejected your refresh token. It may have been revoked, or it may belong to a different app.",
-            "401 Client Error: Unauthorized for url: https://api.dropboxapi.com/oauth2/token": "Dropbox rejected your app key and app secret. Check them in the Dropbox App Console.",
-            "Dropbox did not return an access token": "Dropbox rejected the token refresh. Reconnect the source with a new refresh token.",
-            "401 Client Error: Unauthorized for url: https://api.dropboxapi.com/2/": "Dropbox rejected the access token. Reconnect the source.",
-            "403 Client Error: Forbidden for url: https://api.dropboxapi.com/2/": "Your Dropbox app is missing a scope for this table. Team tables also need a team-scoped app.",
+            "401 Client Error: Unauthorized for url: https://api.dropboxapi.com/2/": "Dropbox rejected the access token. Reconnect your Dropbox account.",
+            "403 Client Error: Forbidden for url: https://api.dropboxapi.com/2/": "Your Dropbox connection cannot read this table. The team tables need a Dropbox Business team connection.",
             "409 Client Error: Conflict for url: https://api.dropboxapi.com/2/": "Dropbox rejected the request. Check that the folder path exists and that the account can reach it.",
+            # Deterministic credential errors from OAuthMixin — the integration row is gone or was
+            # never set, so retrying can never succeed.
+            "Missing integration ID": "Dropbox is not connected. Reconnect your Dropbox account.",
+            "Integration not found": "The linked Dropbox connection no longer exists. Reconnect your Dropbox account.",
+            "Dropbox access token not found": "The Dropbox access token is missing. Reconnect your Dropbox account.",
         }
 
     @property
@@ -72,38 +76,21 @@ class DropboxSource(ResumableSource[DropboxSourceConfig, DropboxResumeConfig]):
             label="Dropbox",
             caption="""Connect Dropbox to pull file, folder, and sharing metadata into the PostHog Data warehouse.
 
-Create an app in the [Dropbox App Console](https://www.dropbox.com/developers/apps), then enter its app key and app secret along with a refresh token authorized for your account. Dropbox access tokens last only a few hours, so a refresh token is required.
+Connect your Dropbox account and authorize PostHog. It asks for read-only access to your account info, file metadata, and sharing metadata.
 
-Grant `files.metadata.read` for the files table and `sharing.read` for shared links and folders. The team tables need a team-scoped app with `members.read` and `events.read`.""",
+The team tables need a Dropbox Business team connection, which PostHog does not request, so they stay off by default.""",
             iconPath="/static/services/dropbox.png",
             docsUrl="https://posthog.com/docs/cdp/sources/dropbox",
             releaseStatus=ReleaseStatus.ALPHA,
             fields=cast(
                 list[FieldType],
                 [
-                    SourceFieldInputConfig(
-                        name="app_key",
-                        label="App key",
-                        type=SourceFieldInputConfigType.TEXT,
+                    SourceFieldOauthConfig(
+                        name="dropbox_integration_id",
+                        label="Dropbox account",
                         required=True,
-                        placeholder="",
-                        secret=False,
-                    ),
-                    SourceFieldInputConfig(
-                        name="app_secret",
-                        label="App secret",
-                        type=SourceFieldInputConfigType.PASSWORD,
-                        required=True,
-                        placeholder="",
-                        secret=True,
-                    ),
-                    SourceFieldInputConfig(
-                        name="refresh_token",
-                        label="Refresh token",
-                        type=SourceFieldInputConfigType.PASSWORD,
-                        required=True,
-                        placeholder="",
-                        secret=True,
+                        kind="dropbox",
+                        requiredScopes="account_info.read files.metadata.read sharing.read",
                     ),
                     SourceFieldInputConfig(
                         name="folder_path",
@@ -157,11 +144,13 @@ Grant `files.metadata.read` for the files table and `sharing.read` for shared li
             should_sync_default=SHOULD_SYNC_DEFAULT,
         )
 
-    def _credentials(self, config: DropboxSourceConfig) -> DropboxCredentials:
+    def _credentials(self, config: DropboxSourceConfig, team_id: int) -> DropboxCredentials:
+        integration = self.get_oauth_integration(config.dropbox_integration_id, team_id)
+        if not integration.access_token:
+            raise ValueError("Dropbox access token not found")
+
         return DropboxCredentials(
-            app_key=config.app_key,
-            app_secret=config.app_secret,
-            refresh_token=config.refresh_token,
+            access_token=integration.access_token,
             team_member_id=config.team_member_id,
             root_namespace_id=config.root_namespace_id,
         )
@@ -173,7 +162,12 @@ Grant `files.metadata.read` for the files table and `sharing.read` for shared li
         schema_name: Optional[str] = None,
         api_version: str | None = None,
     ) -> tuple[bool, str | None]:
-        return validate_dropbox_credentials(self._credentials(config))
+        try:
+            credentials = self._credentials(config, team_id)
+        except ValueError:
+            return False, "Connect a Dropbox account to continue."
+
+        return validate_dropbox_credentials(credentials)
 
     def get_endpoint_permissions(
         self,
@@ -182,7 +176,14 @@ Grant `files.metadata.read` for the files table and `sharing.read` for shared li
         endpoints: list[str],
         api_version: str | None = None,
     ) -> dict[str, str | None]:
-        return check_endpoint_access(self._credentials(config), endpoints)
+        try:
+            credentials = self._credentials(config, team_id)
+        except ValueError:
+            # Nothing to probe with yet. Reporting every table as reachable keeps the schema
+            # picker usable; a genuinely broken connection is caught by validate_credentials.
+            return dict.fromkeys(endpoints)
+
+        return check_endpoint_access(credentials, endpoints)
 
     def get_resumable_source_manager(self, inputs: SourceInputs) -> ResumableSourceManager[DropboxResumeConfig]:
         return ResumableSourceManager[DropboxResumeConfig](inputs, DropboxResumeConfig)
@@ -194,7 +195,7 @@ Grant `files.metadata.read` for the files table and `sharing.read` for shared li
         inputs: SourceInputs,
     ) -> SourceResponse:
         return dropbox_source(
-            credentials=self._credentials(config),
+            credentials=self._credentials(config, inputs.team_id),
             endpoint=inputs.schema_name,
             folder_path=config.folder_path,
             logger=inputs.logger,

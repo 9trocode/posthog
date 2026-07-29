@@ -6,9 +6,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common imp
 
 @config.config
 class DropboxSourceConfig(config.Config):
-    app_key: str
-    app_secret: str
-    refresh_token: str
+    dropbox_integration_id: int = config.value(converter=config.str_to_int)
     folder_path: str | None = None
     team_member_id: str | None = None
     root_namespace_id: str | None = None

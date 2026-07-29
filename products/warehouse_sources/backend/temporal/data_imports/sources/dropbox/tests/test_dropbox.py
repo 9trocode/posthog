@@ -11,7 +11,7 @@ from requests.exceptions import HTTPError
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.dropbox.dropbox import (
-    DropboxAuthError,
+    CHECK_USER_QUERY,
     DropboxClient,
     DropboxCredentials,
     DropboxCursorReset,
@@ -32,7 +32,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.dropbox.se
 
 _MODULE = "products.warehouse_sources.backend.temporal.data_imports.sources.dropbox.dropbox"
 
-CREDENTIALS = DropboxCredentials(app_key="key", app_secret="secret", refresh_token="refresh")
+CREDENTIALS = DropboxCredentials(access_token="access-1")
 
 
 class FakeResumeManager(ResumableSourceManager[DropboxResumeConfig]):
@@ -71,20 +71,13 @@ def _response(body: Any = None, status: int = 200) -> mock.MagicMock:
 
 
 @contextlib.contextmanager
-def patched_sessions(
-    api_responses: list[Any] | None = None,
-    token_response: Any | None = None,
-) -> Iterator[tuple[mock.MagicMock, mock.MagicMock]]:
-    """Patch the two sessions `DropboxClient` builds, in construction order."""
+def patched_session(api_responses: list[Any] | None = None) -> Iterator[mock.MagicMock]:
+    """Patch the session `DropboxClient` builds."""
     api_session = mock.MagicMock()
-    token_session = mock.MagicMock()
     if api_responses is not None:
         api_session.post.side_effect = api_responses
-    token_session.post.return_value = (
-        _response({"access_token": "access-1"}) if token_response is None else token_response
-    )
-    with mock.patch(f"{_MODULE}.make_tracked_session", side_effect=[api_session, token_session]):
-        yield api_session, token_session
+    with mock.patch(f"{_MODULE}.make_tracked_session", return_value=api_session):
+        yield api_session
 
 
 def _walk(
@@ -187,35 +180,20 @@ class TestHelpers:
 
 
 class TestDropboxClient:
-    def test_mints_a_token_before_the_first_request(self) -> None:
-        with patched_sessions([_response({"entries": []})]) as (api_session, token_session):
+    def test_sends_the_integration_access_token(self) -> None:
+        with patched_session([_response({"entries": []})]) as api_session:
             DropboxClient(CREDENTIALS).post("/2/files/list_folder", {"path": ""})
 
-        token_body = token_session.post.call_args.kwargs["data"]
-        assert token_body == {
-            "grant_type": "refresh_token",
-            "refresh_token": "refresh",
-            "client_id": "key",
-            "client_secret": "secret",
-        }
         assert api_session.post.call_args.kwargs["headers"]["Authorization"] == "Bearer access-1"
 
-    def test_mint_raises_when_no_token_is_returned(self) -> None:
-        with patched_sessions(token_response=_response({"token_type": "bearer"})):
-            with pytest.raises(DropboxAuthError):
-                DropboxClient(CREDENTIALS).mint_access_token()
-
-    def test_remints_once_when_the_token_expires_mid_sync(self) -> None:
-        with patched_sessions([_response({}, status=401), _response({"entries": []})]) as (api_session, token_session):
-            DropboxClient(CREDENTIALS).post("/2/files/list_folder", {"path": ""})
-
-        assert token_session.post.call_count == 2
-        assert api_session.post.call_count == 2
-
-    def test_raises_when_the_retried_request_is_still_unauthorized(self) -> None:
-        with patched_sessions([_response({}, status=401), _response({}, status=401)]):
+    def test_an_expired_token_is_surfaced_rather_than_refreshed(self) -> None:
+        # Renewing the token belongs to the integration, so a 401 must fail the run and ask the
+        # user to reconnect instead of being retried behind their back.
+        with patched_session([_response({}, status=401)]) as api_session:
             with pytest.raises(HTTPError):
                 DropboxClient(CREDENTIALS).post("/2/files/list_folder", {"path": ""})
+
+        assert api_session.post.call_count == 1
 
     @pytest.mark.parametrize(
         "body",
@@ -226,20 +204,18 @@ class TestDropboxClient:
         ],
     )
     def test_cursor_reset_bodies_raise_cursor_reset(self, body: dict[str, Any]) -> None:
-        with patched_sessions([_response(body, status=409)]):
+        with patched_session([_response(body, status=409)]):
             with pytest.raises(DropboxCursorReset):
                 DropboxClient(CREDENTIALS).post("/2/files/list_folder/continue", {"cursor": "c1"})
 
     def test_other_conflicts_are_raised_as_http_errors(self) -> None:
-        with patched_sessions([_response({"error_summary": "path/not_found/..."}, status=409)]):
+        with patched_session([_response({"error_summary": "path/not_found/..."}, status=409)]):
             with pytest.raises(HTTPError):
                 DropboxClient(CREDENTIALS).post("/2/files/list_folder", {"path": "/nope"})
 
     def test_select_user_header_is_sent_for_user_endpoints_only(self) -> None:
-        credentials = DropboxCredentials(
-            app_key="key", app_secret="secret", refresh_token="refresh", team_member_id="dbmid:1"
-        )
-        with patched_sessions([_response({"entries": []}), _response({"members": []})]) as (api_session, _):
+        credentials = DropboxCredentials(access_token="access-1", team_member_id="dbmid:1")
+        with patched_session([_response({"entries": []}), _response({"members": []})]) as api_session:
             client = DropboxClient(credentials)
             client.post("/2/files/list_folder", {"path": ""}, select_user=True)
             client.post("/2/team/members/list_v2", {}, select_user=False)
@@ -249,10 +225,8 @@ class TestDropboxClient:
         assert "Dropbox-API-Select-User" not in team_headers
 
     def test_path_root_header_targets_the_team_space(self) -> None:
-        credentials = DropboxCredentials(
-            app_key="key", app_secret="secret", refresh_token="refresh", root_namespace_id="12345"
-        )
-        with patched_sessions([_response({"entries": []})]) as (api_session, _):
+        credentials = DropboxCredentials(access_token="access-1", root_namespace_id="12345")
+        with patched_session([_response({"entries": []})]) as api_session:
             DropboxClient(credentials).post("/2/files/list_folder", {"path": ""})
 
         header = api_session.post.call_args.kwargs["headers"]["Dropbox-API-Path-Root"]
@@ -266,7 +240,7 @@ class TestGetRows:
             _response({"entries": [{"id": "id:1", ".tag": "file"}], "cursor": "c1", "has_more": True}),
             _response({"entries": [{"id": "id:2", ".tag": "folder"}], "cursor": "c2", "has_more": False}),
         ]
-        with patched_sessions(pages) as (api_session, _):
+        with patched_session(pages) as api_session:
             batches = _walk("files", manager, folder_path="Reports")
 
         assert [[row["id"] for row in batch] for batch in batches] == [["id:1"], ["id:2"]]
@@ -285,7 +259,7 @@ class TestGetRows:
             _response({"links": [{"url": "u1"}], "cursor": "c1", "has_more": True}),
             _response({"links": [{"url": "u2"}], "has_more": False}),
         ]
-        with patched_sessions(pages) as (api_session, _):
+        with patched_session(pages) as api_session:
             batches = _walk("shared_links", manager)
 
         assert [[row["url"] for row in batch] for batch in batches] == [["u1"], ["u2"]]
@@ -306,7 +280,7 @@ class TestGetRows:
         self, page_body: dict[str, Any], expected_calls: int
     ) -> None:
         manager = FakeResumeManager()
-        with patched_sessions([_response(page_body)]) as (api_session, _):
+        with patched_session([_response(page_body)]) as api_session:
             batches = _walk("shared_folders", manager)
 
         assert len(batches) == 1
@@ -319,7 +293,7 @@ class TestGetRows:
             _response({"entries": [{"shared_folder_id": "s1"}], "cursor": "c1"}),
             _response({"entries": [{"shared_folder_id": "s2"}]}),
         ]
-        with patched_sessions(pages) as (api_session, _):
+        with patched_session(pages) as api_session:
             batches = _walk("shared_folders", manager)
 
         assert len(batches) == 2
@@ -327,7 +301,7 @@ class TestGetRows:
 
     def test_resumes_from_the_saved_cursor(self) -> None:
         manager = FakeResumeManager(DropboxResumeConfig(cursor="saved-cursor"))
-        with patched_sessions([_response({"entries": [{"id": "id:9"}]})]) as (api_session, _):
+        with patched_session([_response({"entries": [{"id": "id:9"}]})]) as api_session:
             _walk("files", manager)
 
         call = api_session.post.call_args
@@ -340,7 +314,7 @@ class TestGetRows:
             _response({"error_summary": "reset/..."}, status=409),
             _response({"entries": [{"id": "id:1"}], "has_more": False}),
         ]
-        with patched_sessions(pages) as (api_session, _):
+        with patched_session(pages) as api_session:
             batches = _walk("files", manager)
 
         assert [[row["id"] for row in batch] for batch in batches] == [["id:1"]]
@@ -349,26 +323,26 @@ class TestGetRows:
 
     def test_a_reset_on_the_first_page_is_not_swallowed(self) -> None:
         manager = FakeResumeManager()
-        with patched_sessions([_response({"error_summary": "reset/..."}, status=409)]):
+        with patched_session([_response({"error_summary": "reset/..."}, status=409)]):
             with pytest.raises(DropboxCursorReset):
                 _walk("files", manager)
 
     def test_rows_without_a_primary_key_are_dropped(self) -> None:
         manager = FakeResumeManager()
         page = _response({"entries": [{"id": "id:1"}, {".tag": "deleted", "name": "gone.csv"}]})
-        with patched_sessions([page]):
+        with patched_session([page]):
             batches = _walk("files", manager)
 
         assert batches == [[{"id": "id:1"}]]
 
     def test_an_empty_page_yields_nothing(self) -> None:
         manager = FakeResumeManager()
-        with patched_sessions([_response({"entries": []})]):
+        with patched_session([_response({"entries": []})]):
             assert _walk("files", manager) == []
 
     def test_team_events_window_starts_at_the_watermark(self) -> None:
         manager = FakeResumeManager()
-        with patched_sessions([_response({"events": []})]) as (api_session, _):
+        with patched_session([_response({"events": []})]) as api_session:
             _walk(
                 "team_events",
                 manager,
@@ -382,7 +356,7 @@ class TestGetRows:
 
     def test_team_events_full_refresh_sends_no_window(self) -> None:
         manager = FakeResumeManager()
-        with patched_sessions([_response({"events": []})]) as (api_session, _):
+        with patched_session([_response({"events": []})]) as api_session:
             _walk("team_events", manager)
 
         assert "time" not in api_session.post.call_args.kwargs["json"]
@@ -390,17 +364,15 @@ class TestGetRows:
     def test_team_events_rows_carry_the_synthetic_primary_key(self) -> None:
         manager = FakeResumeManager()
         page = _response({"events": [{"timestamp": "2024-05-01T00:00:00Z", "event_type": {".tag": "login_success"}}]})
-        with patched_sessions([page]):
+        with patched_session([page]):
             batches = _walk("team_events", manager)
 
         assert len(batches[0][0][EVENT_ID_FIELD]) == 64
 
     def test_team_endpoints_do_not_select_a_member(self) -> None:
-        credentials = DropboxCredentials(
-            app_key="key", app_secret="secret", refresh_token="refresh", team_member_id="dbmid:1"
-        )
+        credentials = DropboxCredentials(access_token="access-1", team_member_id="dbmid:1")
         manager = FakeResumeManager()
-        with patched_sessions([_response({"members": []})]) as (api_session, _):
+        with patched_session([_response({"members": []})]) as api_session:
             list(
                 get_rows(
                     credentials=credentials,
@@ -415,23 +387,32 @@ class TestGetRows:
 
 
 class TestValidateCredentials:
-    def test_valid_when_a_token_can_be_minted(self) -> None:
-        with patched_sessions():
+    def test_valid_when_the_token_check_echoes_the_query(self) -> None:
+        with patched_session([_response({"result": CHECK_USER_QUERY})]) as api_session:
             assert validate_credentials(CREDENTIALS) == (True, None)
 
+        call = api_session.post.call_args
+        # `check/user` needs no scopes, so a connection missing a per-table scope still connects.
+        assert call.args[0].endswith("/2/check/user")
+        assert call.kwargs["json"] == {"query": CHECK_USER_QUERY}
+        assert "Dropbox-API-Select-User" not in call.kwargs["headers"]
+
     @pytest.mark.parametrize("status", [400, 401])
-    def test_invalid_when_the_token_exchange_fails(self, status: int) -> None:
-        with patched_sessions(token_response=_response({"error": "invalid_grant"}, status=status)):
+    def test_invalid_when_dropbox_rejects_the_token(self, status: int) -> None:
+        with patched_session([_response({"error_summary": "invalid_access_token/..."}, status=status)]):
             is_valid, error = validate_credentials(CREDENTIALS)
 
         assert is_valid is False
-        assert error is not None and "app key" in error
+        assert error is not None and "Reconnect" in error
 
-    def test_invalid_when_the_token_exchange_raises(self) -> None:
+    def test_invalid_when_the_echo_does_not_come_back(self) -> None:
+        with patched_session([_response({"result": "something else"})]):
+            assert validate_credentials(CREDENTIALS)[0] is False
+
+    def test_invalid_when_the_request_raises(self) -> None:
         api_session = mock.MagicMock()
-        token_session = mock.MagicMock()
-        token_session.post.side_effect = Exception("boom")
-        with mock.patch(f"{_MODULE}.make_tracked_session", side_effect=[api_session, token_session]):
+        api_session.post.side_effect = Exception("boom")
+        with mock.patch(f"{_MODULE}.make_tracked_session", return_value=api_session):
             assert validate_credentials(CREDENTIALS)[0] is False
 
 
@@ -442,23 +423,23 @@ class TestCheckEndpointAccess:
             _response({"error_summary": "missing_scope/..."}, status=403),
             _response({}, status=500),
         ]
-        with patched_sessions(responses) as (api_session, _):
+        with patched_session(responses) as api_session:
             results = check_endpoint_access(CREDENTIALS, ["files", "team_events", "shared_folders"])
 
         assert results["files"] is None
-        assert results["team_events"] is not None and "scope" in results["team_events"]
+        assert results["team_events"] is not None and "Dropbox Business team" in results["team_events"]
         # A 5xx is not a permission problem.
         assert results["shared_folders"] is None
         assert api_session.post.call_args_list[0].kwargs["json"]["limit"] == 1
 
     def test_a_missing_folder_is_reported_against_the_files_table(self) -> None:
-        with patched_sessions([_response({"error_summary": "path/not_found/..."}, status=409)]):
+        with patched_session([_response({"error_summary": "path/not_found/..."}, status=409)]):
             results = check_endpoint_access(CREDENTIALS, ["files"])
 
         assert results["files"] is not None and "folder path" in results["files"]
 
     def test_unknown_endpoints_are_reported_as_reachable(self) -> None:
-        with patched_sessions([]):
+        with patched_session([]):
             assert check_endpoint_access(CREDENTIALS, ["nope"]) == {"nope": None}
 
 

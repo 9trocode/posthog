@@ -35809,6 +35809,7 @@ export namespace Schemas {
      * * `customerio-track` - Customerio Track
      * * `customerio-webhook` - Customerio Webhook
      * * `databricks` - Databricks
+     * * `dropbox` - Dropbox
      * * `email` - Email
      * * `firebase` - Firebase
      * * `github` - Github
@@ -35855,6 +35856,7 @@ export namespace Schemas {
       CustomerioTrack: 'customerio-track',
       CustomerioWebhook: 'customerio-webhook',
       Databricks: 'databricks',
+      Dropbox: 'dropbox',
       Email: 'email',
       Firebase: 'firebase',
       Github: 'github',
@@ -35901,6 +35903,7 @@ export namespace Schemas {
        * * `customerio-track` - Customerio Track
        * * `customerio-webhook` - Customerio Webhook
        * * `databricks` - Databricks
+       * * `dropbox` - Dropbox
        * * `email` - Email
        * * `firebase` - Firebase
        * * `github` - Github
@@ -77121,6 +77124,7 @@ export namespace Schemas {
      * * `customerio-track` - Customerio Track
      * * `customerio-webhook` - Customerio Webhook
      * * `databricks` - Databricks
+     * * `dropbox` - Dropbox
      * * `email` - Email
      * * `firebase` - Firebase
      * * `github` - Github
@@ -77178,6 +77182,7 @@ export namespace Schemas {
       CustomerioTrack: 'customerio-track',
       CustomerioWebhook: 'customerio-webhook',
       Databricks: 'databricks',
+      Dropbox: 'dropbox',
       Email: 'email',
       Firebase: 'firebase',
       Github: 'github',

@@ -1,7 +1,10 @@
+from contextlib import AbstractContextManager
+from typing import Any
+
 import pytest
 from unittest import mock
 
-from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldInputConfigType
+from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldOauthConfig
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.dropbox.canonical_descriptions import (
@@ -26,12 +29,15 @@ class TestDropboxSource:
         self.source = DropboxSource()
         self.team_id = 123
         self.config = DropboxSourceConfig(
-            app_key="key",
-            app_secret="secret",
-            refresh_token="refresh",
+            dropbox_integration_id=7,
             folder_path="/Reports",
             team_member_id="dbmid:1",
         )
+
+    def _patch_integration(self, access_token: str | None = "access-1") -> AbstractContextManager[Any]:
+        integration = mock.MagicMock()
+        integration.access_token = access_token
+        return mock.patch.object(DropboxSource, "get_oauth_integration", return_value=integration)
 
     def test_source_type(self) -> None:
         assert self.source.source_type == ExternalDataSourceType.DROPBOX
@@ -47,22 +53,21 @@ class TestDropboxSource:
 
         field_names = [f.name for f in config.fields]
         assert field_names == [
-            "app_key",
-            "app_secret",
-            "refresh_token",
+            "dropbox_integration_id",
             "folder_path",
             "team_member_id",
             "root_namespace_id",
         ]
 
-    @pytest.mark.parametrize("field_name", ["app_secret", "refresh_token"])
-    def test_secret_fields_are_required_passwords(self, field_name: str) -> None:
+    def test_the_account_is_connected_through_the_posthog_oauth_app(self) -> None:
         config = self.source.get_source_config
-        field = next(f for f in config.fields if isinstance(f, SourceFieldInputConfig) and f.name == field_name)
+        field = next(f for f in config.fields if isinstance(f, SourceFieldOauthConfig))
 
-        assert field.type == SourceFieldInputConfigType.PASSWORD
-        assert field.secret is True
+        assert field.name == "dropbox_integration_id"
+        assert field.kind == "dropbox"
         assert field.required is True
+        # Only individual scopes: a team scope would make every Dropbox token team-linked.
+        assert field.requiredScopes == "account_info.read files.metadata.read sharing.read"
 
     @pytest.mark.parametrize("field_name", ["folder_path", "team_member_id", "root_namespace_id"])
     def test_business_and_scoping_fields_are_optional(self, field_name: str) -> None:
@@ -75,10 +80,11 @@ class TestDropboxSource:
     @pytest.mark.parametrize(
         "observed_error",
         [
-            "400 Client Error: Bad Request for url: https://api.dropboxapi.com/oauth2/token",
             "401 Client Error: Unauthorized for url: https://api.dropboxapi.com/2/files/list_folder",
             "403 Client Error: Forbidden for url: https://api.dropboxapi.com/2/team_log/get_events",
             "409 Client Error: Conflict for url: https://api.dropboxapi.com/2/files/list_folder",
+            "Integration not found: 7",
+            "Dropbox access token not found",
         ],
     )
     def test_non_retryable_errors_match_permanent_failures(self, observed_error: str) -> None:
@@ -158,20 +164,52 @@ class TestDropboxSource:
     ) -> None:
         mock_validate.return_value = transport_result
 
-        assert self.source.validate_credentials(self.config, self.team_id) == expected
+        with self._patch_integration():
+            assert self.source.validate_credentials(self.config, self.team_id) == expected
 
         credentials = mock_validate.call_args.args[0]
-        assert (credentials.app_key, credentials.app_secret, credentials.refresh_token) == ("key", "secret", "refresh")
+        assert credentials.access_token == "access-1"
         assert credentials.team_member_id == "dbmid:1"
+
+    @pytest.mark.parametrize(
+        "failure",
+        [ValueError("Integration not found: 7"), None],
+        ids=["integration_missing", "access_token_missing"],
+    )
+    @mock.patch(f"{_SOURCE_MODULE}.validate_dropbox_credentials")
+    def test_validate_credentials_fails_cleanly_without_a_usable_connection(
+        self, mock_validate: mock.MagicMock, failure: ValueError | None
+    ) -> None:
+        patcher = (
+            mock.patch.object(DropboxSource, "get_oauth_integration", side_effect=failure)
+            if failure is not None
+            else self._patch_integration(access_token=None)
+        )
+
+        with patcher:
+            is_valid, error = self.source.validate_credentials(self.config, self.team_id)
+
+        assert is_valid is False
+        assert error == "Connect a Dropbox account to continue."
+        mock_validate.assert_not_called()
 
     @mock.patch(f"{_SOURCE_MODULE}.check_endpoint_access")
     def test_get_endpoint_permissions_delegates_to_the_probe(self, mock_check: mock.MagicMock) -> None:
         mock_check.return_value = {"files": None, "team_events": "missing scope"}
 
-        results = self.source.get_endpoint_permissions(self.config, self.team_id, ["files", "team_events"])
+        with self._patch_integration():
+            results = self.source.get_endpoint_permissions(self.config, self.team_id, ["files", "team_events"])
 
         assert results == {"files": None, "team_events": "missing scope"}
         assert mock_check.call_args.args[1] == ["files", "team_events"]
+
+    @mock.patch(f"{_SOURCE_MODULE}.check_endpoint_access")
+    def test_get_endpoint_permissions_never_blocks_the_schema_picker(self, mock_check: mock.MagicMock) -> None:
+        with mock.patch.object(DropboxSource, "get_oauth_integration", side_effect=ValueError("Integration not found")):
+            results = self.source.get_endpoint_permissions(self.config, self.team_id, ["files", "team_events"])
+
+        assert results == {"files": None, "team_events": None}
+        mock_check.assert_not_called()
 
     def test_get_resumable_source_manager_binds_resume_config(self) -> None:
         manager = self.source.get_resumable_source_manager(mock.MagicMock())
@@ -182,28 +220,47 @@ class TestDropboxSource:
     @mock.patch(f"{_SOURCE_MODULE}.dropbox_source")
     def test_source_for_pipeline_plumbs_arguments(self, mock_dropbox_source: mock.MagicMock) -> None:
         inputs = mock.MagicMock()
+        inputs.team_id = self.team_id
         inputs.schema_name = "team_events"
         inputs.should_use_incremental_field = True
         inputs.db_incremental_field_last_value = "2024-05-01T00:00:00Z"
         manager = mock.MagicMock()
 
-        self.source.source_for_pipeline(self.config, manager, inputs)
+        with self._patch_integration() as mock_get_integration:
+            self.source.source_for_pipeline(self.config, manager, inputs)
 
+        assert mock_get_integration.call_args.args == (7, self.team_id)
         kwargs = mock_dropbox_source.call_args.kwargs
         assert kwargs["endpoint"] == "team_events"
         assert kwargs["folder_path"] == "/Reports"
         assert kwargs["resumable_source_manager"] is manager
         assert kwargs["should_use_incremental_field"] is True
         assert kwargs["db_incremental_field_last_value"] == "2024-05-01T00:00:00Z"
-        assert kwargs["credentials"].refresh_token == "refresh"
+        assert kwargs["credentials"].access_token == "access-1"
 
     @mock.patch(f"{_SOURCE_MODULE}.dropbox_source")
     def test_source_for_pipeline_omits_last_value_on_full_refresh(self, mock_dropbox_source: mock.MagicMock) -> None:
         inputs = mock.MagicMock()
+        inputs.team_id = self.team_id
         inputs.schema_name = "files"
         inputs.should_use_incremental_field = False
         inputs.db_incremental_field_last_value = "2024-05-01T00:00:00Z"
 
-        self.source.source_for_pipeline(self.config, mock.MagicMock(), inputs)
+        with self._patch_integration():
+            self.source.source_for_pipeline(self.config, mock.MagicMock(), inputs)
 
         assert mock_dropbox_source.call_args.kwargs["db_incremental_field_last_value"] is None
+
+    @mock.patch(f"{_SOURCE_MODULE}.dropbox_source")
+    def test_source_for_pipeline_refuses_a_connection_with_no_access_token(
+        self, mock_dropbox_source: mock.MagicMock
+    ) -> None:
+        inputs = mock.MagicMock()
+        inputs.team_id = self.team_id
+        inputs.schema_name = "files"
+
+        with self._patch_integration(access_token=None):
+            with pytest.raises(ValueError, match="Dropbox access token not found"):
+                self.source.source_for_pipeline(self.config, mock.MagicMock(), inputs)
+
+        mock_dropbox_source.assert_not_called()

@@ -27,7 +27,10 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.dropbox.se
 )
 
 DROPBOX_API_HOST = "https://api.dropboxapi.com"
-TOKEN_URL = f"{DROPBOX_API_HOST}/oauth2/token"
+# Echoes back whatever `query` it is given and needs no scopes, so it probes the access token
+# without implying the connection can reach any particular table.
+CHECK_USER_PATH = "/2/check/user"
+CHECK_USER_QUERY = "posthog"
 REQUEST_TIMEOUT_SECONDS = 120
 VALIDATE_TIMEOUT_SECONDS = 15
 
@@ -51,10 +54,6 @@ class DropboxCursorReset(Exception):
     """The pagination cursor expired or was invalidated by Dropbox."""
 
 
-class DropboxAuthError(Exception):
-    """Minting an access token from the refresh token failed."""
-
-
 @dataclasses.dataclass
 class DropboxResumeConfig:
     # The cursor is the whole resume position: Dropbox encodes the listing args (folder path,
@@ -64,76 +63,48 @@ class DropboxResumeConfig:
 
 @dataclasses.dataclass
 class DropboxCredentials:
-    app_key: str
-    app_secret: str
-    refresh_token: str
+    # Short-lived access token from the PostHog Dropbox OAuth integration. Renewing it is the
+    # integration's job (`OauthIntegration.refresh_access_token` plus the scheduled sweep), not
+    # this client's.
+    access_token: str
     # Dropbox Business only: act as one team member, and/or resolve paths against the team space.
     team_member_id: str | None = None
     root_namespace_id: str | None = None
 
 
 class DropboxClient:
-    """POST-RPC client for `api.dropboxapi.com` that mints short-lived access tokens.
-
-    Long-lived access tokens were retired in 2021, so the customer supplies their app key,
-    app secret, and a refresh token, and we exchange them for a ~4h access token — re-minting
-    once mid-sync if a token expires while a large listing is still walking.
-    """
+    """POST-RPC client for `api.dropboxapi.com`."""
 
     def __init__(self, credentials: DropboxCredentials, logger: FilteringBoundLogger | None = None) -> None:
         self._credentials = credentials
         # Credential validation and the scope probe run outside a sync, with no job logger.
         self._logger = logger or structlog.get_logger(__name__)
-        self._access_token: str | None = None
-        redact = (credentials.app_secret, credentials.refresh_token)
         # Dropbox responses carry customer file/audit metadata and shared-link URLs (bearer
         # capabilities anyone can redeem) that the name-based sample scrubbers can't recognise,
-        # so keep the whole content session out of sample capture. Requests stay metered and logged.
+        # so keep the session out of sample capture. Requests stay metered and logged.
         self._session = make_tracked_session(
             headers={"Content-Type": "application/json"},
-            redact_values=redact,
+            redact_values=(credentials.access_token,),
             retry=DROPBOX_RETRY,
             capture=False,
         )
-        # The token exchange's response body carries the minted access token, which the
-        # name-based sample scrubbers can't recognise — keep it out of sample capture.
-        self._token_session = make_tracked_session(redact_values=redact, retry=DROPBOX_RETRY, capture=False)
-
-    def mint_access_token(self) -> str:
-        response = self._token_session.post(
-            TOKEN_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": self._credentials.refresh_token,
-                "client_id": self._credentials.app_key,
-                "client_secret": self._credentials.app_secret,
-            },
-            timeout=VALIDATE_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        token = response.json().get("access_token")
-        if not token or not isinstance(token, str):
-            raise DropboxAuthError("Dropbox did not return an access token")
-        self._access_token = token
-        return token
 
     def _headers(self, select_user: bool) -> dict[str, str]:
-        if self._access_token is None:
-            self.mint_access_token()
-        headers = {"Authorization": f"Bearer {self._access_token}"}
+        headers = {"Authorization": f"Bearer {self._credentials.access_token}"}
         if select_user and self._credentials.team_member_id:
             headers["Dropbox-API-Select-User"] = self._credentials.team_member_id
         if self._credentials.root_namespace_id:
             headers["Dropbox-API-Path-Root"] = json.dumps({".tag": "root", "root": self._credentials.root_namespace_id})
         return headers
 
-    def post(self, path: str, body: dict[str, Any], select_user: bool = True) -> dict[str, Any]:
-        response = self._send(path, body, select_user)
-
-        if response.status_code == 401:
-            # Access tokens last ~4h; a long listing can outlive one.
-            self._access_token = None
-            response = self._send(path, body, select_user)
+    def post(
+        self,
+        path: str,
+        body: dict[str, Any],
+        select_user: bool = True,
+        timeout: int = REQUEST_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        response = self._send(path, body, select_user, timeout)
 
         if response.status_code == 409:
             summary = _error_summary(response)
@@ -147,12 +118,12 @@ class DropboxClient:
         result = response.json()
         return result if isinstance(result, dict) else {}
 
-    def _send(self, path: str, body: dict[str, Any], select_user: bool) -> Response:
+    def _send(self, path: str, body: dict[str, Any], select_user: bool, timeout: int) -> Response:
         return self._session.post(
             f"{DROPBOX_API_HOST}{path}",
             json=body,
             headers=self._headers(select_user),
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
 
 
@@ -258,16 +229,24 @@ def _build_request(
 
 
 def validate_credentials(credentials: DropboxCredentials) -> tuple[bool, str | None]:
-    """Confirm the app credentials can mint an access token.
+    """Confirm the connected account's access token still works.
 
-    Only the token exchange is probed: it needs no scopes, so a user who granted just the
-    scopes for the tables they want to sync still connects. Per-endpoint scope gaps surface
-    through `get_endpoint_permissions`.
+    Only `check/user` is probed: it needs no scopes, so a connection that can reach some tables
+    but not others still connects. Per-endpoint scope gaps surface through
+    `get_endpoint_permissions`.
     """
     try:
-        DropboxClient(credentials).mint_access_token()
+        result = DropboxClient(credentials).post(
+            CHECK_USER_PATH,
+            {"query": CHECK_USER_QUERY},
+            select_user=False,
+            timeout=VALIDATE_TIMEOUT_SECONDS,
+        )
     except Exception:
-        return False, "Could not authenticate with Dropbox. Check your app key, app secret, and refresh token."
+        return False, "Could not authenticate with Dropbox. Reconnect your Dropbox account."
+
+    if result.get("result") != CHECK_USER_QUERY:
+        return False, "Dropbox did not accept the connected account. Reconnect your Dropbox account."
     return True, None
 
 
@@ -292,7 +271,8 @@ def check_endpoint_access(credentials: DropboxCredentials, endpoints: list[str])
             status = e.response.status_code if e.response is not None else None
             if status == 403:
                 results[name] = (
-                    "Your Dropbox app is missing the scope for this table (team tables also need a team-scoped app)."
+                    "Your Dropbox connection cannot read this table. The team tables need a Dropbox Business "
+                    "team connection, which PostHog does not request."
                 )
             elif status == 409:
                 results[name] = "Dropbox rejected this request. The folder path may not exist."
