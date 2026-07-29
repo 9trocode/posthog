@@ -70,7 +70,7 @@ class GoogleDriveSource(ResumableSource[GoogleDriveSourceConfig, GoogleDriveResu
             keywords=["gdrive", "google workspace"],
             caption="""Sync your Google Drive file inventory, shared drives, and shared drive access grants. This reads file metadata only and never downloads file contents.
 
-Connect a Google account and grant read-only access to Drive. To sync a drive no single person should own the connection to, switch the authentication type and paste a service account key instead.""",
+Connect a Google account and grant read-only access to Drive. If you'd rather not tie the connection to one person's account, switch the authentication type and paste a service account key.""",
             iconPath="/static/services/google_drive.png",
             docsUrl="https://posthog.com/docs/cdp/sources/google-drive",
             fields=cast(
