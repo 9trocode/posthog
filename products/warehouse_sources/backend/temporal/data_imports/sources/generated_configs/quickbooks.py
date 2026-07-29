@@ -8,8 +8,5 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common imp
 
 @config.config
 class QuickBooksSourceConfig(config.Config):
-    realm_id: str
-    client_id: str
-    client_secret: str
-    refresh_token: str
+    quickbooks_integration_id: int = config.value(converter=config.str_to_int)
     environment: Literal["production", "sandbox"] = config.value(default="production")

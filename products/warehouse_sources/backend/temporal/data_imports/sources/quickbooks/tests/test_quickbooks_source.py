@@ -1,13 +1,11 @@
+import time
+
 import pytest
 from unittest import mock
 
-from posthog.schema import (
-    DataWarehouseSourceCategory,
-    ReleaseStatus,
-    SourceFieldInputConfig,
-    SourceFieldInputConfigType,
-    SourceFieldSelectConfig,
-)
+from posthog.schema import DataWarehouseSourceCategory, ReleaseStatus, SourceFieldOauthConfig, SourceFieldSelectConfig
+
+from posthog.models.integration import ERROR_TOKEN_REFRESH_FAILED, Integration
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.generated_configs.quickbooks import (
@@ -26,16 +24,37 @@ from products.warehouse_sources.backend.types import ExternalDataSourceType
 
 _SOURCE_MODULE = "products.warehouse_sources.backend.temporal.data_imports.sources.quickbooks.source"
 
+_INTEGRATION_ID = 42
+_REALM_ID = "9130347"
+
+
+def _integration(
+    realm_id: str | None = _REALM_ID,
+    access_token: str | None = "access-token",
+    integration_id: str | None = _REALM_ID,
+    expired: bool = False,
+) -> Integration:
+    """An unsaved integration row shaped like one the QuickBooks OAuth callback writes."""
+    return Integration(
+        id=_INTEGRATION_ID,
+        team_id=123,
+        kind="quickbooks",
+        integration_id=integration_id,
+        config={
+            **({"quickbooks_realm_id": realm_id} if realm_id else {}),
+            "expires_in": 3600,
+            "refreshed_at": int(time.time()) - (3600 if expired else 0),
+        },
+        sensitive_config={"refresh_token": "rt", **({"access_token": access_token} if access_token else {})},
+    )
+
 
 class TestQuickBooksSource:
     def setup_method(self) -> None:
         self.source = QuickBooksSource()
         self.team_id = 123
         self.config = QuickBooksSourceConfig(
-            realm_id="123456789",
-            client_id="client-id",
-            client_secret="client-secret",
-            refresh_token="refresh-token",
+            quickbooks_integration_id=_INTEGRATION_ID,
             environment="production",
         )
 
@@ -53,38 +72,22 @@ class TestQuickBooksSource:
         assert config.iconPath == "/static/services/quickbooks.png"
         assert config.docsUrl == "https://posthog.com/docs/cdp/sources/quickbooks"
 
-    def test_config_fields(self) -> None:
+    def test_config_asks_only_for_a_connection_and_an_environment(self) -> None:
         config = self.source.get_source_config
 
-        input_names = [f.name for f in config.fields if isinstance(f, SourceFieldInputConfig)]
-        assert input_names == ["realm_id", "client_id", "client_secret", "refresh_token"]
+        # The user connects through PostHog's Intuit app; nothing is pasted in by hand.
+        oauth = next(f for f in config.fields if isinstance(f, SourceFieldOauthConfig))
+        assert oauth.name == "quickbooks_integration_id"
+        assert oauth.kind == "quickbooks"
+        assert oauth.required is True
+        assert oauth.requiredScopes == "com.intuit.quickbooks.accounting"
 
         environment = next(f for f in config.fields if isinstance(f, SourceFieldSelectConfig))
         assert environment.name == "environment"
         assert [option.value for option in environment.options] == ["production", "sandbox"]
         assert environment.defaultValue == "production"
 
-    @pytest.mark.parametrize(
-        "field_name, expected_type, expected_secret",
-        [
-            ("realm_id", SourceFieldInputConfigType.TEXT, False),
-            ("client_id", SourceFieldInputConfigType.TEXT, False),
-            ("client_secret", SourceFieldInputConfigType.PASSWORD, True),
-            ("refresh_token", SourceFieldInputConfigType.PASSWORD, True),
-        ],
-    )
-    def test_credential_fields_are_typed_and_required(
-        self, field_name: str, expected_type: SourceFieldInputConfigType, expected_secret: bool
-    ) -> None:
-        field = next(
-            f
-            for f in self.source.get_source_config.fields
-            if isinstance(f, SourceFieldInputConfig) and f.name == field_name
-        )
-
-        assert field.type == expected_type
-        assert field.secret is expected_secret
-        assert field.required is True
+        assert [f.name for f in config.fields] == ["quickbooks_integration_id", "environment"]
 
     def test_api_version_metadata(self) -> None:
         assert self.source.supported_versions == ("v3",)
@@ -99,12 +102,14 @@ class TestQuickBooksSource:
     @pytest.mark.parametrize(
         "observed_error",
         [
-            "400 Client Error: Bad Request for url: https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
-            "401 Client Error: Unauthorized for url: https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
             "401 Client Error: Unauthorized for url: https://quickbooks.api.intuit.com/v3/company/1/query",
             "401 Client Error: Unauthorized for url: https://sandbox-quickbooks.api.intuit.com/v3/company/1/query",
             "403 Client Error: Forbidden for url: https://quickbooks.api.intuit.com/v3/company/1/query",
             "403 Client Error: Forbidden for url: https://sandbox-quickbooks.api.intuit.com/v3/company/1/query",
+            # Reconnect signals from the OAuth layer can never be fixed by retrying.
+            "Integration not found: 42",
+            "QuickBooks app not configured",
+            "QuickBooks access token could not be refreshed",
         ],
     )
     def test_non_retryable_errors_match_auth_failures(self, observed_error: str) -> None:
@@ -158,62 +163,128 @@ class TestQuickBooksSource:
         assert all(entry.get("description") for entry in descriptions.values())
 
     @pytest.mark.parametrize(
-        "mock_return, expected_valid, expected_message",
+        "credentials_valid, expected_valid, expected_message",
         [
             (True, True, None),
-            (False, False, "Invalid QuickBooks credentials"),
+            (False, False, "Your QuickBooks connection is invalid or expired. Please reconnect it."),
         ],
     )
     @mock.patch(f"{_SOURCE_MODULE}.validate_quickbooks_credentials")
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
     def test_validate_credentials(
         self,
+        mock_get_integration: mock.MagicMock,
         mock_validate: mock.MagicMock,
-        mock_return: bool,
+        credentials_valid: bool,
         expected_valid: bool,
         expected_message: str | None,
     ) -> None:
-        mock_validate.return_value = mock_return
+        mock_get_integration.return_value = _integration()
+        mock_validate.return_value = credentials_valid
 
         is_valid, error_message = self.source.validate_credentials(self.config, self.team_id)
 
         assert is_valid is expected_valid
         assert error_message == expected_message
-        assert mock_validate.call_args.kwargs["realm_id"] == "123456789"
+        mock_get_integration.assert_called_once_with(_INTEGRATION_ID, self.team_id)
+        assert mock_validate.call_args.kwargs["realm_id"] == _REALM_ID
+        assert mock_validate.call_args.kwargs["access_token"] == "access-token"
         assert mock_validate.call_args.kwargs["api_version"] == "v3"
 
-    @pytest.mark.parametrize("realm_id", ["", "   ", "abc", "123-456", "company/1"])
+    @pytest.mark.parametrize(
+        "integration_error, expected_message",
+        [
+            (
+                ValueError("Integration not found: 42"),
+                "The linked QuickBooks connection no longer exists. Please reconnect your QuickBooks company.",
+            ),
+            (
+                ValueError("Missing integration ID"),
+                "QuickBooks is not connected. Please connect your QuickBooks company.",
+            ),
+        ],
+    )
     @mock.patch(f"{_SOURCE_MODULE}.validate_quickbooks_credentials")
-    def test_non_numeric_realm_id_is_rejected_before_any_request(
-        self, mock_validate: mock.MagicMock, realm_id: str
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_validate_credentials_maps_connection_errors(
+        self,
+        mock_get_integration: mock.MagicMock,
+        mock_validate: mock.MagicMock,
+        integration_error: ValueError,
+        expected_message: str,
     ) -> None:
-        # The realm ID lands straight in the request path, so it never leaves the numeric shape.
-        config = QuickBooksSourceConfig(
-            realm_id=realm_id,
-            client_id="client-id",
-            client_secret="client-secret",
-            refresh_token="refresh-token",
-            environment="production",
-        )
+        mock_get_integration.side_effect = integration_error
 
-        is_valid, error_message = self.source.validate_credentials(config, self.team_id)
+        is_valid, error_message = self.source.validate_credentials(self.config, self.team_id)
 
         assert is_valid is False
-        assert error_message == "QuickBooks company ID (realm ID) must be numeric"
+        # The raw message can carry the integration ID, so the wizard gets the curated wording.
+        assert error_message == expected_message
+        assert "42" not in (error_message or "")
         mock_validate.assert_not_called()
 
     @mock.patch(f"{_SOURCE_MODULE}.validate_quickbooks_credentials")
-    def test_padded_realm_id_is_trimmed(self, mock_validate: mock.MagicMock) -> None:
-        mock_validate.return_value = True
-        config = QuickBooksSourceConfig(
-            realm_id="  123456789  ",
-            client_id="client-id",
-            client_secret="client-secret",
-            refresh_token="refresh-token",
-            environment="production",
-        )
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_validate_credentials_without_a_realm_id(
+        self, mock_get_integration: mock.MagicMock, mock_validate: mock.MagicMock
+    ) -> None:
+        mock_get_integration.return_value = _integration(realm_id=None, integration_id=None)
 
-        assert self.source.validate_credentials(config, self.team_id) == (True, None)
-        assert mock_validate.call_args.kwargs["realm_id"] == "123456789"
+        is_valid, error_message = self.source.validate_credentials(self.config, self.team_id)
+
+        assert is_valid is False
+        assert error_message == (
+            "This QuickBooks connection is missing its company ID. Please reconnect your QuickBooks company."
+        )
+        mock_validate.assert_not_called()
+
+    @mock.patch(f"{_SOURCE_MODULE}.validate_quickbooks_credentials")
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_realm_id_falls_back_to_the_integration_id(
+        self, mock_get_integration: mock.MagicMock, mock_validate: mock.MagicMock
+    ) -> None:
+        mock_get_integration.return_value = _integration(realm_id=None)
+        mock_validate.return_value = True
+
+        assert self.source.validate_credentials(self.config, self.team_id) == (True, None)
+        assert mock_validate.call_args.kwargs["realm_id"] == _REALM_ID
+
+    @mock.patch(f"{_SOURCE_MODULE}.validate_quickbooks_credentials")
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_an_expired_token_is_refreshed_before_use(
+        self, mock_get_integration: mock.MagicMock, mock_validate: mock.MagicMock
+    ) -> None:
+        integration = _integration(expired=True)
+        mock_get_integration.return_value = integration
+        mock_validate.return_value = True
+
+        def _refresh(self_: object) -> None:
+            integration.sensitive_config["access_token"] = "refreshed-token"
+
+        with mock.patch(f"{_SOURCE_MODULE}.OauthIntegration.refresh_access_token", _refresh):
+            assert self.source.validate_credentials(self.config, self.team_id) == (True, None)
+
+        assert mock_validate.call_args.kwargs["access_token"] == "refreshed-token"
+
+    @mock.patch(f"{_SOURCE_MODULE}.validate_quickbooks_credentials")
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_a_failed_refresh_asks_the_user_to_reconnect(
+        self, mock_get_integration: mock.MagicMock, mock_validate: mock.MagicMock
+    ) -> None:
+        integration = _integration(expired=True)
+        mock_get_integration.return_value = integration
+
+        def _refresh(self_: object) -> None:
+            integration.errors = ERROR_TOKEN_REFRESH_FAILED
+
+        with mock.patch(f"{_SOURCE_MODULE}.OauthIntegration.refresh_access_token", _refresh):
+            is_valid, error_message = self.source.validate_credentials(self.config, self.team_id)
+
+        assert is_valid is False
+        assert error_message == (
+            "QuickBooks could not refresh the connection. Please reconnect your QuickBooks company."
+        )
+        mock_validate.assert_not_called()
 
     def test_get_resumable_source_manager_binds_resume_config(self) -> None:
         manager = self.source.get_resumable_source_manager(mock.MagicMock())
@@ -222,9 +293,14 @@ class TestQuickBooksSource:
         assert manager._data_class is QuickBooksResumeConfig
 
     @mock.patch(f"{_SOURCE_MODULE}.quickbooks_source")
-    def test_source_for_pipeline_plumbs_arguments(self, mock_quickbooks_source: mock.MagicMock) -> None:
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_source_for_pipeline_plumbs_arguments(
+        self, mock_get_integration: mock.MagicMock, mock_quickbooks_source: mock.MagicMock
+    ) -> None:
+        mock_get_integration.return_value = _integration()
         inputs = mock.MagicMock()
         inputs.schema_name = "Invoice"
+        inputs.team_id = self.team_id
         inputs.should_use_incremental_field = True
         inputs.db_incremental_field_last_value = "2024-01-02T03:04:05Z"
         inputs.api_version = None
@@ -234,10 +310,8 @@ class TestQuickBooksSource:
 
         kwargs = mock_quickbooks_source.call_args.kwargs
         assert kwargs["environment"] == "production"
-        assert kwargs["realm_id"] == "123456789"
-        assert kwargs["client_id"] == "client-id"
-        assert kwargs["client_secret"] == "client-secret"
-        assert kwargs["refresh_token"] == "refresh-token"
+        assert kwargs["realm_id"] == _REALM_ID
+        assert kwargs["access_token"] == "access-token"
         assert kwargs["entity_name"] == "Invoice"
         # An unpinned source falls back to the source class's default version.
         assert kwargs["api_version"] == "v3"
@@ -246,9 +320,36 @@ class TestQuickBooksSource:
         assert kwargs["db_incremental_field_last_value"] == "2024-01-02T03:04:05Z"
 
     @mock.patch(f"{_SOURCE_MODULE}.quickbooks_source")
-    def test_source_for_pipeline_omits_last_value_on_full_refresh(self, mock_quickbooks_source: mock.MagicMock) -> None:
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_source_for_pipeline_can_renew_the_token_mid_sync(
+        self, mock_get_integration: mock.MagicMock, mock_quickbooks_source: mock.MagicMock
+    ) -> None:
+        integration = _integration()
+        mock_get_integration.return_value = integration
+        inputs = mock.MagicMock()
+        inputs.schema_name = "Invoice"
+        inputs.team_id = self.team_id
+        inputs.should_use_incremental_field = False
+        inputs.api_version = None
+
+        self.source.source_for_pipeline(self.config, mock.MagicMock(), inputs)
+
+        def _refresh(self_: object) -> None:
+            integration.sensitive_config["access_token"] = "renewed-token"
+
+        # Intuit access tokens last an hour, so a long sync has to be able to mint a new one.
+        with mock.patch(f"{_SOURCE_MODULE}.OauthIntegration.refresh_access_token", _refresh):
+            assert mock_quickbooks_source.call_args.kwargs["refresh_access_token"]() == "renewed-token"
+
+    @mock.patch(f"{_SOURCE_MODULE}.quickbooks_source")
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_source_for_pipeline_omits_last_value_on_full_refresh(
+        self, mock_get_integration: mock.MagicMock, mock_quickbooks_source: mock.MagicMock
+    ) -> None:
+        mock_get_integration.return_value = _integration()
         inputs = mock.MagicMock()
         inputs.schema_name = "CompanyInfo"
+        inputs.team_id = self.team_id
         inputs.should_use_incremental_field = False
         inputs.db_incremental_field_last_value = "2024-01-02T03:04:05Z"
         inputs.api_version = None
@@ -258,9 +359,14 @@ class TestQuickBooksSource:
         assert mock_quickbooks_source.call_args.kwargs["db_incremental_field_last_value"] is None
 
     @mock.patch(f"{_SOURCE_MODULE}.quickbooks_source")
-    def test_source_for_pipeline_honors_a_pinned_api_version(self, mock_quickbooks_source: mock.MagicMock) -> None:
+    @mock.patch.object(QuickBooksSource, "get_oauth_integration")
+    def test_source_for_pipeline_honors_a_pinned_api_version(
+        self, mock_get_integration: mock.MagicMock, mock_quickbooks_source: mock.MagicMock
+    ) -> None:
+        mock_get_integration.return_value = _integration()
         inputs = mock.MagicMock()
         inputs.schema_name = "Invoice"
+        inputs.team_id = self.team_id
         inputs.should_use_incremental_field = False
         inputs.api_version = "v3"
 

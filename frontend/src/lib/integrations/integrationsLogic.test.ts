@@ -65,4 +65,24 @@ describe('integrationsLogic — handleOauthCallback', () => {
             stripe_user_id: 'acct_456',
         })
     })
+
+    it('forwards the QuickBooks realmId with the code exchange', async () => {
+        // Intuit names the authorized company only in this callback param, and no API can look it
+        // up from the token afterwards, so dropping it here would leave the source unable to sync.
+        document.cookie = 'ph_oauth_state=state_token'
+        createSpy.mockResolvedValue({ id: 7 })
+
+        await expectLogic(logic, () => {
+            logic.actions.handleOauthCallback('quickbooks' as IntegrationKind, {
+                code: 'ac_123',
+                state: 'token=state_token',
+                realmId: '9130347',
+            })
+        }).toFinishAllListeners()
+
+        expect(createSpy).toHaveBeenCalledWith({
+            kind: 'quickbooks',
+            config: { state: 'token=state_token', code: 'ac_123', realmId: '9130347' },
+        })
+    })
 })

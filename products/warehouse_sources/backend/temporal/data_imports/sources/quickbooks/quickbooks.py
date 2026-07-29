@@ -1,5 +1,5 @@
 import dataclasses
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -19,12 +19,11 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.quickbooks
     QuickBooksEntityConfig,
 )
 
-# Intuit hosts sandbox companies on a separate API domain; the OAuth token endpoint is shared.
+# Intuit hosts sandbox companies on a separate API domain; one OAuth app covers both.
 QUICKBOOKS_HOSTS = {
     "production": "https://quickbooks.api.intuit.com",
     "sandbox": "https://sandbox-quickbooks.api.intuit.com",
 }
-INTUIT_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 
 # Minor version of the Accounting API surface the queries below are written against. Omitting it
 # pins the request to the oldest supported shape, which drops fields we want.
@@ -49,10 +48,10 @@ class QuickBooksResumeConfig:
     since: Optional[str] = None
 
 
-def _get_session(client_secret: str, refresh_token: str) -> requests.Session:
+def _get_session(access_token: str) -> requests.Session:
     return make_tracked_session(
         headers={"Accept": "application/json"},
-        redact_values=(client_secret, refresh_token),
+        redact_values=(access_token,),
     )
 
 
@@ -65,22 +64,6 @@ def _host(environment: str) -> str:
 
 def company_url(environment: str, realm_id: str, api_version: str) -> str:
     return f"{_host(environment)}/{api_version}/company/{realm_id}"
-
-
-def _mint_token(session: requests.Session, client_id: str, client_secret: str, refresh_token: str) -> str:
-    """Exchange the customer's refresh token for a ~1h access token.
-
-    Intuit rotates the refresh token on every exchange and keeps the previous one valid for 24h,
-    so a sync always presents the stored token rather than the rotated one it just received.
-    """
-    response = session.post(
-        INTUIT_TOKEN_URL,
-        auth=(client_id, client_secret),
-        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    return response.json()["access_token"]
 
 
 def escape_query_literal(value: str) -> str:
@@ -163,19 +146,16 @@ def normalize_row(row: dict[str, Any]) -> dict[str, Any]:
 def validate_credentials(
     environment: str,
     realm_id: str,
-    client_id: str,
-    client_secret: str,
-    refresh_token: str,
+    access_token: str,
     api_version: str,
 ) -> bool:
-    """Confirm the OAuth credentials mint a token that can read the given company."""
+    """Confirm the connected account's token can read the given company."""
     try:
-        session = _get_session(client_secret, refresh_token)
-        token = _mint_token(session, client_id, client_secret, refresh_token)
+        session = _get_session(access_token)
         response = session.get(
             f"{company_url(environment, realm_id, api_version)}/query",
             params={"query": "SELECT * FROM CompanyInfo", "minorversion": QUICKBOOKS_MINOR_VERSION},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {access_token}"},
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         return response.status_code == 200
@@ -186,20 +166,19 @@ def validate_credentials(
 def get_rows(
     environment: str,
     realm_id: str,
-    client_id: str,
-    client_secret: str,
-    refresh_token: str,
+    access_token: str,
     entity_name: str,
     api_version: str,
     logger: FilteringBoundLogger,
     resumable_source_manager: ResumableSourceManager[QuickBooksResumeConfig],
+    refresh_access_token: Optional[Callable[[], str]] = None,
     should_use_incremental_field: bool = False,
     db_incremental_field_last_value: Optional[Any] = None,
 ) -> Iterator[list[dict[str, Any]]]:
     entity = QUICKBOOKS_ENTITIES[entity_name]
-    session = _get_session(client_secret, refresh_token)
+    token = access_token
+    session = _get_session(token)
     base_url = company_url(environment, realm_id, api_version)
-    token = _mint_token(session, client_id, client_secret, refresh_token)
 
     since = format_query_timestamp(db_incremental_field_last_value) if should_use_incremental_field else None
     start_position = 1
@@ -212,7 +191,7 @@ def get_rows(
         logger.debug(f"QuickBooks: resuming {entity_name} from STARTPOSITION {start_position}")
 
     def run_query(query: str) -> list[dict[str, Any]]:
-        nonlocal token
+        nonlocal token, session
         url = f"{base_url}/query?{urlencode({'query': query, 'minorversion': QUICKBOOKS_MINOR_VERSION})}"
 
         def _do() -> requests.Response:
@@ -223,9 +202,11 @@ def get_rows(
             )
 
         response = _do()
-        # Access tokens last ~1h; re-mint once if the sync outlives one.
-        if response.status_code == 401:
-            token = _mint_token(session, client_id, client_secret, refresh_token)
+        # Intuit access tokens last an hour, which a large company's sync can outlive. Renew once
+        # through the integration and rebuild the session so the new token is redacted too.
+        if response.status_code == 401 and refresh_access_token is not None:
+            token = refresh_access_token()
+            session = _get_session(token)
             response = _do()
 
         if not response.ok:
@@ -255,13 +236,12 @@ def get_rows(
 def quickbooks_source(
     environment: str,
     realm_id: str,
-    client_id: str,
-    client_secret: str,
-    refresh_token: str,
+    access_token: str,
     entity_name: str,
     api_version: str,
     logger: FilteringBoundLogger,
     resumable_source_manager: ResumableSourceManager[QuickBooksResumeConfig],
+    refresh_access_token: Optional[Callable[[], str]] = None,
     should_use_incremental_field: bool = False,
     db_incremental_field_last_value: Optional[Any] = None,
 ) -> SourceResponse:
@@ -272,13 +252,12 @@ def quickbooks_source(
         items=lambda: get_rows(
             environment=environment,
             realm_id=realm_id,
-            client_id=client_id,
-            client_secret=client_secret,
-            refresh_token=refresh_token,
+            access_token=access_token,
             entity_name=entity_name,
             api_version=api_version,
             logger=logger,
             resumable_source_manager=resumable_source_manager,
+            refresh_access_token=refresh_access_token,
             should_use_incremental_field=should_use_incremental_field,
             db_incremental_field_last_value=db_incremental_field_last_value,
         ),

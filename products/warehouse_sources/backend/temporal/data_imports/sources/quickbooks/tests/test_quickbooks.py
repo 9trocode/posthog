@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, date, datetime
 from typing import Any, Optional, cast
 from urllib.parse import parse_qs, urlparse
@@ -30,9 +30,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.quickbooks
 _MODULE = "products.warehouse_sources.backend.temporal.data_imports.sources.quickbooks.quickbooks"
 
 _REALM_ID = "123456789"
-_CLIENT_ID = "client-id"
-_CLIENT_SECRET = "client-secret"
-_REFRESH_TOKEN = "refresh-token"
+_ACCESS_TOKEN = "access-token"
 _API_VERSION = "v3"
 
 
@@ -47,9 +45,7 @@ def _run_validate(environment: str = "production") -> bool:
     return validate_credentials(
         environment=environment,
         realm_id=_REALM_ID,
-        client_id=_CLIENT_ID,
-        client_secret=_CLIENT_SECRET,
-        refresh_token=_REFRESH_TOKEN,
+        access_token=_ACCESS_TOKEN,
         api_version=_API_VERSION,
     )
 
@@ -59,19 +55,19 @@ def _run_get_rows(
     resumable_source_manager: mock.MagicMock,
     logger: Optional[mock.MagicMock] = None,
     environment: str = "production",
+    refresh_access_token: Optional[Callable[[], str]] = None,
     should_use_incremental_field: bool = False,
     db_incremental_field_last_value: Optional[Any] = None,
 ) -> Iterator[list[dict[str, Any]]]:
     return get_rows(
         environment=environment,
         realm_id=_REALM_ID,
-        client_id=_CLIENT_ID,
-        client_secret=_CLIENT_SECRET,
-        refresh_token=_REFRESH_TOKEN,
+        access_token=_ACCESS_TOKEN,
         entity_name=entity_name,
         api_version=_API_VERSION,
         logger=logger or mock.MagicMock(),
         resumable_source_manager=cast(ResumableSourceManager[QuickBooksResumeConfig], resumable_source_manager),
+        refresh_access_token=refresh_access_token,
         should_use_incremental_field=should_use_incremental_field,
         db_incremental_field_last_value=db_incremental_field_last_value,
     )
@@ -81,9 +77,7 @@ def _build_source(entity_name: str, resumable_source_manager: mock.MagicMock) ->
     return quickbooks_source(
         environment="production",
         realm_id=_REALM_ID,
-        client_id=_CLIENT_ID,
-        client_secret=_CLIENT_SECRET,
-        refresh_token=_REFRESH_TOKEN,
+        access_token=_ACCESS_TOKEN,
         entity_name=entity_name,
         api_version=_API_VERSION,
         logger=mock.MagicMock(),
@@ -103,14 +97,6 @@ def _query_response(entity: str, rows: list[dict[str, Any]]) -> mock.MagicMock:
     response.status_code = 200
     response.ok = True
     response.json.return_value = {"QueryResponse": {entity: rows} if rows else {}, "time": "2024-01-01T00:00:00Z"}
-    return response
-
-
-def _token_response(access_token: str = "access-token") -> mock.MagicMock:
-    response = mock.MagicMock()
-    response.status_code = 200
-    response.ok = True
-    response.json.return_value = {"access_token": access_token, "refresh_token": "rotated"}
     return response
 
 
@@ -262,51 +248,43 @@ class TestValidateCredentials:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_valid_when_company_query_succeeds(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("CompanyInfo", [{"Id": "1"}])
 
         assert _run_validate() is True
-        # Intuit's token endpoint takes the app credentials as HTTP Basic auth.
-        assert session.post.call_args.kwargs["auth"] == (_CLIENT_ID, _CLIENT_SECRET)
-        assert session.post.call_args.kwargs["data"]["grant_type"] == "refresh_token"
+        assert session.get.call_args.kwargs["headers"]["Authorization"] == f"Bearer {_ACCESS_TOKEN}"
 
     @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 500])
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_invalid_on_error_status(self, mock_session: mock.MagicMock, status_code: int) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _error_response(status_code)
 
         assert _run_validate() is False
 
     @mock.patch(f"{_MODULE}.make_tracked_session")
-    def test_invalid_when_token_mint_fails(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.side_effect = Exception("invalid_grant")
+    def test_invalid_when_the_request_fails(self, mock_session: mock.MagicMock) -> None:
+        mock_session.return_value.get.side_effect = Exception("connection reset")
 
         assert _run_validate() is False
 
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_invalid_environment_is_rejected_without_a_request(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.return_value = _token_response()
-
         assert _run_validate(environment="staging") is False
         mock_session.return_value.get.assert_not_called()
 
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_secrets_are_redacted_from_the_tracked_session(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.return_value = _token_response()
         mock_session.return_value.get.return_value = _query_response("CompanyInfo", [])
 
         _run_validate()
 
-        assert set(mock_session.call_args.kwargs["redact_values"]) == {_CLIENT_SECRET, _REFRESH_TOKEN}
+        assert set(mock_session.call_args.kwargs["redact_values"]) == {_ACCESS_TOKEN}
 
 
 class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_single_short_page_ends_the_walk(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Customer", [_row("1"), _row("2")])
 
         manager = _manager()
@@ -319,7 +297,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_offset_advances_until_a_short_page(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.side_effect = [
             _query_response("Customer", [_row(str(index)) for index in range(PAGE_SIZE)]),
             _query_response("Customer", [_row("last")]),
@@ -339,7 +316,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_empty_first_page_yields_nothing(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [])
 
         manager = _manager()
@@ -352,7 +328,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_incremental_pushes_the_watermark_into_the_query(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [_row("1")])
 
         _collect(
@@ -369,7 +344,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_full_refresh_ignores_a_stored_watermark(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [_row("1")])
 
         _collect(
@@ -386,7 +360,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_resume_restores_offset_and_its_original_filter(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [_row("1")])
 
         # A saved offset only identifies a row inside the result set of the query that produced
@@ -408,7 +381,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_singleton_never_paginates(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("CompanyInfo", [_row("1")])
 
         manager = _manager()
@@ -419,34 +391,45 @@ class TestGetRows:
         manager.save_state.assert_not_called()
 
     @mock.patch(f"{_MODULE}.make_tracked_session")
-    def test_expired_access_token_is_reminted_once(self, mock_session: mock.MagicMock) -> None:
+    def test_rejected_token_is_renewed_once(self, mock_session: mock.MagicMock) -> None:
+        # Intuit access tokens last an hour, which a large company's sync can outlive.
         session = mock_session.return_value
-        session.post.side_effect = [_token_response("first"), _token_response("second")]
         session.get.side_effect = [_error_response(401), _query_response("Invoice", [_row("1")])]
+        renew = mock.MagicMock(return_value="renewed")
 
-        rows = _collect(_run_get_rows("Invoice", _manager()))
+        rows = _collect(_run_get_rows("Invoice", _manager(), refresh_access_token=renew))
 
         assert [row["Id"] for row in rows] == ["1"]
-        assert session.post.call_count == 2
+        renew.assert_called_once_with()
         tokens = [call.kwargs["headers"]["Authorization"] for call in session.get.call_args_list]
-        assert tokens == ["Bearer first", "Bearer second"]
+        assert tokens == [f"Bearer {_ACCESS_TOKEN}", "Bearer renewed"]
+        # The renewed token is redacted from the tracked transport too.
+        assert set(mock_session.call_args.kwargs["redact_values"]) == {"renewed"}
 
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_persistent_401_is_raised(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _error_response(
             401, "401 Client Error: Unauthorized for url: https://quickbooks.api.intuit.com"
         )
 
         with pytest.raises(Exception, match="401 Client Error"):
+            _collect(_run_get_rows("Invoice", _manager(), refresh_access_token=lambda: "renewed"))
+
+    @mock.patch(f"{_MODULE}.make_tracked_session")
+    def test_401_without_a_renewer_is_raised(self, mock_session: mock.MagicMock) -> None:
+        session = mock_session.return_value
+        session.get.return_value = _error_response(401, "401 Client Error: Unauthorized")
+
+        with pytest.raises(Exception, match="401 Client Error"):
             _collect(_run_get_rows("Invoice", _manager()))
+
+        assert session.get.call_count == 1
 
     @pytest.mark.parametrize("status_code", [400, 403])
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_error_statuses_are_logged_and_raised(self, mock_session: mock.MagicMock, status_code: int) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _error_response(status_code, f"{status_code} error")
 
         logger = mock.MagicMock()
@@ -458,7 +441,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_minor_version_is_pinned_on_every_request(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [_row("1")])
 
         _collect(_run_get_rows("Invoice", _manager()))
@@ -469,7 +451,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_rows_are_normalized_before_yielding(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [_row("1")])
 
         rows = _collect(_run_get_rows("Invoice", _manager()))
@@ -480,7 +461,6 @@ class TestGetRows:
     @mock.patch(f"{_MODULE}.make_tracked_session")
     def test_sandbox_environment_targets_the_sandbox_host(self, mock_session: mock.MagicMock) -> None:
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [])
 
         list(_run_get_rows("Invoice", _manager(), environment="sandbox"))
@@ -516,11 +496,10 @@ class TestQuickBooksSourceResponse:
     def test_items_is_lazy(self, mock_session: mock.MagicMock) -> None:
         response = _build_source("Invoice", _manager())
 
-        # No token is minted until the pipeline pulls the first batch.
-        mock_session.return_value.post.assert_not_called()
+        # Nothing is requested until the pipeline pulls the first batch.
+        mock_session.return_value.get.assert_not_called()
 
         session = mock_session.return_value
-        session.post.return_value = _token_response()
         session.get.return_value = _query_response("Invoice", [_row("1")])
         rows = _collect(cast("Iterable[Any]", response.items()))
 

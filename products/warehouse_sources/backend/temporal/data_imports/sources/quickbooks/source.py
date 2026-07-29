@@ -1,4 +1,3 @@
-import re
 from typing import Optional, cast
 
 from posthog.schema import (
@@ -6,11 +5,12 @@ from posthog.schema import (
     ExternalDataSourceType as SchemaExternalDataSourceType,
     ReleaseStatus,
     SourceConfig,
-    SourceFieldInputConfig,
-    SourceFieldInputConfigType,
+    SourceFieldOauthConfig,
     SourceFieldSelectConfig,
     SourceFieldSelectConfigOption,
 )
+
+from posthog.models.integration import ERROR_TOKEN_REFRESH_FAILED, Integration, OauthIntegration
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import (
     SourceInputs,
@@ -20,6 +20,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.bas
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.canonical_descriptions import (
     CanonicalDescriptions,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.mixins import OAuthMixin
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.registry import SourceRegistry
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.schema import (
@@ -40,12 +41,16 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.quickbooks
 )
 from products.warehouse_sources.backend.types import ExternalDataSourceType
 
-# Realm IDs (company IDs) are numeric strings and land straight in the request path.
-_REALM_ID_PATTERN = re.compile(r"^\d+$")
+# Written onto the integration during the OAuth callback from Intuit's `realmId` param.
+REALM_ID_CONFIG_KEY = "quickbooks_realm_id"
+
+_MISSING_REALM_ID_ERROR = "QuickBooks company ID is missing from this connection"
+_TOKEN_REFRESH_FAILED_ERROR = "QuickBooks access token could not be refreshed"
+_MISSING_ACCESS_TOKEN_ERROR = "QuickBooks access token not found"
 
 
 @SourceRegistry.register
-class QuickBooksSource(ResumableSource[QuickBooksSourceConfig, QuickBooksResumeConfig]):
+class QuickBooksSource(ResumableSource[QuickBooksSourceConfig, QuickBooksResumeConfig], OAuthMixin):
     # The Accounting API version lives in the request path (`/v3/company/{realmId}`).
     supported_versions = ("v3",)
     default_version = "v3"
@@ -59,12 +64,19 @@ class QuickBooksSource(ResumableSource[QuickBooksSourceConfig, QuickBooksResumeC
 
     def get_non_retryable_errors(self) -> dict[str, str | None]:
         return {
-            "400 Client Error: Bad Request for url: https://oauth.platform.intuit.com": "QuickBooks authentication failed. Your refresh token is expired or revoked, so generate a new one and reconnect.",
-            "401 Client Error: Unauthorized for url: https://oauth.platform.intuit.com": "QuickBooks authentication failed. Please check your app's client ID and secret.",
-            "401 Client Error: Unauthorized for url: https://quickbooks.api.intuit.com": "QuickBooks rejected the access token. Please reconnect with a fresh refresh token.",
-            "401 Client Error: Unauthorized for url: https://sandbox-quickbooks.api.intuit.com": "QuickBooks rejected the access token. Please reconnect with a fresh refresh token.",
-            "403 Client Error: Forbidden for url: https://quickbooks.api.intuit.com": "QuickBooks denied access to this company. Please check that your app is authorized with the accounting scope and that the company ID is right.",
-            "403 Client Error: Forbidden for url: https://sandbox-quickbooks.api.intuit.com": "QuickBooks denied access to this company. Please check that your app is authorized with the accounting scope and that the company ID is right.",
+            "401 Client Error: Unauthorized for url: https://quickbooks.api.intuit.com": "QuickBooks rejected the access token. Please reconnect your QuickBooks company.",
+            "401 Client Error: Unauthorized for url: https://sandbox-quickbooks.api.intuit.com": "QuickBooks rejected the access token. Please reconnect your QuickBooks company.",
+            "403 Client Error: Forbidden for url: https://quickbooks.api.intuit.com": "QuickBooks denied access to this company. Reconnect and grant access to the accounting data.",
+            "403 Client Error: Forbidden for url: https://sandbox-quickbooks.api.intuit.com": "QuickBooks denied access to this company. Reconnect and grant access to the accounting data.",
+            # Deterministic credential and config errors from the OAuth mixin and the helpers below.
+            # The integration row is gone, unconfigured, or unrefreshable, so retrying can't help.
+            # Matched as a substring, since the trailing integration ID varies.
+            "Missing integration ID": "QuickBooks is not connected. Please connect your QuickBooks company.",
+            "Integration not found": "The linked QuickBooks connection no longer exists. Please reconnect your QuickBooks company.",
+            "QuickBooks app not configured": "The QuickBooks app is not configured on this PostHog instance. Please contact support.",
+            _MISSING_REALM_ID_ERROR: "This QuickBooks connection is missing its company ID. Please reconnect your QuickBooks company.",
+            _TOKEN_REFRESH_FAILED_ERROR: "QuickBooks could not refresh the connection. Please reconnect your QuickBooks company.",
+            _MISSING_ACCESS_TOKEN_ERROR: "The QuickBooks connection has no access token. Please reconnect your QuickBooks company.",
         }
 
     @property
@@ -76,15 +88,24 @@ class QuickBooksSource(ResumableSource[QuickBooksSourceConfig, QuickBooksResumeC
             label="QuickBooks",
             caption="""Connect your QuickBooks Online company to pull invoices, payments, customers, and the rest of your accounting data into the PostHog Data warehouse.
 
-Create an app in the Intuit developer portal with the `com.intuit.quickbooks.accounting` scope, authorize it against your company, then enter its client ID and secret along with the resulting refresh token. Your company ID (also called the realm ID) is shown in QuickBooks under Settings > Additional info.
+Click connect, sign in with Intuit, and choose the company you want to sync. PostHog asks for access to your accounting data (`com.intuit.quickbooks.accounting`) and picks up the company from the connection, so there is nothing to copy across. Connect once per company.
 
-Intuit refresh tokens expire after 100 days, so reconnect the source before then to keep syncing.""",
+Pick Sandbox only if you are connecting an Intuit sandbox company.""",
             iconPath="/static/services/quickbooks.png",
             docsUrl="https://posthog.com/docs/cdp/sources/quickbooks",
             releaseStatus=ReleaseStatus.ALPHA,
             fields=cast(
                 list[FieldType],
                 [
+                    SourceFieldOauthConfig(
+                        name="quickbooks_integration_id",
+                        label="QuickBooks company",
+                        required=True,
+                        kind="quickbooks",
+                        requiredScopes="com.intuit.quickbooks.accounting",
+                    ),
+                    # Intuit runs one app across production and sandbox, so the environment only
+                    # selects the API host and stays a source setting rather than a second OAuth kind.
                     SourceFieldSelectConfig(
                         name="environment",
                         label="Environment",
@@ -94,38 +115,6 @@ Intuit refresh tokens expire after 100 days, so reconnect the source before then
                             SourceFieldSelectConfigOption(label="Production", value="production"),
                             SourceFieldSelectConfigOption(label="Sandbox", value="sandbox"),
                         ],
-                    ),
-                    SourceFieldInputConfig(
-                        name="realm_id",
-                        label="Company ID (realm ID)",
-                        type=SourceFieldInputConfigType.TEXT,
-                        required=True,
-                        placeholder="123456789012345678",
-                        secret=False,
-                    ),
-                    SourceFieldInputConfig(
-                        name="client_id",
-                        label="Client ID",
-                        type=SourceFieldInputConfigType.TEXT,
-                        required=True,
-                        placeholder="",
-                        secret=False,
-                    ),
-                    SourceFieldInputConfig(
-                        name="client_secret",
-                        label="Client secret",
-                        type=SourceFieldInputConfigType.PASSWORD,
-                        required=True,
-                        placeholder="",
-                        secret=True,
-                    ),
-                    SourceFieldInputConfig(
-                        name="refresh_token",
-                        label="Refresh token",
-                        type=SourceFieldInputConfigType.PASSWORD,
-                        required=True,
-                        placeholder="",
-                        secret=True,
                     ),
                 ],
             ),
@@ -149,6 +138,33 @@ Intuit refresh tokens expire after 100 days, so reconnect the source before then
     ) -> list[SourceSchema]:
         return build_endpoint_schemas(ENDPOINTS, INCREMENTAL_FIELDS, names)
 
+    def _get_integration(self, config: QuickBooksSourceConfig, team_id: int) -> Integration:
+        return self.get_oauth_integration(config.quickbooks_integration_id, team_id)
+
+    def _get_realm_id(self, integration: Integration) -> str:
+        # Written during the OAuth callback; `integration_id` holds the same value and covers rows
+        # whose config was trimmed.
+        realm_id = integration.config.get(REALM_ID_CONFIG_KEY) or integration.integration_id
+        if not realm_id:
+            raise ValueError(_MISSING_REALM_ID_ERROR)
+        return str(realm_id)
+
+    def _get_access_token(self, integration: Integration, force_refresh: bool = False) -> str:
+        """Return a usable access token, renewing the hour-long Intuit token when it's due."""
+        oauth_integration = OauthIntegration(integration)
+        if force_refresh or oauth_integration.access_token_expired():
+            oauth_integration.refresh_access_token()
+            if integration.errors == ERROR_TOKEN_REFRESH_FAILED:
+                raise ValueError(_TOKEN_REFRESH_FAILED_ERROR)
+
+        if not integration.access_token:
+            raise ValueError(_MISSING_ACCESS_TOKEN_ERROR)
+        return integration.access_token
+
+    def _renew_access_token(self, config: QuickBooksSourceConfig, team_id: int) -> str:
+        """Mint a fresh token after Intuit rejects one mid-sync, re-reading the integration first."""
+        return self._get_access_token(self._get_integration(config, team_id), force_refresh=True)
+
     def validate_credentials(
         self,
         config: QuickBooksSourceConfig,
@@ -156,20 +172,29 @@ Intuit refresh tokens expire after 100 days, so reconnect the source before then
         schema_name: Optional[str] = None,
         api_version: str | None = None,
     ) -> tuple[bool, str | None]:
-        if not _REALM_ID_PATTERN.match(config.realm_id.strip()):
-            return False, "QuickBooks company ID (realm ID) must be numeric"
+        try:
+            integration = self._get_integration(config, team_id)
+            realm_id = self._get_realm_id(integration)
+            access_token = self._get_access_token(integration)
+        except ValueError as e:
+            # The mixin and the helpers raise developer-facing messages that can carry an
+            # integration ID. Reuse the curated wording from get_non_retryable_errors so the wizard
+            # shows the same text, falling back to the raw message when unmapped.
+            raw = str(e)
+            for pattern, friendly in self.get_non_retryable_errors().items():
+                if friendly and pattern in raw:
+                    return False, friendly
+            return False, raw
 
         if validate_quickbooks_credentials(
             environment=config.environment,
-            realm_id=config.realm_id.strip(),
-            client_id=config.client_id,
-            client_secret=config.client_secret,
-            refresh_token=config.refresh_token,
+            realm_id=realm_id,
+            access_token=access_token,
             api_version=self.resolve_api_version(api_version),
         ):
             return True, None
 
-        return False, "Invalid QuickBooks credentials"
+        return False, "Your QuickBooks connection is invalid or expired. Please reconnect it."
 
     def get_resumable_source_manager(self, inputs: SourceInputs) -> ResumableSourceManager[QuickBooksResumeConfig]:
         return ResumableSourceManager[QuickBooksResumeConfig](inputs, QuickBooksResumeConfig)
@@ -180,12 +205,14 @@ Intuit refresh tokens expire after 100 days, so reconnect the source before then
         resumable_source_manager: ResumableSourceManager[QuickBooksResumeConfig],
         inputs: SourceInputs,
     ) -> SourceResponse:
+        integration = self._get_integration(config, inputs.team_id)
+
         return quickbooks_source(
             environment=config.environment,
-            realm_id=config.realm_id.strip(),
-            client_id=config.client_id,
-            client_secret=config.client_secret,
-            refresh_token=config.refresh_token,
+            realm_id=self._get_realm_id(integration),
+            access_token=self._get_access_token(integration),
+            # A sync can outlive the hour-long token, so hand the transport a way to renew it.
+            refresh_access_token=lambda: self._renew_access_token(config, inputs.team_id),
             entity_name=inputs.schema_name,
             api_version=self.resolve_api_version(inputs.api_version),
             logger=inputs.logger,

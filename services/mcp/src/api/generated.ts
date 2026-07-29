@@ -35828,6 +35828,7 @@ export namespace Schemas {
      * * `meta-ads` - Meta Ads
      * * `pinterest-ads` - Pinterest Ads
      * * `postgresql` - Postgresql
+     * * `quickbooks` - Quickbooks
      * * `reddit-ads` - Reddit Ads
      * * `resend` - Resend
      * * `s3-compatible` - S3 Compatible
@@ -35874,6 +35875,7 @@ export namespace Schemas {
       MetaAds: 'meta-ads',
       PinterestAds: 'pinterest-ads',
       Postgresql: 'postgresql',
+      Quickbooks: 'quickbooks',
       RedditAds: 'reddit-ads',
       Resend: 'resend',
       S3Compatible: 's3-compatible',
@@ -35920,6 +35922,7 @@ export namespace Schemas {
        * * `meta-ads` - Meta Ads
        * * `pinterest-ads` - Pinterest Ads
        * * `postgresql` - Postgresql
+       * * `quickbooks` - Quickbooks
        * * `reddit-ads` - Reddit Ads
        * * `resend` - Resend
        * * `s3-compatible` - S3 Compatible
@@ -77140,6 +77143,7 @@ export namespace Schemas {
      * * `meta-ads` - Meta Ads
      * * `pinterest-ads` - Pinterest Ads
      * * `postgresql` - Postgresql
+     * * `quickbooks` - Quickbooks
      * * `reddit-ads` - Reddit Ads
      * * `resend` - Resend
      * * `s3-compatible` - S3 Compatible
@@ -77197,6 +77201,7 @@ export namespace Schemas {
       MetaAds: 'meta-ads',
       PinterestAds: 'pinterest-ads',
       Postgresql: 'postgresql',
+      Quickbooks: 'quickbooks',
       RedditAds: 'reddit-ads',
       Resend: 'resend',
       S3Compatible: 's3-compatible',
