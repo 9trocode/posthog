@@ -66,9 +66,9 @@ class TestRecordHelpers(SimpleTestCase):
             ),
             (
                 "quota_exhausted_skip",
-                lambda: record_quota_exhausted_skip("monitor"),
+                lambda: record_quota_exhausted_skip("monitor", "org"),
                 "replay_vision_quota_exhausted_skips_total",
-                {"scanner_type": "monitor"},
+                {"scanner_type": "monitor", "scope": "org"},
                 1.0,
             ),
             (

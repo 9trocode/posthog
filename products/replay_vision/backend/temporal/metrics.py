@@ -53,8 +53,8 @@ REPLAY_VISION_PROVIDER_CALL = Histogram(
 
 REPLAY_VISION_QUOTA_EXHAUSTED_SKIPS = Counter(
     "replay_vision_quota_exhausted_skips_total",
-    "Observations skipped because the org's monthly credit quota was exhausted",
-    ["scanner_type"],
+    "Observations skipped because a credit limit was exhausted, by which limit bound",
+    ["scanner_type", "scope"],
 )
 
 REPLAY_VISION_CREDITS_CONSUMED = Counter(
@@ -125,9 +125,11 @@ def record_provider_call(provider: str, model: str, scanner_type: str, outcome: 
     _otel.record_histogram_twin(REPLAY_VISION_PROVIDER_CALL, seconds, labels)
 
 
-def record_quota_exhausted_skip(scanner_type: str) -> None:
-    REPLAY_VISION_QUOTA_EXHAUSTED_SKIPS.labels(scanner_type=scanner_type).inc()
-    _otel.record_counter_twin(REPLAY_VISION_QUOTA_EXHAUSTED_SKIPS, 1, {"scanner_type": scanner_type})
+def record_quota_exhausted_skip(scanner_type: str, scope: str) -> None:
+    """`scope` is "org" for the organization's monthly limit, "scanner" for a per-scanner limit."""
+    labels = {"scanner_type": scanner_type, "scope": scope}
+    REPLAY_VISION_QUOTA_EXHAUSTED_SKIPS.labels(**labels).inc()
+    _otel.record_counter_twin(REPLAY_VISION_QUOTA_EXHAUSTED_SKIPS, 1, labels)
 
 
 def record_credits_consumed(scanner_type: str, model: str, credits: int) -> None:

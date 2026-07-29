@@ -79,7 +79,7 @@ def _create_observation(inputs: CreateObservationInputs) -> CreateObservationOut
             )
 
     if compute_quota_snapshot(scanner.team.organization_id).would_exceed(observation_credits_for_model(scanner.model)):
-        record_quota_exhausted_skip(scanner.scanner_type)
+        record_quota_exhausted_skip(scanner.scanner_type, "org")
         activity.logger.info(
             "Skipping observation: monthly quota exhausted",
             extra={"scanner_id": str(inputs.scanner_id), "team_id": inputs.team_id, "session_id": inputs.session_id},
