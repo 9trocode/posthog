@@ -86,6 +86,10 @@ from posthog.temporal.weekly_digest.types import WeeklyDigestInput
 
 from products.business_knowledge.backend.temporal.schedule import create_business_knowledge_refresh_coordinator_schedule
 from products.conversations.backend.temporal.schedule import create_support_reply_coordinator_schedule
+from products.data_quality.backend.facade.temporal import (
+    create_cleanup_data_quality_check_runs_schedule,
+    create_schedule_due_data_quality_checks_schedule,
+)
 from products.engineering_analytics.backend.facade.temporal import (
     create_ci_signals_coordinator_schedule,
     create_github_job_logs_coordinator_schedule,
@@ -839,6 +843,8 @@ schedules = [
     create_replay_vision_estimates_schedule,
     create_github_job_logs_coordinator_schedule,
     create_ci_signals_coordinator_schedule,
+    create_schedule_due_data_quality_checks_schedule,
+    create_cleanup_data_quality_check_runs_schedule,
 ]
 
 if settings.CLOUD_DEPLOYMENT:
