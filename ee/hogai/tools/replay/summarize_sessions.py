@@ -328,6 +328,15 @@ class SummarizeSessionsTool(MaxTool):
         return summaries_str
 
     @staticmethod
+    def _stringify_group_summary(summary: EnrichedSessionGroupSummaryPatternsList) -> str:
+        # An empty report would render as a bare "# Patterns" header, leaving the LLM to improvise
+        if not summary.patterns:
+            return "No recurring patterns or issues were found across the analyzed sessions."
+        # Stringify the summary to "weight" less and apply example limits per pattern, so it won't overload the context
+        stringifier = SessionGroupSummaryStringifier(summary.model_dump(exclude_none=False))
+        return stringifier.stringify_patterns()
+
+    @staticmethod
     def _format_failed_sessions_note(failed_sessions: list[FailedSessionInfo], total_requested: int) -> str:
         """Short note prepended to the LLM context when the run was partial, bucketed by category."""
         if not failed_sessions:
@@ -356,9 +365,8 @@ class SummarizeSessionsTool(MaxTool):
         """Summarize sessions as a group. Returns (summary_str, summary_id, failed_sessions)."""
         from ee.hogai.session_summaries.utils import logging_session_ids
 
-        # Session ids were already validated once in `_validate_specific_session_ids`, but a recording can
-        # drop out between the two reads (still ingesting, deleted, or a lagging replica). Drop such
-        # sessions and report them as failed instead of erroring the whole batch.
+        # A recording can drop out between validation reads (still ingesting, deleted, or a lagging
+        # replica), so report it as failed instead of erroring the whole batch
         found_session_ids, dropped_session_ids, min_timestamp, max_timestamp = await database_sync_to_async(
             find_sessions_timestamps_dropping_missing, thread_sensitive=False
         )(session_ids=session_ids, team=self._team)
@@ -370,6 +378,9 @@ class SummarizeSessionsTool(MaxTool):
             )
             for dropped_session_id in dropped_session_ids
         ]
+        # Mark dropped sessions in the progress widget, as the workflow won't report on them
+        for dropped_session_id in dropped_session_ids:
+            self._dispatch_session_progress(dropped_session_id, "skipped", 0, len(session_ids))
         trigger_session_id = self._get_trigger_session_id()
         async with Heartbeater():
             async for update_type, data in execute_summarize_session_group(
@@ -414,9 +425,7 @@ class SummarizeSessionsTool(MaxTool):
                         )
                         logger.error(msg, signals_type="session-summaries")
                         raise ValueError(msg)
-                    # Stringify the summary to "weight" less and apply example limits per pattern, so it won't overload the context
-                    stringifier = SessionGroupSummaryStringifier(summary.model_dump(exclude_none=False))
-                    summary_str = stringifier.stringify_patterns()
+                    summary_str = self._stringify_group_summary(summary)
                     all_failed_sessions = dropped_sessions + failed_sessions
                     note = self._format_failed_sessions_note(all_failed_sessions, total_requested=len(session_ids))
                     return note + summary_str, session_group_summary_id, all_failed_sessions

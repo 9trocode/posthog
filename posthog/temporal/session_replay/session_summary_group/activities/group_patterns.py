@@ -414,8 +414,7 @@ async def assign_events_to_patterns_activity(
         patterns_extraction_raw,
     )
     if not patterns_extraction.patterns:
-        # Nothing noteworthy found in the sessions is a valid outcome. Store an empty report instead of
-        # running assignment LLM calls against zero patterns, which can never produce enriched patterns.
+        # No patterns found is a valid outcome; skip the assignment LLM calls and store an empty report
         patterns_with_events_context = EnrichedSessionGroupSummaryPatternsList(patterns=[])
     else:
         # Assign events <> patterns through LLM calls in chunks to keep the content meaningful

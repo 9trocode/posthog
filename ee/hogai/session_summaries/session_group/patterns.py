@@ -485,8 +485,7 @@ def combine_patterns_with_events_context(
         )
         combined_patterns.append(enriched_pattern)
     failed_patterns_count = len(patterns.patterns) - len(combined_patterns)
-    # Fail only when every pattern lost its events: the report would be empty even though patterns were
-    # found. A partially-enriched run still produces a useful report, so keep whatever survived.
+    # A partially-enriched run still produces a useful report, so fail only when every pattern lost its events
     if patterns.patterns and not combined_patterns:
         exception_message = (
             f"All patterns failed to enrich with session meta, when summarizing {len(session_ids)} "
@@ -494,8 +493,7 @@ def combine_patterns_with_events_context(
             f"Input: {len(patterns.patterns)}"
         )
         logger.exception(exception_message, user_id=user_id, signals_type="session-summaries")
-        # Non-retryable: the event mapping is built from the same stored summaries a retry would re-read,
-        # so the lookup misses repeat identically while re-running the assignment LLM calls
+        # Non-retryable: retries re-read the same stored summaries, so the lookup misses repeat identically
         raise ApplicationError(exception_message, non_retryable=True)
     if failed_patterns_count:
         logger.warning(

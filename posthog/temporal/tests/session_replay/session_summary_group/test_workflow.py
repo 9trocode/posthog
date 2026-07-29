@@ -498,8 +498,7 @@ async def test_assign_events_to_patterns_enrichment_outcomes(
         result = EnrichedSessionGroupSummaryPatternsList.model_validate_json(session_group_summary.summary)
         assert len(result.patterns) == 2  # The 2 enriched patterns survive, the 2 without events are dropped
 
-    # Test 2: Should fail (non-retryable) when no pattern gets any enrichable event,
-    # e.g. when the LLM returns event ids missing from the stored summaries
+    # Test 2: Should fail (non-retryable) when no pattern gets any enrichable event
     with (
         patch("ee.hogai.session_summaries.llm.consume.call_llm") as mock_call_llm,
         patch("temporalio.activity.info") as mock_activity_info,

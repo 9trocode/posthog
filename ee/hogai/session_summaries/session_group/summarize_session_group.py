@@ -129,13 +129,9 @@ def partition_sessions_by_recording_existence(session_ids: list[str], team: Team
 def find_sessions_timestamps_dropping_missing(
     session_ids: list[str], team: Team
 ) -> tuple[list[str], list[str], datetime, datetime]:
-    """Lenient variant of ``find_sessions_timestamps``: returns (found, missing, min_timestamp, max_timestamp),
-    dropping session IDs without a replay row instead of failing the whole batch.
-
-    A recording can legitimately disappear between two validation reads (still ingesting, just deleted,
-    or served by a lagging replica), so one missing ID must not kill a multi-session summary.
-    Raises ValidationError only when no session in the batch has a recording.
-    """
+    """Lenient variant of ``find_sessions_timestamps``: drops session IDs without a replay row instead of
+    failing the whole batch. Returns (found, missing, min_timestamp, max_timestamp); raises ValidationError
+    only when no session in the batch has a recording."""
     replay_events = SessionReplayEvents()
     result = replay_events.sessions_found_with_timestamps(session_ids, team)
     found = [sid for sid in session_ids if sid in result.session_ids]
