@@ -1,0 +1,45 @@
+from datetime import UTC, datetime
+
+import pytest
+from unittest.mock import MagicMock, patch
+
+from rest_framework import exceptions
+
+from posthog.session_recordings.queries.session_replay_events import SessionReplayEvents, SessionsWithTimestamps
+
+from ee.hogai.session_summaries.session_group.summarize_session_group import find_sessions_timestamps_dropping_missing
+
+MIN_TS = datetime(2026, 7, 29, 8, 0, 0, tzinfo=UTC)
+MAX_TS = datetime(2026, 7, 29, 9, 0, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "requested,found_in_db,expected_found,expected_missing",
+    [
+        # One recording dropped out between validation reads: keep the rest instead of failing the batch
+        (["s-1", "s-2", "s-3"], {"s-1", "s-3"}, ["s-1", "s-3"], ["s-2"]),
+        (["s-1", "s-2"], {"s-1", "s-2"}, ["s-1", "s-2"], []),
+    ],
+)
+def test_find_sessions_timestamps_dropping_missing(
+    requested: list[str],
+    found_in_db: set[str],
+    expected_found: list[str],
+    expected_missing: list[str],
+) -> None:
+    query_result = SessionsWithTimestamps(session_ids=found_in_db, min_timestamp=MIN_TS, max_timestamp=MAX_TS)
+    with patch.object(SessionReplayEvents, "sessions_found_with_timestamps", return_value=query_result):
+        found, missing, min_timestamp, max_timestamp = find_sessions_timestamps_dropping_missing(
+            session_ids=requested, team=MagicMock(id=1)
+        )
+    assert found == expected_found
+    assert missing == expected_missing
+    assert min_timestamp == MIN_TS
+    assert max_timestamp == MAX_TS
+
+
+def test_find_sessions_timestamps_dropping_missing_raises_when_no_sessions_found() -> None:
+    query_result = SessionsWithTimestamps(session_ids=set(), min_timestamp=None, max_timestamp=None)
+    with patch.object(SessionReplayEvents, "sessions_found_with_timestamps", return_value=query_result):
+        with pytest.raises(exceptions.ValidationError, match="Session recordings not found"):
+            find_sessions_timestamps_dropping_missing(session_ids=["s-1", "s-2"], team=MagicMock(id=1))

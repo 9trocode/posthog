@@ -116,13 +116,45 @@ def partition_sessions_by_recording_existence(session_ids: list[str], team: Team
     """Split session_ids into (found, missing) based on whether a replay row exists for the team.
 
     Used by flows that want to surface per-session "no recording" errors instead of failing the
-    whole batch — see ``find_sessions_timestamps`` for the strict variant used by the group flow.
+    whole batch. See ``find_sessions_timestamps`` for the strict variant (group API flow) and
+    ``find_sessions_timestamps_dropping_missing`` for the lenient one with timestamps (chat group flow).
     """
     replay_events = SessionReplayEvents()
     sessions_found = replay_events.sessions_found_with_timestamps(session_ids, team).session_ids
     found = [sid for sid in session_ids if sid in sessions_found]
     missing = [sid for sid in session_ids if sid not in sessions_found]
     return found, missing
+
+
+def find_sessions_timestamps_dropping_missing(
+    session_ids: list[str], team: Team
+) -> tuple[list[str], list[str], datetime, datetime]:
+    """Lenient variant of ``find_sessions_timestamps``: returns (found, missing, min_timestamp, max_timestamp),
+    dropping session IDs without a replay row instead of failing the whole batch.
+
+    A recording can legitimately disappear between two validation reads (still ingesting, just deleted,
+    or served by a lagging replica), so one missing ID must not kill a multi-session summary.
+    Raises ValidationError only when no session in the batch has a recording.
+    """
+    replay_events = SessionReplayEvents()
+    result = replay_events.sessions_found_with_timestamps(session_ids, team)
+    found = [sid for sid in session_ids if sid in result.session_ids]
+    missing = [sid for sid in session_ids if sid not in result.session_ids]
+    if not found or result.min_timestamp is None or result.max_timestamp is None:
+        msg = (
+            "Session recordings not found for the following IDs (the recording may not have been captured, "
+            f"may have expired, or may belong to a different team): {', '.join(missing)}"
+        )
+        logger.error(msg, team_id=team.id, signals_type="session-summaries")
+        raise exceptions.ValidationError(msg)
+    if missing:
+        logger.warning(
+            f"Dropping {len(missing)} of {len(session_ids)} sessions without a replay row "
+            f"from group summarization: {', '.join(missing)}",
+            team_id=team.id,
+            signals_type="session-summaries",
+        )
+    return found, missing, result.min_timestamp, result.max_timestamp
 
 
 def find_sessions_timestamps(session_ids: list[str], team: Team) -> tuple[datetime, datetime]:

@@ -394,7 +394,7 @@ async def test_assign_events_to_patterns_activity_standalone(
 
 
 @pytest.mark.asyncio
-async def test_assign_events_to_patterns_threshold_check(
+async def test_assign_events_to_patterns_enrichment_outcomes(
     mock_session_id: str,
     mock_session_summary_serializer: SessionSummarySerializer,
     mock_single_session_summary_inputs: Callable,
@@ -403,7 +403,7 @@ async def test_assign_events_to_patterns_threshold_check(
     auser: User,
     ateam: Team,
 ):
-    """Test that assign_events_to_patterns_activity fails when too few patterns get events assigned"""
+    """Test that assign_events_to_patterns_activity keeps partially-enriched runs and fails only when every pattern loses its events"""
     # Prepare input data
     session_ids = [f"{mock_session_id}-1", f"{mock_session_id}-2"]
     single_session_inputs = [
@@ -466,7 +466,7 @@ async def test_assign_events_to_patterns_threshold_check(
     )
     redis_test_setup.keys_to_cleanup.append(patterns_key)
 
-    # Test 1: Should fail when only 2 out of 4 patterns get events (50% < 75% threshold)
+    # Test 1: Should keep the enriched subset when only 2 out of 4 patterns get events
     with (
         patch("ee.hogai.session_summaries.llm.consume.call_llm") as mock_call_llm,
         patch("temporalio.activity.info") as mock_activity_info,
@@ -484,20 +484,22 @@ async def test_assign_events_to_patterns_threshold_check(
         mock_client.get_workflow_handle = MagicMock(return_value=mock_workflow_handle)
         mock_async_connect.return_value = mock_client
         # Mock LLM response that only assigns events to 2 patterns
-        patterns_assignment_fail = """patterns:
+        patterns_assignment_partial = """patterns:
   - pattern_id: 1
     event_ids: ["abcd1234"]
   - pattern_id: 2
     event_ids: ["ghij7890"]
 """
-        mock_llm_response = _build_openai_response(patterns_assignment_fail)
+        mock_llm_response = _build_openai_response(patterns_assignment_partial)
         mock_call_llm.return_value = mock_llm_response
 
-        # Should raise ApplicationError due to threshold failure
-        with pytest.raises(ApplicationError, match="Too many patterns failed to enrich with session meta"):
-            await assign_events_to_patterns_activity(activity_input)
+        summary_id = await assign_events_to_patterns_activity(activity_input)
+        session_group_summary = await SessionGroupSummary.objects.aget(id=summary_id)
+        result = EnrichedSessionGroupSummaryPatternsList.model_validate_json(session_group_summary.summary)
+        assert len(result.patterns) == 2  # The 2 enriched patterns survive, the 2 without events are dropped
 
-    # Test 2: Should succeed when 3 out of 4 patterns get events (75% == 75% threshold)
+    # Test 2: Should fail (non-retryable) when no pattern gets any enrichable event,
+    # e.g. when the LLM returns event ids missing from the stored summaries
     with (
         patch("ee.hogai.session_summaries.llm.consume.call_llm") as mock_call_llm,
         patch("temporalio.activity.info") as mock_activity_info,
@@ -514,26 +516,40 @@ async def test_assign_events_to_patterns_threshold_check(
         mock_client = MagicMock()
         mock_client.get_workflow_handle = MagicMock(return_value=mock_workflow_handle)
         mock_async_connect.return_value = mock_client
-        # Mock LLM response that assigns events to 3 patterns
-        patterns_assignment_success = """patterns:
+        # Mock LLM response with event ids that don't exist in any stored summary
+        patterns_assignment_unmappable = """patterns:
   - pattern_id: 1
-    event_ids: ["abcd1234"]
+    event_ids: ["zzzz9991"]
   - pattern_id: 2
-    event_ids: ["ghij7890"]
-  - pattern_id: 3
-    event_ids: ["mnop3456"]
+    event_ids: ["zzzz9992"]
 """
-        mock_llm_response = _build_openai_response(patterns_assignment_success)
+        mock_llm_response = _build_openai_response(patterns_assignment_unmappable)
         mock_call_llm.return_value = mock_llm_response
 
-        # Should succeed - now returns just the summary id
+        with pytest.raises(ApplicationError, match="All patterns failed to enrich with session meta") as exc_info:
+            await assign_events_to_patterns_activity(activity_input)
+        assert exc_info.value.non_retryable
+
+    # Test 3: Should store an empty report without any LLM calls when extraction found no patterns
+    empty_patterns = RawSessionGroupSummaryPatternsList(patterns=[])
+    await store_data_in_redis(
+        redis_client=redis_client,
+        redis_key=patterns_key,
+        data=empty_patterns.model_dump_json(exclude_none=True),
+        label=StateActivitiesEnum.SESSION_GROUP_EXTRACTED_PATTERNS,
+    )
+    with (
+        patch("ee.hogai.session_summaries.llm.consume.call_llm") as mock_call_llm,
+        patch("temporalio.activity.info") as mock_activity_info,
+    ):
+        mock_activity_info.return_value.workflow_id = "test_workflow_id"
+        mock_activity_info.return_value.workflow_run_id = "test_run_id"
+
         summary_id = await assign_events_to_patterns_activity(activity_input)
-        assert isinstance(summary_id, str)
-        # Fetch the result from DB
         session_group_summary = await SessionGroupSummary.objects.aget(id=summary_id)
         result = EnrichedSessionGroupSummaryPatternsList.model_validate_json(session_group_summary.summary)
-        assert isinstance(result, EnrichedSessionGroupSummaryPatternsList)
-        assert len(result.patterns) == 3  # Should have 3 patterns with events
+        assert result.patterns == []
+        mock_call_llm.assert_not_called()
 
 
 @pytest.mark.asyncio

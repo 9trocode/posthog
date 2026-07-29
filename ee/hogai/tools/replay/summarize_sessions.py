@@ -29,7 +29,7 @@ from ee.hogai.session_summaries.constants import (
 from ee.hogai.session_summaries.session.stringify import SingleSessionSummaryStringifier
 from ee.hogai.session_summaries.session_group.patterns import EnrichedSessionGroupSummaryPatternsList
 from ee.hogai.session_summaries.session_group.stringify import SessionGroupSummaryStringifier
-from ee.hogai.session_summaries.session_group.summarize_session_group import find_sessions_timestamps
+from ee.hogai.session_summaries.session_group.summarize_session_group import find_sessions_timestamps_dropping_missing
 from ee.hogai.session_summaries.tracking import (
     capture_session_summary_generated,
     capture_session_summary_started,
@@ -356,13 +356,24 @@ class SummarizeSessionsTool(MaxTool):
         """Summarize sessions as a group. Returns (summary_str, summary_id, failed_sessions)."""
         from ee.hogai.session_summaries.utils import logging_session_ids
 
-        min_timestamp, max_timestamp = await database_sync_to_async(find_sessions_timestamps, thread_sensitive=False)(
-            session_ids=session_ids, team=self._team
-        )
+        # Session ids were already validated once in `_validate_specific_session_ids`, but a recording can
+        # drop out between the two reads (still ingesting, deleted, or a lagging replica). Drop such
+        # sessions and report them as failed instead of erroring the whole batch.
+        found_session_ids, dropped_session_ids, min_timestamp, max_timestamp = await database_sync_to_async(
+            find_sessions_timestamps_dropping_missing, thread_sensitive=False
+        )(session_ids=session_ids, team=self._team)
+        dropped_sessions = [
+            FailedSessionInfo(
+                session_id=dropped_session_id,
+                category="skipped",
+                reason="Recording not found (it may have expired or been deleted)",
+            )
+            for dropped_session_id in dropped_session_ids
+        ]
         trigger_session_id = self._get_trigger_session_id()
         async with Heartbeater():
             async for update_type, data in execute_summarize_session_group(
-                session_ids=session_ids,
+                session_ids=found_session_ids,
                 user=self._user,
                 team=self._team,
                 min_timestamp=min_timestamp,
@@ -406,8 +417,9 @@ class SummarizeSessionsTool(MaxTool):
                     # Stringify the summary to "weight" less and apply example limits per pattern, so it won't overload the context
                     stringifier = SessionGroupSummaryStringifier(summary.model_dump(exclude_none=False))
                     summary_str = stringifier.stringify_patterns()
-                    note = self._format_failed_sessions_note(failed_sessions, total_requested=len(session_ids))
-                    return note + summary_str, session_group_summary_id, failed_sessions
+                    all_failed_sessions = dropped_sessions + failed_sessions
+                    note = self._format_failed_sessions_note(all_failed_sessions, total_requested=len(session_ids))
+                    return note + summary_str, session_group_summary_id, all_failed_sessions
                 else:
                     msg = f"Unexpected update type ({update_type}) in session group summarization (session_ids: {logging_session_ids(session_ids)})."  # type: ignore[unreachable]
                     logger.error(msg, signals_type="session-summaries")
