@@ -10,14 +10,9 @@ import requests
 from parameterized import parameterized
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
-from products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.auth import (
-    BearerTokenAuth,
-    OAuth2Auth,
-    OAuth2AuthRequestError,
-)
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.auth import BearerTokenAuth
 from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.mercado_pago import (
-    MISSING_CREDENTIALS_ERROR,
-    MercadoPagoCredentials,
+    MISSING_ACCESS_TOKEN_ERROR,
     MercadoPagoResumeConfig,
     MercadoPagoSearchPaginator,
     build_auth,
@@ -38,16 +33,8 @@ CLIENT_SESSION_PATCH = "products.warehouse_sources.backend.temporal.data_imports
 PROBE_SESSION_PATCH = (
     "products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.mercado_pago.make_tracked_session"
 )
-# OAuth2Auth mints tokens through a session it builds in the shared auth module.
-TOKEN_SESSION_PATCH = (
-    "products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.auth.make_tracked_session"
-)
 
 ACCESS_TOKEN = "APP_USR-secret-token"
-TOKEN_CREDENTIALS = MercadoPagoCredentials(access_token=ACCESS_TOKEN)
-OAUTH_CREDENTIALS = MercadoPagoCredentials(
-    client_id="client-id", client_secret="client-secret", refresh_token="TG-refresh"
-)
 
 
 def _payment(payment_id: int) -> dict[str, Any]:
@@ -77,13 +64,6 @@ def _mock_response(status_code: int, json_data: Any = None) -> MagicMock:
     response = MagicMock()
     response.status_code = status_code
     response.json.return_value = json_data if json_data is not None else {}
-    return response
-
-
-def _token_response(body: Any, *, status_code: int = 200) -> MagicMock:
-    response = MagicMock()
-    response.status_code = status_code
-    response.raw.read.return_value = json.dumps(body).encode()
     return response
 
 
@@ -123,13 +103,13 @@ def _source(
     manager: MagicMock,
     endpoint: str,
     *,
-    credentials: MercadoPagoCredentials = TOKEN_CREDENTIALS,
+    access_token: str = ACCESS_TOKEN,
     should_use_incremental_field: bool = False,
     db_incremental_field_last_value: Optional[Any] = None,
     incremental_field: Optional[str] = None,
 ) -> SourceResponse:
     return mercado_pago_source(
-        credentials=credentials,
+        access_token=access_token,
         endpoint=endpoint,
         team_id=1,
         job_id="job-1",
@@ -163,67 +143,16 @@ class TestFormatSearchDatetime:
 
 class TestBuildAuth:
     def test_access_token_uses_bearer_auth(self) -> None:
-        auth = build_auth(TOKEN_CREDENTIALS)
+        auth = build_auth(ACCESS_TOKEN)
         assert isinstance(auth, BearerTokenAuth)
         assert auth.token == ACCESS_TOKEN
+        # The token must be redacted from logs and captured samples.
         assert auth.secret_values() == (ACCESS_TOKEN,)
 
-    def test_oauth_credentials_use_refresh_token_grant(self) -> None:
-        auth = build_auth(OAUTH_CREDENTIALS)
-        assert isinstance(auth, OAuth2Auth)
-        assert auth.grant_type == "refresh_token"
-        assert auth.token_url == "https://api.mercadopago.com/oauth/token"
-        # The client secret and refresh token must be redacted from logs and captured samples.
-        assert set(auth.secret_values()) == {"client-secret", "TG-refresh"}
-
-    @parameterized.expand(
-        [
-            ("nothing", MercadoPagoCredentials()),
-            ("client_id_only", MercadoPagoCredentials(client_id="client-id")),
-            ("missing_refresh_token", MercadoPagoCredentials(client_id="a", client_secret="b")),
-        ]
-    )
-    def test_incomplete_credentials_raise(self, _name: str, credentials: MercadoPagoCredentials) -> None:
-        with pytest.raises(ValueError, match=MISSING_CREDENTIALS_ERROR):
-            build_auth(credentials)
-
-
-class TestOAuthTokenMinting:
-    @patch(TOKEN_SESSION_PATCH)
-    def test_mints_access_token_then_reuses_it(self, MockSession: Any) -> None:
-        session = MockSession.return_value
-        session.post.return_value = _token_response({"access_token": "APP_USR-minted", "expires_in": 21600})
-
-        auth = build_auth(OAUTH_CREDENTIALS)
-        first = requests.Request(method="GET", url="https://api.mercadopago.com/v1/payments/search").prepare()
-        auth(first)
-        second = requests.Request(method="GET", url="https://api.mercadopago.com/v1/payments/search").prepare()
-        auth(second)
-
-        assert first.headers["Authorization"] == "Bearer APP_USR-minted"
-        assert second.headers["Authorization"] == "Bearer APP_USR-minted"
-        # A token that's still valid is reused rather than re-minted on every request.
-        assert session.post.call_count == 1
-
-        body = session.post.call_args.kwargs["data"]
-        assert body["grant_type"] == "refresh_token"
-        assert body["refresh_token"] == "TG-refresh"
-        assert body["client_id"] == "client-id"
-        assert body["client_secret"] == "client-secret"
-
-    @patch(TOKEN_SESSION_PATCH)
-    def test_rejected_refresh_token_raises_permanent_error(self, MockSession: Any) -> None:
-        session = MockSession.return_value
-        session.post.return_value = _token_response(
-            {"error": "invalid_grant", "error_description": "refresh token revoked"}, status_code=400
-        )
-
-        auth = build_auth(OAUTH_CREDENTIALS)
-        with pytest.raises(OAuth2AuthRequestError) as exc:
-            auth(requests.Request(method="GET", url="https://api.mercadopago.com/v1/payments/search").prepare())
-
-        assert exc.value.is_permanent is True
-        assert "invalid_grant" in str(exc.value)
+    @parameterized.expand([("none", None), ("empty", "")])
+    def test_missing_access_token_raises(self, _name: str, access_token: Optional[str]) -> None:
+        with pytest.raises(ValueError, match=MISSING_ACCESS_TOKEN_ERROR):
+            build_auth(access_token)
 
 
 class TestResolveCursorField:
@@ -425,9 +354,9 @@ class TestPipelineTransport:
         assert prepared.headers["Authorization"] == f"Bearer {ACCESS_TOKEN}"
 
     @patch(CLIENT_SESSION_PATCH)
-    def test_missing_credentials_fail_before_any_request(self, MockSession: Any) -> None:
-        with pytest.raises(ValueError, match=MISSING_CREDENTIALS_ERROR):
-            _source(_make_manager(), "payments", credentials=MercadoPagoCredentials())
+    def test_missing_access_token_fails_before_any_request(self, MockSession: Any) -> None:
+        with pytest.raises(ValueError, match=MISSING_ACCESS_TOKEN_ERROR):
+            _source(_make_manager(), "payments", access_token="")
         MockSession.return_value.send.assert_not_called()
 
     @parameterized.expand(
@@ -453,12 +382,12 @@ class TestValidateCredentials:
     @patch(PROBE_SESSION_PATCH)
     def test_valid_token(self, MockSession: Any) -> None:
         MockSession.return_value.get.return_value = _mock_response(200, _search_body([], total=0, offset=0))
-        assert validate_credentials(TOKEN_CREDENTIALS) == (True, None)
+        assert validate_credentials(ACCESS_TOKEN) == (True, None)
 
     @patch(PROBE_SESSION_PATCH)
     def test_unauthorized_reports_the_api_message(self, MockSession: Any) -> None:
         MockSession.return_value.get.return_value = _mock_response(401, {"message": "invalid access token"})
-        assert validate_credentials(TOKEN_CREDENTIALS) == (
+        assert validate_credentials(ACCESS_TOKEN) == (
             False,
             "invalid access token",
         )
@@ -468,12 +397,12 @@ class TestValidateCredentials:
         # A restricted token may legitimately cover only some resources, so a scope failure must
         # not block connecting the source.
         MockSession.return_value.get.return_value = _mock_response(403, {"message": "forbidden"})
-        assert validate_credentials(TOKEN_CREDENTIALS) == (True, None)
+        assert validate_credentials(ACCESS_TOKEN) == (True, None)
 
     @patch(PROBE_SESSION_PATCH)
     def test_forbidden_fails_for_a_specific_schema(self, MockSession: Any) -> None:
         MockSession.return_value.get.return_value = _mock_response(403, {})
-        is_valid, message = validate_credentials(TOKEN_CREDENTIALS, schema_name="payments")
+        is_valid, message = validate_credentials(ACCESS_TOKEN, schema_name="payments")
         assert is_valid is False
         assert message is not None and "payments" in message
 
@@ -481,25 +410,16 @@ class TestValidateCredentials:
     @patch(PROBE_SESSION_PATCH)
     def test_other_statuses_are_reported(self, status_code: int, MockSession: Any) -> None:
         MockSession.return_value.get.return_value = _mock_response(status_code, {})
-        is_valid, message = validate_credentials(TOKEN_CREDENTIALS)
+        is_valid, message = validate_credentials(ACCESS_TOKEN)
         assert is_valid is False
         assert message == f"Mercado Pago returned HTTP {status_code}"
 
     @patch(PROBE_SESSION_PATCH)
     def test_connection_error_is_reported(self, MockSession: Any) -> None:
         MockSession.return_value.get.side_effect = requests.exceptions.ConnectionError("boom")
-        is_valid, message = validate_credentials(TOKEN_CREDENTIALS)
+        is_valid, message = validate_credentials(ACCESS_TOKEN)
         assert is_valid is False
         assert message is not None and message.startswith("Could not connect to Mercado Pago")
 
-    @patch(PROBE_SESSION_PATCH)
-    def test_failed_token_mint_is_reported_without_the_internal_marker(self, MockSession: Any) -> None:
-        MockSession.return_value.get.side_effect = OAuth2AuthRequestError(
-            "HTTP 400 from the OAuth2 token endpoint: invalid_grant", error_code="invalid_grant", is_permanent=True
-        )
-        is_valid, message = validate_credentials(OAUTH_CREDENTIALS)
-        assert is_valid is False
-        assert message == "HTTP 400 from the OAuth2 token endpoint: invalid_grant"
-
-    def test_missing_credentials_are_rejected_without_a_probe(self) -> None:
-        assert validate_credentials(MercadoPagoCredentials()) == (False, MISSING_CREDENTIALS_ERROR)
+    def test_missing_access_token_is_rejected_without_a_probe(self) -> None:
+        assert validate_credentials(None) == (False, MISSING_ACCESS_TOKEN_ERROR)

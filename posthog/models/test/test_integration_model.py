@@ -4,7 +4,7 @@ import base64
 import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Optional
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from freezegun import freeze_time
@@ -4192,3 +4192,90 @@ class TestResendIntegrationModel(BaseTest):
         assert sent["client_id"] == "resend-client-id"
         assert sent["client_secret"] == "resend-client-secret"
         assert sent["token_type_hint"] == "refresh_token"
+
+
+@override_settings(
+    MERCADO_PAGO_APP_CLIENT_ID="mp-client-id",
+    MERCADO_PAGO_APP_CLIENT_SECRET="mp-client-secret",
+    SITE_URL="https://us.posthog.com",
+)
+class TestMercadoPagoIntegrationModel(BaseTest):
+    def test_oauth_config(self):
+        config = OauthIntegration.oauth_config_for_kind("mercado-pago")
+        assert config.authorize_url == "https://auth.mercadopago.com/authorization"
+        assert config.token_url == "https://api.mercadopago.com/oauth/token"
+        assert config.token_info_url == "https://api.mercadopago.com/users/me"
+        assert config.client_id == "mp-client-id"
+        assert config.client_secret == "mp-client-secret"
+        # Without `offline_access` Mercado Pago issues no refresh token, so the connection would
+        # silently stop syncing once the access token expires.
+        assert config.scope == "offline_access read"
+        assert config.additional_authorize_params == {"platform_id": "mp"}
+        assert config.id_path == "user_id"
+        assert config.name_path == "mercado_pago_account_name"
+
+    @override_settings(MERCADO_PAGO_APP_CLIENT_ID="", MERCADO_PAGO_APP_CLIENT_SECRET="")
+    def test_oauth_config_unconfigured_raises(self):
+        with pytest.raises(NotImplementedError, match="Mercado Pago app not configured"):
+            OauthIntegration.oauth_config_for_kind("mercado-pago")
+
+    def test_authorize_url_sends_the_scopes_and_the_mercado_pago_platform(self):
+        url = OauthIntegration.authorize_url("mercado-pago", token="state_token")
+        query = parse_qs(urlparse(url).query)
+        assert query["scope"] == ["offline_access read"]
+        assert query["platform_id"] == ["mp"]
+        assert query["response_type"] == ["code"]
+
+    @patch("posthog.models.integration.requests.get")
+    @patch("posthog.models.integration.requests.post")
+    def test_integration_from_oauth_response_labels_the_seller(self, mock_post, mock_get):
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "access_token": "APP_USR-at",
+            "refresh_token": "TG-rt",
+            "expires_in": 15552000,
+            "user_id": 1234567890,
+            "scope": "offline_access read",
+        }
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"id": 1234567890, "nickname": "ACMESHOP", "email": "seller@acme.com"}
+
+        integration = OauthIntegration.integration_from_oauth_response(
+            "mercado-pago",
+            self.team.id,
+            self.user,
+            {"code": "TG-code", "state": "token=state_token"},
+        )
+
+        assert integration.kind == "mercado-pago"
+        # The token response identifies the seller by numeric user_id only.
+        assert integration.integration_id == "1234567890"
+        assert integration.config["mercado_pago_account_name"] == "ACMESHOP"
+        assert integration.display_name == "ACMESHOP"
+        assert integration.sensitive_config["access_token"] == "APP_USR-at"
+        assert integration.sensitive_config["refresh_token"] == "TG-rt"
+
+    @patch("posthog.models.integration.requests.get")
+    @patch("posthog.models.integration.requests.post")
+    def test_integration_name_falls_back_when_the_account_lookup_fails(self, mock_post, mock_get):
+        # /users/me is best-effort, so a failure must still leave a labeled integration rather than
+        # one listed with an empty name.
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "access_token": "APP_USR-at",
+            "refresh_token": "TG-rt",
+            "expires_in": 15552000,
+            "user_id": 42,
+        }
+        mock_get.return_value.status_code = 403
+        mock_get.return_value.text = "forbidden"
+
+        integration = OauthIntegration.integration_from_oauth_response(
+            "mercado-pago",
+            self.team.id,
+            self.user,
+            {"code": "TG-code", "state": "token=state_token"},
+        )
+
+        assert integration.integration_id == "42"
+        assert integration.config["mercado_pago_account_name"] == "Mercado Pago account 42"

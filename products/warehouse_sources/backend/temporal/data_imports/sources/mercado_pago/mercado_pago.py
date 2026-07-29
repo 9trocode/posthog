@@ -16,12 +16,8 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.res
     rest_api_resource,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.auth import (
-    AuthConfigBase,
     BearerTokenAuth,
-    OAuth2Auth,
-    OAuth2AuthRequestError,
     auth_secret_values,
-    strip_oauth2_permanent_marker,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.jsonpath_utils import (
     find_values,
@@ -31,14 +27,13 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.res
 from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.settings import (
     MERCADO_PAGO_BASE_URL,
     MERCADO_PAGO_ENDPOINTS,
-    MERCADO_PAGO_TOKEN_URL,
     PAGE_SIZE,
     MercadoPagoEndpointConfig,
 )
 
 REQUEST_TIMEOUT_SECONDS = 60
 
-MISSING_CREDENTIALS_ERROR = "Missing Mercado Pago credentials"
+MISSING_ACCESS_TOKEN_ERROR = "Missing Mercado Pago access token"
 
 # Mercado Pago's relative anchor for "right now". `range` needs both bounds, so an incremental
 # window always sends an end as well as a begin.
@@ -51,33 +46,10 @@ class MercadoPagoResumeConfig:
     offset: int
 
 
-@dataclasses.dataclass(frozen=True)
-class MercadoPagoCredentials:
-    """Whatever the customer supplied: either a long-lived panel access token, or their own OAuth
-    application's credentials (marketplace/multi-seller integrations), which mint short-lived
-    access tokens at sync time."""
-
-    access_token: Optional[str] = None
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    refresh_token: Optional[str] = None
-
-
-def build_auth(credentials: MercadoPagoCredentials) -> AuthConfigBase:
-    if credentials.access_token:
-        return BearerTokenAuth(token=credentials.access_token)
-
-    if credentials.client_id and credentials.client_secret and credentials.refresh_token:
-        return OAuth2Auth(
-            token_url=MERCADO_PAGO_TOKEN_URL,
-            client_id=credentials.client_id,
-            client_secret=credentials.client_secret,
-            refresh_token=credentials.refresh_token,
-            grant_type="refresh_token",
-            token_request_headers={"Accept": "application/json"},
-        )
-
-    raise ValueError(MISSING_CREDENTIALS_ERROR)
+def build_auth(access_token: Optional[str]) -> BearerTokenAuth:
+    if not access_token:
+        raise ValueError(MISSING_ACCESS_TOKEN_ERROR)
+    return BearerTokenAuth(token=access_token)
 
 
 def format_search_datetime(value: Any) -> str:
@@ -216,7 +188,7 @@ class MercadoPagoSearchPaginator(BasePaginator):
 
 
 def mercado_pago_source(
-    credentials: MercadoPagoCredentials,
+    access_token: str,
     endpoint: str,
     team_id: int,
     job_id: str,
@@ -226,7 +198,7 @@ def mercado_pago_source(
     incremental_field: Optional[str] = None,
 ) -> SourceResponse:
     endpoint_config = MERCADO_PAGO_ENDPOINTS[endpoint]
-    auth = build_auth(credentials)
+    auth = build_auth(access_token)
 
     params = build_request_params(
         endpoint_config,
@@ -329,17 +301,17 @@ def _error_message(response: requests.Response) -> Optional[str]:
 
 
 def validate_credentials(
-    credentials: MercadoPagoCredentials,
+    access_token: Optional[str],
     schema_name: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
-    """Probe the payments search endpoint to confirm the credentials are genuine.
+    """Probe the payments search endpoint to confirm the access token is genuine.
 
     A 403 means the token works but isn't authorized for this resource, which is accepted at
     source-create (`schema_name is None`) — a marketplace or restricted token may legitimately
     only cover the tables the user wants — and rejected when validating a specific schema.
     """
     try:
-        auth = build_auth(credentials)
+        auth = build_auth(access_token)
     except ValueError as e:
         return False, str(e)
 
@@ -355,8 +327,6 @@ def validate_credentials(
             auth=auth,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
-    except OAuth2AuthRequestError as e:
-        return False, strip_oauth2_permanent_marker(str(e))
     except requests.exceptions.RequestException as e:
         return False, f"Could not connect to Mercado Pago: {e}"
 

@@ -8,11 +8,11 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common imp
 
 @config.config
 class MercadoPagoAuthMethodConfig(config.Config):
-    selection: Literal["access_token", "oauth"] = "access_token"
+    mercado_pago_integration_id: int | None = config.value(
+        converter=config.str_to_optional_int, default_factory=lambda: None
+    )
+    selection: Literal["oauth", "access_token"] = "oauth"
     access_token: str | None = None
-    client_id: str | None = None
-    client_secret: str | None = None
-    refresh_token: str | None = None
 
 
 @config.config

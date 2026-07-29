@@ -7,6 +7,7 @@ from posthog.schema import (
     SourceConfig,
     SourceFieldInputConfig,
     SourceFieldInputConfigType,
+    SourceFieldOauthConfig,
     SourceFieldSelectConfig,
     SourceFieldSelectConfigOption,
 )
@@ -19,6 +20,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.bas
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.canonical_descriptions import (
     CanonicalDescriptions,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.mixins import OAuthMixin
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.registry import SourceRegistry
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.schema import (
@@ -29,7 +31,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.generated_
     MercadoPagoSourceConfig,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.mercado_pago import (
-    MercadoPagoCredentials,
+    MISSING_ACCESS_TOKEN_ERROR,
     MercadoPagoResumeConfig,
     mercado_pago_source,
     validate_credentials as validate_mercado_pago_credentials,
@@ -40,12 +42,16 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pa
 )
 from products.warehouse_sources.backend.types import ExternalDataSourceType
 
-MISSING_ACCESS_TOKEN_ERROR = "Missing Mercado Pago access token"
-MISSING_OAUTH_CREDENTIALS_ERROR = "Missing Mercado Pago client ID, client secret, or refresh token"
+MISSING_INTEGRATION_ERROR = "Missing Mercado Pago integration ID"
+INTEGRATION_TOKEN_MISSING_ERROR = "Mercado Pago access token not found"
+
+# Space separated, matching the OAuth `scope` parameter, so the frontend can diff it against what
+# the seller actually granted.
+REQUIRED_SCOPES = "offline_access read"
 
 
 @SourceRegistry.register
-class MercadoPagoSource(ResumableSource[MercadoPagoSourceConfig, MercadoPagoResumeConfig]):
+class MercadoPagoSource(ResumableSource[MercadoPagoSourceConfig, MercadoPagoResumeConfig], OAuthMixin):
     lists_tables_without_credentials = True  # static endpoint catalog — safe for public docs
 
     # No pinnable API version: `/v1/payments` sits alongside unversioned `/preapproval` and
@@ -66,9 +72,9 @@ class MercadoPagoSource(ResumableSource[MercadoPagoSourceConfig, MercadoPagoResu
             keywords=["mercadopago", "mercado libre", "pix", "boleto"],
             caption="""Sync your Mercado Pago payments, merchant orders, and subscriptions into the PostHog Data warehouse.
 
-For a single account, copy the production access token from **Your integrations > your application > Production credentials** in the [Mercado Pago developer panel](https://www.mercadopago.com/developers/panel).
+Connect your Mercado Pago account and approve the read and offline access permissions. PostHog then keeps the connection refreshed for you.
 
-Marketplace and multi-seller integrations should use their OAuth application instead: enter the app's client ID and secret plus a refresh token for the seller account, and PostHog mints a short-lived access token for each sync.
+You can also paste a production access token instead, copied from **Your integrations > your application > Production credentials** in the [Mercado Pago developer panel](https://www.mercadopago.com/developers/panel). Access tokens expire and need replacing by hand.
 
 Payments search only covers the last 12 months, so older payments can't be backfilled.""",
             iconPath="/static/services/mercado_pago.png",
@@ -80,8 +86,24 @@ Payments search only covers the last 12 months, so older payments can't be backf
                         name="auth_method",
                         label="Authentication type",
                         required=True,
-                        defaultValue="access_token",
+                        defaultValue="oauth",
                         options=[
+                            SourceFieldSelectConfigOption(
+                                label="Connect Mercado Pago",
+                                value="oauth",
+                                fields=cast(
+                                    list[FieldType],
+                                    [
+                                        SourceFieldOauthConfig(
+                                            name="mercado_pago_integration_id",
+                                            label="Mercado Pago account",
+                                            required=False,
+                                            kind="mercado-pago",
+                                            requiredScopes=REQUIRED_SCOPES,
+                                        ),
+                                    ],
+                                ),
+                            ),
                             SourceFieldSelectConfigOption(
                                 label="Access token",
                                 value="access_token",
@@ -94,39 +116,6 @@ Payments search only covers the last 12 months, so older payments can't be backf
                                             type=SourceFieldInputConfigType.PASSWORD,
                                             required=False,
                                             placeholder="APP_USR-...",
-                                            secret=True,
-                                        ),
-                                    ],
-                                ),
-                            ),
-                            SourceFieldSelectConfigOption(
-                                label="OAuth application (marketplace)",
-                                value="oauth",
-                                fields=cast(
-                                    list[FieldType],
-                                    [
-                                        SourceFieldInputConfig(
-                                            name="client_id",
-                                            label="Client ID",
-                                            type=SourceFieldInputConfigType.TEXT,
-                                            required=False,
-                                            placeholder="",
-                                            secret=False,
-                                        ),
-                                        SourceFieldInputConfig(
-                                            name="client_secret",
-                                            label="Client secret",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="",
-                                            secret=True,
-                                        ),
-                                        SourceFieldInputConfig(
-                                            name="refresh_token",
-                                            label="Refresh token",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="TG-...",
                                             secret=True,
                                         ),
                                     ],
@@ -147,28 +136,37 @@ Payments search only covers the last 12 months, so older payments can't be backf
 
     def get_non_retryable_errors(self) -> dict[str, str | None]:
         return {
-            "401 Client Error: Unauthorized for url: https://api.mercadopago.com": "Your Mercado Pago credentials are invalid or expired. Generate new credentials in the developer panel and reconnect.",
-            "403 Client Error: Forbidden for url: https://api.mercadopago.com": "Your Mercado Pago credentials are not authorized to read this data. Check the application's permissions and reconnect.",
-            # Deterministic config errors — retrying can't fix a credential that was never entered.
+            "401 Client Error: Unauthorized for url: https://api.mercadopago.com": "Your Mercado Pago credentials are invalid or expired. Reconnect your Mercado Pago account, or paste a new access token.",
+            "403 Client Error: Forbidden for url: https://api.mercadopago.com": "Your Mercado Pago credentials are not authorized to read this data. Grant read access and reconnect.",
+            # Deterministic config errors — retrying can't fix a credential that was never entered
+            # or an integration row that no longer exists. Match on the stable prefix so the
+            # volatile integration ID in the mixin's message is ignored.
             MISSING_ACCESS_TOKEN_ERROR: "No Mercado Pago access token is configured. Please update the source configuration.",
-            MISSING_OAUTH_CREDENTIALS_ERROR: "The Mercado Pago client ID, client secret, or refresh token is missing. Please update the source configuration.",
+            MISSING_INTEGRATION_ERROR: "Mercado Pago is not connected. Please connect your Mercado Pago account.",
+            INTEGRATION_TOKEN_MISSING_ERROR: "The Mercado Pago access token is missing. Please reconnect your Mercado Pago account.",
+            "Integration not found": "The linked Mercado Pago integration no longer exists. Please reconnect your Mercado Pago account.",
         }
 
-    def _get_credentials(self, config: MercadoPagoSourceConfig) -> MercadoPagoCredentials:
-        if config.auth_method.selection == "oauth":
-            if not (
-                config.auth_method.client_id and config.auth_method.client_secret and config.auth_method.refresh_token
-            ):
-                raise ValueError(MISSING_OAUTH_CREDENTIALS_ERROR)
-            return MercadoPagoCredentials(
-                client_id=config.auth_method.client_id,
-                client_secret=config.auth_method.client_secret,
-                refresh_token=config.auth_method.refresh_token,
-            )
+    def _resolve_access_token(self, config: MercadoPagoSourceConfig, team_id: int) -> str:
+        """The bearer token for the selected auth method.
 
-        if not config.auth_method.access_token:
-            raise ValueError(MISSING_ACCESS_TOKEN_ERROR)
-        return MercadoPagoCredentials(access_token=config.auth_method.access_token)
+        For the connected account, `OauthIntegration.refresh_access_token()` and the scheduled
+        refresh in `posthog/tasks/integrations.py` keep this fresh, so the stored token is read
+        as-is rather than minted here.
+        """
+        if config.auth_method.selection == "access_token":
+            if not config.auth_method.access_token:
+                raise ValueError(MISSING_ACCESS_TOKEN_ERROR)
+            return config.auth_method.access_token
+
+        integration_id = config.auth_method.mercado_pago_integration_id
+        if not integration_id:
+            raise ValueError(MISSING_INTEGRATION_ERROR)
+
+        integration = self.get_oauth_integration(integration_id, team_id)
+        if not integration.access_token:
+            raise ValueError(INTEGRATION_TOKEN_MISSING_ERROR)
+        return integration.access_token
 
     def get_schemas(
         self,
@@ -189,11 +187,18 @@ Payments search only covers the last 12 months, so older payments can't be backf
         api_version: str | None = None,
     ) -> tuple[bool, str | None]:
         try:
-            credentials = self._get_credentials(config)
+            access_token = self._resolve_access_token(config, team_id)
         except ValueError as e:
-            return False, str(e)
+            # The mixin's "Integration not found" wording is developer-facing and carries a
+            # volatile integration ID, so reuse the curated messages from get_non_retryable_errors
+            # rather than surfacing the raw string in the wizard.
+            raw = str(e)
+            for pattern, friendly in self.get_non_retryable_errors().items():
+                if friendly and pattern in raw:
+                    return False, friendly
+            return False, raw
 
-        return validate_mercado_pago_credentials(credentials, schema_name)
+        return validate_mercado_pago_credentials(access_token, schema_name)
 
     def get_resumable_source_manager(self, inputs: SourceInputs) -> ResumableSourceManager[MercadoPagoResumeConfig]:
         return ResumableSourceManager[MercadoPagoResumeConfig](inputs, MercadoPagoResumeConfig)
@@ -208,7 +213,7 @@ Payments search only covers the last 12 months, so older payments can't be backf
             raise ValueError(f"Unknown Mercado Pago schema '{inputs.schema_name}'")
 
         return mercado_pago_source(
-            credentials=self._get_credentials(config),
+            access_token=self._resolve_access_token(config, inputs.team_id),
             endpoint=inputs.schema_name,
             team_id=inputs.team_id,
             job_id=inputs.job_id,

@@ -7,7 +7,6 @@ from products.warehouse_sources.backend.types import IncrementalField
 # Every Mercado Pago country site (.com.ar, .com.br, .com.mx, ...) is served by the same API host;
 # only the docs are split per site.
 MERCADO_PAGO_BASE_URL = "https://api.mercadopago.com"
-MERCADO_PAGO_TOKEN_URL = "https://api.mercadopago.com/oauth/token"
 
 # Requested page size for the search endpoints. Mercado Pago caps `limit` server-side, so a page can
 # come back smaller than this; the paginator advances by the rows actually returned, which costs an

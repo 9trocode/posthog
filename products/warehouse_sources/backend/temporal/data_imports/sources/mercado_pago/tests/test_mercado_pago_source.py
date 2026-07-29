@@ -5,7 +5,7 @@ from unittest import mock
 
 from parameterized import parameterized
 
-from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldSelectConfig
+from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldOauthConfig, SourceFieldSelectConfig
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.generated_configs.mercadopago import (
@@ -16,34 +16,40 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pa
     CANONICAL_DESCRIPTIONS,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.mercado_pago import (
-    MercadoPagoCredentials,
     MercadoPagoResumeConfig,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.settings import ENDPOINTS
 from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.source import (
+    INTEGRATION_TOKEN_MISSING_ERROR,
     MISSING_ACCESS_TOKEN_ERROR,
-    MISSING_OAUTH_CREDENTIALS_ERROR,
+    MISSING_INTEGRATION_ERROR,
+    REQUIRED_SCOPES,
     MercadoPagoSource,
 )
 from products.warehouse_sources.backend.types import ExternalDataSourceType
+
+INTEGRATION_PATCH = (
+    "products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.source."
+    "MercadoPagoSource.get_oauth_integration"
+)
 
 
 def _config(
     selection: str = "access_token",
     access_token: Optional[str] = "APP_USR-secret-token",
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    refresh_token: Optional[str] = None,
+    mercado_pago_integration_id: Optional[int] = None,
 ) -> MercadoPagoSourceConfig:
     return MercadoPagoSourceConfig(
         auth_method=MercadoPagoAuthMethodConfig(
             selection=selection,  # type: ignore[arg-type]
             access_token=access_token,
-            client_id=client_id,
-            client_secret=client_secret,
-            refresh_token=refresh_token,
+            mercado_pago_integration_id=mercado_pago_integration_id,
         )
     )
+
+
+def _oauth_config(integration_id: Optional[int] = 42) -> MercadoPagoSourceConfig:
+    return _config(selection="oauth", access_token=None, mercado_pago_integration_id=integration_id)
 
 
 class TestMercadoPagoSource:
@@ -67,29 +73,27 @@ class TestMercadoPagoSource:
         # A finished source must not carry `unreleasedSource` — it hides the connector entirely.
         assert self.source.get_source_config.unreleasedSource is None
 
-    def test_auth_options_offer_a_token_and_an_oauth_application(self) -> None:
+    def test_auth_defaults_to_connecting_through_posthogs_oauth_app(self) -> None:
         select = next(f for f in self.source.get_source_config.fields if isinstance(f, SourceFieldSelectConfig))
         assert select.name == "auth_method"
-        assert [option.value for option in select.options] == ["access_token", "oauth"]
+        assert select.defaultValue == "oauth"
+        assert [option.value for option in select.options] == ["oauth", "access_token"]
 
-    @parameterized.expand(
-        [
-            ("access_token", ["access_token"]),
-            ("oauth", ["client_id", "client_secret", "refresh_token"]),
-        ]
-    )
-    def test_auth_option_fields(self, option_value: str, expected_fields: list[str]) -> None:
+    def test_oauth_option_offers_the_connect_field(self) -> None:
         select = next(f for f in self.source.get_source_config.fields if isinstance(f, SourceFieldSelectConfig))
-        option = next(o for o in select.options if o.value == option_value)
-        assert [f.name for f in (option.fields or []) if isinstance(f, SourceFieldInputConfig)] == expected_fields
+        option = next(o for o in select.options if o.value == "oauth")
+        oauth_field = next(f for f in (option.fields or []) if isinstance(f, SourceFieldOauthConfig))
+        assert oauth_field.name == "mercado_pago_integration_id"
+        assert oauth_field.kind == "mercado-pago"
+        # `offline_access` is what makes Mercado Pago issue a refresh token, so a connection without
+        # it silently stops syncing after the access token expires.
+        assert oauth_field.requiredScopes == REQUIRED_SCOPES
 
-    @parameterized.expand([("access_token",), ("client_secret",), ("refresh_token",)])
-    def test_credential_fields_are_secret(self, field_name: str) -> None:
+    def test_access_token_option_stays_available_and_secret(self) -> None:
         select = next(f for f in self.source.get_source_config.fields if isinstance(f, SourceFieldSelectConfig))
-        fields = [
-            f for option in select.options for f in (option.fields or []) if isinstance(f, SourceFieldInputConfig)
-        ]
-        field = next(f for f in fields if f.name == field_name)
+        option = next(o for o in select.options if o.value == "access_token")
+        field = next(f for f in (option.fields or []) if isinstance(f, SourceFieldInputConfig))
+        assert field.name == "access_token"
         assert field.secret is True
         assert field.type.value == "password"
 
@@ -137,7 +141,9 @@ class TestMercadoPagoSource:
             ("401 Client Error: Unauthorized for url: https://api.mercadopago.com/v1/payments/search",),
             ("403 Client Error: Forbidden for url: https://api.mercadopago.com/preapproval/search",),
             (MISSING_ACCESS_TOKEN_ERROR,),
-            (MISSING_OAUTH_CREDENTIALS_ERROR,),
+            (MISSING_INTEGRATION_ERROR,),
+            (INTEGRATION_TOKEN_MISSING_ERROR,),
+            ("Integration not found: 42",),
         ]
     )
     def test_non_retryable_errors_match_permanent_failures(self, observed_error: str) -> None:
@@ -152,47 +158,34 @@ class TestMercadoPagoSource:
     def test_non_retryable_errors_ignore_transient_failures(self, observed_error: str) -> None:
         assert not any(key in observed_error for key in self.source.get_non_retryable_errors())
 
-    @parameterized.expand(
-        [
-            (
-                "access_token",
-                _config(),
-                MercadoPagoCredentials(access_token="APP_USR-secret-token"),
-            ),
-            (
-                "oauth",
-                _config(
-                    selection="oauth",
-                    access_token=None,
-                    client_id="client-id",
-                    client_secret="client-secret",
-                    refresh_token="TG-refresh",
-                ),
-                MercadoPagoCredentials(
-                    client_id="client-id", client_secret="client-secret", refresh_token="TG-refresh"
-                ),
-            ),
-        ]
-    )
-    def test_credentials_follow_the_selected_auth_method(
-        self, _name: str, config: MercadoPagoSourceConfig, expected: MercadoPagoCredentials
-    ) -> None:
-        assert self.source._get_credentials(config) == expected
+    def test_pasted_access_token_is_used_as_is(self) -> None:
+        assert self.source._resolve_access_token(self.config, self.team_id) == "APP_USR-secret-token"
+
+    @mock.patch(INTEGRATION_PATCH)
+    def test_connected_account_uses_the_integrations_access_token(self, mock_integration: mock.MagicMock) -> None:
+        mock_integration.return_value = mock.MagicMock(access_token="APP_USR-from-integration")
+        assert self.source._resolve_access_token(_oauth_config(), self.team_id) == "APP_USR-from-integration"
+        mock_integration.assert_called_once_with(42, self.team_id)
 
     @parameterized.expand(
         [
             ("no_access_token", _config(access_token=None), MISSING_ACCESS_TOKEN_ERROR),
-            (
-                "oauth_missing_refresh_token",
-                _config(selection="oauth", access_token=None, client_id="a", client_secret="b"),
-                MISSING_OAUTH_CREDENTIALS_ERROR,
-            ),
+            ("no_integration", _oauth_config(integration_id=None), MISSING_INTEGRATION_ERROR),
         ]
     )
-    def test_incomplete_credentials_are_rejected(
-        self, _name: str, config: MercadoPagoSourceConfig, expected_error: str
+    def test_incomplete_credentials_are_rejected_with_a_curated_message(
+        self, _name: str, config: MercadoPagoSourceConfig, expected_key: str
     ) -> None:
-        assert self.source.validate_credentials(config, self.team_id) == (False, expected_error)
+        is_valid, message = self.source.validate_credentials(config, self.team_id)
+        assert is_valid is False
+        assert message == self.source.get_non_retryable_errors()[expected_key]
+
+    @mock.patch(INTEGRATION_PATCH)
+    def test_deleted_integration_is_reported_without_leaking_the_id(self, mock_integration: mock.MagicMock) -> None:
+        mock_integration.side_effect = ValueError("Integration not found: 42")
+        is_valid, message = self.source.validate_credentials(_oauth_config(), self.team_id)
+        assert is_valid is False
+        assert message == self.source.get_non_retryable_errors()["Integration not found"]
 
     @mock.patch(
         "products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.source.validate_mercado_pago_credentials"
@@ -201,7 +194,7 @@ class TestMercadoPagoSource:
         mock_validate.return_value = (False, "Your Mercado Pago credentials are invalid or expired")
         result = self.source.validate_credentials(self.config, self.team_id, schema_name="payments")
         assert result == (False, "Your Mercado Pago credentials are invalid or expired")
-        mock_validate.assert_called_once_with(MercadoPagoCredentials(access_token="APP_USR-secret-token"), "payments")
+        mock_validate.assert_called_once_with("APP_USR-secret-token", "payments")
 
     def test_get_resumable_source_manager_binds_resume_config(self) -> None:
         manager = self.source.get_resumable_source_manager(mock.MagicMock())
@@ -224,7 +217,7 @@ class TestMercadoPagoSource:
         self.source.source_for_pipeline(self.config, manager, inputs)
 
         kwargs = mock_source.call_args.kwargs
-        assert kwargs["credentials"] == MercadoPagoCredentials(access_token="APP_USR-secret-token")
+        assert kwargs["access_token"] == "APP_USR-secret-token"
         assert kwargs["endpoint"] == "payments"
         assert kwargs["team_id"] == self.team_id
         assert kwargs["job_id"] == "job-123"
@@ -232,6 +225,33 @@ class TestMercadoPagoSource:
         assert kwargs["should_use_incremental_field"] is True
         assert kwargs["db_incremental_field_last_value"] == "2026-01-01T00:00:00Z"
         assert kwargs["incremental_field"] == "date_last_updated"
+
+    @mock.patch(
+        "products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.source.mercado_pago_source"
+    )
+    @mock.patch(INTEGRATION_PATCH)
+    def test_source_for_pipeline_syncs_with_the_connected_accounts_token(
+        self, mock_integration: mock.MagicMock, mock_source: mock.MagicMock
+    ) -> None:
+        mock_integration.return_value = mock.MagicMock(access_token="APP_USR-from-integration")
+        inputs = mock.MagicMock()
+        inputs.schema_name = "payments"
+        inputs.team_id = self.team_id
+
+        self.source.source_for_pipeline(_oauth_config(), mock.MagicMock(), inputs)
+
+        assert mock_source.call_args.kwargs["access_token"] == "APP_USR-from-integration"
+
+    @mock.patch(INTEGRATION_PATCH)
+    def test_source_for_pipeline_fails_when_the_integration_has_no_token(
+        self, mock_integration: mock.MagicMock
+    ) -> None:
+        mock_integration.return_value = mock.MagicMock(access_token=None)
+        inputs: Any = mock.MagicMock()
+        inputs.schema_name = "payments"
+        inputs.team_id = self.team_id
+        with pytest.raises(ValueError, match=INTEGRATION_TOKEN_MISSING_ERROR):
+            self.source.source_for_pipeline(_oauth_config(), mock.MagicMock(), inputs)
 
     @mock.patch(
         "products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.source.mercado_pago_source"

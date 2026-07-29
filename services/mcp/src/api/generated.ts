@@ -5476,6 +5476,7 @@ export namespace Schemas {
       Github: 'github',
       Gitlab: 'gitlab',
       MetaAds: 'meta-ads',
+      MercadoPago: 'mercado-pago',
       Clickup: 'clickup',
       RedditAds: 'reddit-ads',
       Databricks: 'databricks',
@@ -35833,6 +35834,7 @@ export namespace Schemas {
      * * `jira` - Jira
      * * `linear` - Linear
      * * `linkedin-ads` - Linkedin Ads
+     * * `mercado-pago` - Mercado Pago
      * * `meta-ads` - Meta Ads
      * * `pinterest-ads` - Pinterest Ads
      * * `postgresql` - Postgresql
@@ -35879,6 +35881,7 @@ export namespace Schemas {
       Jira: 'jira',
       Linear: 'linear',
       LinkedinAds: 'linkedin-ads',
+      MercadoPago: 'mercado-pago',
       MetaAds: 'meta-ads',
       PinterestAds: 'pinterest-ads',
       Postgresql: 'postgresql',
@@ -35925,6 +35928,7 @@ export namespace Schemas {
        * * `jira` - Jira
        * * `linear` - Linear
        * * `linkedin-ads` - Linkedin Ads
+       * * `mercado-pago` - Mercado Pago
        * * `meta-ads` - Meta Ads
        * * `pinterest-ads` - Pinterest Ads
        * * `postgresql` - Postgresql
@@ -77145,6 +77149,7 @@ export namespace Schemas {
      * * `jira` - Jira
      * * `linear` - Linear
      * * `linkedin-ads` - Linkedin Ads
+     * * `mercado-pago` - Mercado Pago
      * * `meta-ads` - Meta Ads
      * * `pinterest-ads` - Pinterest Ads
      * * `postgresql` - Postgresql
@@ -77202,6 +77207,7 @@ export namespace Schemas {
       Jira: 'jira',
       Linear: 'linear',
       LinkedinAds: 'linkedin-ads',
+      MercadoPago: 'mercado-pago',
       MetaAds: 'meta-ads',
       PinterestAds: 'pinterest-ads',
       Postgresql: 'postgresql',
