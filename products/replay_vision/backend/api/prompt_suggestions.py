@@ -47,7 +47,7 @@ from products.replay_vision.backend.prompt_suggestions import (
     generate_prompt_suggestion,
     labels_fingerprint,
 )
-from products.replay_vision.backend.quota import compute_quota_snapshot
+from products.replay_vision.backend.quota import compute_quota_snapshot, compute_scanner_budget
 from products.replay_vision.backend.temporal.constants import (
     EVALUATE_PROMPT_SUGGESTION_WORKFLOW_NAME,
     build_evaluate_prompt_suggestion_workflow_id,
@@ -387,9 +387,9 @@ class ReplayScannerPromptSuggestionViewSet(
             "`session_limit` controls how many rated sessions are re-run (thumbs-down prioritized, up to "
             "`evaluation_session_cap`). Each successful re-run charges credits like a normal observation of "
             "the same model. The request is refused with 402 when the planned credits exceed what is left of "
-            "the monthly limit. Monitor and classifier scanners get a kept/fixed/regressed classification, "
-            "while scorer and summarizer scanners show the raw before and after output. Requires session "
-            "recording edit access."
+            "the monthly limit, either the org's or this scanner's own. Monitor and classifier scanners get a "
+            "kept/fixed/regressed classification, while scorer and summarizer scanners show the raw before "
+            "and after output. Requires session recording edit access."
         ),
     )
     @action(detail=True, methods=["post"], required_scopes=["replay_scanner:write", "session_recording:read"])
@@ -429,6 +429,16 @@ class ReplayScannerPromptSuggestionViewSet(
                     f"monthly Replay Vision credit limit of {quota.credit_limit or 0:,} remain. Lower the test "
                     f"session count or wait for the reset on "
                     f"{quota.period_end.strftime('%b')} {quota.period_end.day}."
+                )
+            )
+        # A test re-runs the scanner, so it draws from the scanner's own limit too, on top of the org's.
+        scanner_budget = compute_scanner_budget(scanner)
+        if scanner_budget.would_exceed(planned_credits):
+            raise QuotaLimitExceeded(
+                detail=(
+                    f"This test would use {planned_credits:,} credits but this scanner has "
+                    f"{scanner_budget.remaining or 0:,} left of its {scanner_budget.credit_limit or 0:,} credit "
+                    f"limit for this period. Lower the test session count or raise the scanner's limit."
                 )
             )
 
