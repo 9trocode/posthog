@@ -1,11 +1,14 @@
+from typing import Literal
+
 import pytest
 from unittest import mock
 
-from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldSelectConfig
+from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldOauthConfig, SourceFieldSelectConfig
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.clover.clover import CloverResumeConfig
 from products.warehouse_sources.backend.temporal.data_imports.sources.clover.settings import (
     CLOVER_ENDPOINTS,
+    CLOVER_REGION_INTEGRATION_KINDS,
     ENDPOINTS,
     FILTERABLE_TIME_FIELDS,
     INCREMENTAL_FIELDS,
@@ -18,24 +21,27 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.generated_
 )
 from products.warehouse_sources.backend.types import ExternalDataSourceType, IncrementalFieldType
 
+CloverOauthSelection = Literal["oauth_na", "oauth_eu", "oauth_latam", "oauth_sandbox"]
+
 MERCHANT_ID = "6MRDFDQMRSSTZ"
 SOURCE_MODULE = "products.warehouse_sources.backend.temporal.data_imports.sources.clover.source"
 
 
 def _token_config() -> CloverSourceConfig:
     return CloverSourceConfig(
-        merchant_id=MERCHANT_ID,
-        region="na",
-        auth_type=CloverAuthTypeConfig(selection="api_token", api_token="tok"),
+        auth_type=CloverAuthTypeConfig(selection="api_token", region="na", merchant_id=MERCHANT_ID, api_token="tok")
     )
 
 
-def _oauth_config() -> CloverSourceConfig:
-    return CloverSourceConfig(
-        merchant_id=MERCHANT_ID,
-        region="eu",
-        auth_type=CloverAuthTypeConfig(selection="oauth", client_id="app", refresh_token="refresh"),
-    )
+def _oauth_config(selection: CloverOauthSelection = "oauth_eu") -> CloverSourceConfig:
+    return CloverSourceConfig(auth_type=CloverAuthTypeConfig(selection=selection, clover_integration_id=7))
+
+
+def _integration(kind: str = "clover-eu", merchant_id: str | None = MERCHANT_ID) -> mock.MagicMock:
+    integration = mock.MagicMock()
+    integration.kind = kind
+    integration.config = {"merchant_id": merchant_id} if merchant_id else {}
+    return integration
 
 
 class TestCloverSource:
@@ -56,57 +62,52 @@ class TestCloverSource:
         assert not config.unreleasedSource
         assert config.iconPath == "/static/services/clover.png"
 
-    def test_fields_cover_region_merchant_and_auth(self) -> None:
-        fields = self.source.get_source_config.fields
-        assert [f.name for f in fields] == ["region", "merchant_id", "auth_type"]
-
-        region = next(f for f in fields if isinstance(f, SourceFieldSelectConfig) and f.name == "region")
-        assert [option.value for option in region.options] == ["na", "eu", "latam", "sandbox"]
-
-        merchant = next(f for f in fields if isinstance(f, SourceFieldInputConfig))
-        assert merchant.required is True
-        assert merchant.secret is False
-
-    @pytest.mark.parametrize(
-        "option_value, expected_secret_fields",
-        [
-            ("api_token", {"api_token"}),
-            ("oauth", {"refresh_token"}),
-        ],
-    )
-    def test_auth_option_secrets_are_password_inputs(self, option_value: str, expected_secret_fields: set[str]) -> None:
-        auth = next(
+    def _auth_field(self) -> SourceFieldSelectConfig:
+        return next(
             f
             for f in self.source.get_source_config.fields
             if isinstance(f, SourceFieldSelectConfig) and f.name == "auth_type"
         )
-        option = next(o for o in auth.options if o.value == option_value)
+
+    def test_every_region_offers_its_own_oauth_app(self) -> None:
+        # A Clover app can only authorize merchants in the region it was registered in, so each
+        # region's Connect button must be bound to that region's integration kind.
+        auth = self._auth_field()
+        oauth_kinds = {
+            field.kind
+            for option in auth.options
+            for field in option.fields or []
+            if isinstance(field, SourceFieldOauthConfig)
+        }
+        assert oauth_kinds == set(CLOVER_REGION_INTEGRATION_KINDS.values())
+        assert auth.defaultValue == "oauth_na"
+
+    def test_api_token_option_keeps_region_merchant_and_secret_token(self) -> None:
+        option = next(o for o in self._auth_field().options if o.value == "api_token")
         assert option.fields is not None
 
-        secrets = {
-            f.name for f in option.fields if isinstance(f, SourceFieldInputConfig) and f.secret and f.name is not None
-        }
-        assert secrets == expected_secret_fields
+        region = next(f for f in option.fields if isinstance(f, SourceFieldSelectConfig))
+        assert [o.value for o in region.options] == list(CLOVER_REGION_INTEGRATION_KINDS)
 
-    def test_auth_sub_fields_are_optional_so_either_option_validates(self) -> None:
+        secrets = {f.name for f in option.fields if isinstance(f, SourceFieldInputConfig) and f.secret}
+        assert secrets == {"api_token"}
+
+    def test_credential_sub_fields_are_optional_so_either_option_validates(self) -> None:
         # The generator flattens every option's sub-fields into one config class, so marking any
-        # of them required would make the other option's credentials mandatory too.
-        auth = next(
-            f
-            for f in self.source.get_source_config.fields
-            if isinstance(f, SourceFieldSelectConfig) and f.name == "auth_type"
-        )
-        for option in auth.options:
+        # credential required would make the other option's credentials mandatory too.
+        for option in self._auth_field().options:
             for field in option.fields or []:
-                assert isinstance(field, SourceFieldInputConfig)
-                assert field.required is False
+                if isinstance(field, SourceFieldInputConfig | SourceFieldOauthConfig):
+                    assert field.required is False
 
     @pytest.mark.parametrize(
         "observed_error",
         [
             "401 Client Error: Unauthorized for url: https://api.clover.com/v3/merchants/M/orders",
             "403 Client Error: Forbidden for url: https://api.eu.clover.com/v3/merchants/M/items",
-            "Clover rejected the OAuth token refresh (HTTP 401). [clover_token_error]",
+            "Missing Clover integration ID",
+            "Integration not found: 7",
+            "Clover access token not found",
         ],
     )
     def test_non_retryable_errors_match_permanent_failures(self, observed_error: str) -> None:
@@ -160,28 +161,56 @@ class TestCloverSource:
         assert {table["name"] for table in tables} == set(ENDPOINTS)
         assert all(table["description"] for table in tables)
 
-    @pytest.mark.parametrize(
-        "config_factory, expected",
-        [
-            (_token_config, {"api_token": "tok", "client_id": None, "refresh_token": None}),
-            (_oauth_config, {"api_token": None, "client_id": "app", "refresh_token": "refresh"}),
-        ],
-    )
     @mock.patch(f"{SOURCE_MODULE}.validate_clover_credentials", return_value=(True, None))
-    def test_validate_credentials_unpacks_the_selected_auth_option(
-        self,
-        mock_validate: mock.MagicMock,
-        config_factory: object,
-        expected: dict[str, str | None],
-    ) -> None:
-        config = config_factory()  # type: ignore[operator]
-
-        assert self.source.validate_credentials(config, self.team_id) == (True, None)
+    def test_validate_credentials_uses_the_pasted_api_token(self, mock_validate: mock.MagicMock) -> None:
+        assert self.source.validate_credentials(self.config, self.team_id) == (True, None)
 
         kwargs = mock_validate.call_args.kwargs
-        assert {key: kwargs[key] for key in expected} == expected
+        assert kwargs["region"] == "na"
         assert kwargs["merchant_id"] == MERCHANT_ID
-        assert kwargs["region"] == config.region
+        assert kwargs["auth"].token == "tok"
+
+    @pytest.mark.parametrize(
+        "integration_kind, expected_region",
+        [("clover", "na"), ("clover-eu", "eu"), ("clover-latam", "latam"), ("clover-sandbox", "sandbox")],
+    )
+    @mock.patch(f"{SOURCE_MODULE}.resolve_clover_oauth_token", return_value="access")
+    @mock.patch(f"{SOURCE_MODULE}.validate_clover_credentials", return_value=(True, None))
+    def test_oauth_path_takes_region_and_merchant_from_the_integration(
+        self,
+        mock_validate: mock.MagicMock,
+        mock_resolve: mock.MagicMock,
+        integration_kind: str,
+        expected_region: str,
+    ) -> None:
+        # The stored region selection is not trusted: the integration's kind is what pins the Clover
+        # app and host the token was issued against, and the merchant is recorded on the callback.
+        with mock.patch.object(CloverSource, "get_oauth_integration", return_value=_integration(integration_kind)):
+            assert self.source.validate_credentials(_oauth_config(), self.team_id) == (True, None)
+
+        kwargs = mock_validate.call_args.kwargs
+        assert kwargs["region"] == expected_region
+        assert kwargs["merchant_id"] == MERCHANT_ID
+        assert kwargs["auth"].token == "access"
+
+    @pytest.mark.parametrize(
+        "integration_id, integration, expected_message",
+        [
+            (None, _integration(), "Clover is not connected"),
+            (7, _integration(merchant_id=None), "did not record a merchant"),
+        ],
+    )
+    def test_validate_credentials_reports_a_broken_connection(
+        self, integration_id: int | None, integration: mock.MagicMock, expected_message: str
+    ) -> None:
+        config = CloverSourceConfig(
+            auth_type=CloverAuthTypeConfig(selection="oauth_eu", clover_integration_id=integration_id)
+        )
+        with mock.patch.object(CloverSource, "get_oauth_integration", return_value=integration):
+            valid, message = self.source.validate_credentials(config, self.team_id)
+
+        assert valid is False
+        assert message is not None and expected_message in message
 
     @pytest.mark.parametrize(
         "schema_name, expected_accept_forbidden",
@@ -196,13 +225,16 @@ class TestCloverSource:
 
     @mock.patch(f"{SOURCE_MODULE}.clover_endpoint_permissions", return_value={"orders": None})
     def test_get_endpoint_permissions_plumbs_credentials(self, mock_permissions: mock.MagicMock) -> None:
-        assert self.source.get_endpoint_permissions(_oauth_config(), self.team_id, ["orders"]) == {"orders": None}
+        assert self.source.get_endpoint_permissions(self.config, self.team_id, ["orders"]) == {"orders": None}
 
         kwargs = mock_permissions.call_args.kwargs
         assert kwargs["endpoints"] == ["orders"]
-        assert kwargs["client_id"] == "app"
-        assert kwargs["refresh_token"] == "refresh"
-        assert kwargs["api_token"] is None
+        assert kwargs["auth"].token == "tok"
+
+    def test_get_endpoint_permissions_never_blocks_the_picker(self) -> None:
+        # A broken connection is reported by validate_credentials; the schema picker must not fail.
+        config = CloverSourceConfig(auth_type=CloverAuthTypeConfig(selection="oauth_na"))
+        assert self.source.get_endpoint_permissions(config, self.team_id, ["orders"]) == {"orders": None}
 
     def test_get_resumable_source_manager_binds_resume_config(self) -> None:
         manager = self.source.get_resumable_source_manager(mock.MagicMock())
@@ -224,11 +256,28 @@ class TestCloverSource:
         assert kwargs["region"] == "na"
         assert kwargs["merchant_id"] == MERCHANT_ID
         assert kwargs["endpoint"] == "orders"
-        assert kwargs["api_token"] == "tok"
+        assert kwargs["auth"].token == "tok"
         assert kwargs["resumable_source_manager"] is manager
         # The user's chosen cursor must reach the transport, not a per-endpoint default.
         assert kwargs["incremental_field"] == "modifiedTime"
         assert kwargs["db_incremental_field_last_value"] == 1_700_000_000_000
+
+    @mock.patch(f"{SOURCE_MODULE}.resolve_clover_oauth_token", return_value="access")
+    @mock.patch(f"{SOURCE_MODULE}.clover_source")
+    def test_source_for_pipeline_syncs_with_the_integration_access_token(
+        self, mock_source: mock.MagicMock, mock_resolve: mock.MagicMock
+    ) -> None:
+        inputs = mock.MagicMock()
+        inputs.schema_name = "orders"
+        inputs.should_use_incremental_field = False
+
+        with mock.patch.object(CloverSource, "get_oauth_integration", return_value=_integration()):
+            self.source.source_for_pipeline(_oauth_config(), mock.MagicMock(), inputs)
+
+        kwargs = mock_source.call_args.kwargs
+        assert kwargs["region"] == "eu"
+        assert kwargs["merchant_id"] == MERCHANT_ID
+        assert kwargs["auth"].token == "access"
 
     @mock.patch(f"{SOURCE_MODULE}.clover_source")
     def test_source_for_pipeline_omits_last_value_on_full_refresh(self, mock_source: mock.MagicMock) -> None:

@@ -8,14 +8,13 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common imp
 
 @config.config
 class CloverAuthTypeConfig(config.Config):
-    selection: Literal["api_token", "oauth"] = "api_token"
+    clover_integration_id: int | None = config.value(converter=config.str_to_optional_int, default_factory=lambda: None)
+    selection: Literal["oauth_na", "oauth_eu", "oauth_latam", "oauth_sandbox", "api_token"] = "oauth_na"
+    region: Literal["na", "eu", "latam", "sandbox"] = config.value(default="na")
+    merchant_id: str | None = None
     api_token: str | None = None
-    client_id: str | None = None
-    refresh_token: str | None = None
 
 
 @config.config
 class CloverSourceConfig(config.Config):
-    merchant_id: str
     auth_type: CloverAuthTypeConfig
-    region: Literal["na", "eu", "latam", "sandbox"] = config.value(default="na")

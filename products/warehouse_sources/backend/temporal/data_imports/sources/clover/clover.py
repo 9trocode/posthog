@@ -1,19 +1,17 @@
 import re
-import time
 import dataclasses
 from datetime import UTC, date, datetime
 from typing import Any, Optional
 
 import requests
 from dateutil import parser as dateutil_parser
-from requests import PreparedRequest, Request, Response
+from requests import Request, Response
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.clover.settings import (
     CLOVER_ENDPOINTS,
     CLOVER_REGION_HOSTS,
     FILTER_WINDOW_MS,
-    OAUTH_REFRESH_PATH,
     PAGE_SIZE,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.http import make_tracked_session
@@ -33,14 +31,6 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.res
 # interpolated into a request path so a crafted value can't traverse out of /v3/merchants/.
 MERCHANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9]+$")
 
-# Stable substring on permanent token-exchange failures, matched by `get_non_retryable_errors`.
-TOKEN_ERROR_MARKER = "[clover_token_error]"
-
-# Clover access tokens live ~30 minutes; re-mint a minute early so one isn't rejected mid-flight.
-TOKEN_EXPIRY_BUFFER_SECONDS = 60
-# Used when the refresh response omits its expiry field, so a long sync still re-mints.
-DEFAULT_TOKEN_TTL_SECONDS = 15 * 60
-
 CONNECT_TIMEOUT_SECONDS = 10
 READ_TIMEOUT_SECONDS = 120
 PROBE_READ_TIMEOUT_SECONDS = 15
@@ -50,13 +40,6 @@ PROBE_READ_TIMEOUT_SECONDS = 15
 class CloverResumeConfig:
     # CloverPaginator snapshot: {"offset": int, "window_start_ms": int | None}.
     paginator_state: dict[str, Any]
-
-
-class CloverTokenError(Exception):
-    """The OAuth v2 refresh exchange failed permanently — retrying won't fix it."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(f"{message} {TOKEN_ERROR_MARKER}")
 
 
 def base_url(region: str) -> str:
@@ -97,90 +80,6 @@ def to_epoch_ms(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-class CloverAuth(AuthConfigBase):
-    """Bearer auth for both credential shapes Clover supports.
-
-    A merchant-generated API token is permanent and sent as-is. An OAuth v2 install instead gets a
-    short-lived access token, which this mints lazily from the customer's app id + refresh token
-    and re-mints on expiry. Clover's refresh response declares an absolute
-    ``access_token_expiration`` (epoch seconds) rather than a TTL.
-    """
-
-    def __init__(
-        self,
-        host: str,
-        api_token: Optional[str] = None,
-        client_id: Optional[str] = None,
-        refresh_token: Optional[str] = None,
-    ) -> None:
-        self._host = host
-        self._api_token = api_token
-        self._client_id = client_id
-        self._refresh_token = refresh_token
-        self._access_token: Optional[str] = None
-        self._expires_at: float = 0.0
-
-    def __call__(self, request: PreparedRequest) -> PreparedRequest:
-        request.headers["Authorization"] = f"Bearer {self.token()}"
-        return request
-
-    def secret_values(self) -> tuple[str, ...]:
-        # The minted access token is included, but callers fix their redaction set at
-        # construction — before the first mint — so it is only reliably masked by the tracked
-        # transport's Authorization header denylist. Keep the token on that header.
-        return tuple(v for v in (self._api_token, self._refresh_token, self._access_token) if v)
-
-    def token(self) -> str:
-        if self._api_token:
-            return self._api_token
-        if self._access_token is None or time.time() >= self._expires_at:
-            self._mint()
-        if self._access_token is None:
-            raise CloverTokenError("Clover did not return an access token")
-        return self._access_token
-
-    def _mint(self) -> None:
-        if not self._client_id or not self._refresh_token:
-            raise CloverTokenError("A Clover app ID and refresh token are required to mint an access token")
-
-        # capture=False: the response body carries the minted token, which the name-based sample
-        # scrubbers can't recognise. Redirects are refused so the refresh token can't be bounced
-        # to another origin. Transport retries still cover 429/5xx.
-        session = make_tracked_session(
-            redact_values=(self._refresh_token,),
-            allow_redirects=False,
-            capture=False,
-        )
-        response = session.post(
-            f"{self._host}{OAUTH_REFRESH_PATH}",
-            json={"client_id": self._client_id, "refresh_token": self._refresh_token},
-            timeout=(CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS),
-        )
-
-        if 300 <= response.status_code < 500 and response.status_code != 429:
-            raise CloverTokenError(
-                f"Clover rejected the OAuth token refresh (HTTP {response.status_code}). "
-                "Check the app ID and refresh token, and that the merchant has not uninstalled the app."
-            )
-        response.raise_for_status()
-
-        try:
-            payload = response.json()
-        except ValueError as e:
-            raise CloverTokenError("Clover returned a non-JSON response from the OAuth token endpoint") from e
-
-        token = payload.get("access_token") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token:
-            raise CloverTokenError("The Clover OAuth token response contained no access_token")
-
-        self._access_token = token
-        expiration = payload.get("access_token_expiration")
-        if isinstance(expiration, (int, float)) and not isinstance(expiration, bool):
-            self._expires_at = float(expiration) - TOKEN_EXPIRY_BUFFER_SECONDS
-        else:
-            self._expires_at = time.time() + DEFAULT_TOKEN_TTL_SECONDS
 
 
 class CloverPaginator(BasePaginator):
@@ -264,7 +163,7 @@ class CloverPaginator(BasePaginator):
         return f"CloverPaginator(offset={self._offset}, window_start_ms={self._window_start_ms})"
 
 
-def _tracked_session(auth: CloverAuth) -> requests.Session:
+def _tracked_session(auth: AuthConfigBase) -> requests.Session:
     """Session every Clover request runs on.
 
     ``capture=False``: orders, payments and customers carry names, emails, phone numbers and
@@ -272,15 +171,6 @@ def _tracked_session(auth: CloverAuth) -> requests.Session:
     stay out of HTTP sample capture (requests are still metered and logged).
     """
     return make_tracked_session(redact_values=auth.secret_values(), capture=False)
-
-
-def _build_auth(
-    host: str,
-    api_token: Optional[str],
-    client_id: Optional[str],
-    refresh_token: Optional[str],
-) -> CloverAuth:
-    return CloverAuth(host=host, api_token=api_token, client_id=client_id, refresh_token=refresh_token)
 
 
 def _merchant_path(merchant_id: str, path: str) -> str:
@@ -304,9 +194,7 @@ def resolve_time_field(endpoint: str, incremental_field: Optional[str]) -> Optio
 def validate_credentials(
     region: str,
     merchant_id: str,
-    api_token: Optional[str] = None,
-    client_id: Optional[str] = None,
-    refresh_token: Optional[str] = None,
+    auth: AuthConfigBase,
     accept_forbidden: bool = True,
 ) -> tuple[bool, str | None]:
     """One cheap probe of GET /v3/merchants/{mId} to confirm the credentials are genuine.
@@ -317,28 +205,23 @@ def validate_credentials(
     """
     if not merchant_id or not MERCHANT_ID_PATTERN.match(merchant_id):
         return False, "Clover merchant ID must be alphanumeric. Copy it from your Clover dashboard."
-    if not api_token and not (client_id and refresh_token):
-        return False, "Enter either a Clover API token or an app ID and refresh token."
 
     try:
         host = base_url(region)
     except ValueError as e:
         return False, str(e)
 
-    auth = _build_auth(host, api_token, client_id, refresh_token)
     try:
         response = _tracked_session(auth).get(
             f"{host}/v3/merchants/{merchant_id}",
             auth=auth,
             timeout=(CONNECT_TIMEOUT_SECONDS, PROBE_READ_TIMEOUT_SECONDS),
         )
-    except CloverTokenError as e:
-        return False, str(e)
     except requests.exceptions.RequestException as e:
         return False, str(e)
 
     if response.status_code == 401:
-        return False, "Clover rejected the credentials. Check the API token (or refresh token) and try again."
+        return False, "Clover rejected the credentials. Reconnect your Clover account, or check the API token."
     if response.status_code == 403:
         if accept_forbidden:
             return True, None
@@ -355,9 +238,7 @@ def endpoint_permissions(
     region: str,
     merchant_id: str,
     endpoints: list[str],
-    api_token: Optional[str] = None,
-    client_id: Optional[str] = None,
-    refresh_token: Optional[str] = None,
+    auth: AuthConfigBase,
 ) -> dict[str, str | None]:
     """Per-endpoint read access, since a merchant grants Clover permissions entity by entity.
 
@@ -369,7 +250,6 @@ def endpoint_permissions(
     except ValueError:
         return dict.fromkeys(endpoints)
 
-    auth = _build_auth(host, api_token, client_id, refresh_token)
     session = _tracked_session(auth)
     results: dict[str, str | None] = {}
 
@@ -385,7 +265,7 @@ def endpoint_permissions(
                 auth=auth,
                 timeout=(CONNECT_TIMEOUT_SECONDS, PROBE_READ_TIMEOUT_SECONDS),
             )
-        except (CloverTokenError, ValueError, requests.exceptions.RequestException):
+        except (ValueError, requests.exceptions.RequestException):
             results[name] = None
             continue
 
@@ -404,16 +284,13 @@ def clover_source(
     team_id: int,
     job_id: str,
     resumable_source_manager: ResumableSourceManager[CloverResumeConfig],
-    api_token: Optional[str] = None,
-    client_id: Optional[str] = None,
-    refresh_token: Optional[str] = None,
+    auth: AuthConfigBase,
     incremental_field: Optional[str] = None,
     should_use_incremental_field: bool = False,
     db_incremental_field_last_value: Optional[Any] = None,
 ) -> SourceResponse:
     config = CLOVER_ENDPOINTS[endpoint]
     host = base_url(region)
-    auth = _build_auth(host, api_token, client_id, refresh_token)
 
     watermark_ms = to_epoch_ms(db_incremental_field_last_value) if should_use_incremental_field else None
     time_field = resolve_time_field(endpoint, incremental_field) if watermark_ms is not None else None

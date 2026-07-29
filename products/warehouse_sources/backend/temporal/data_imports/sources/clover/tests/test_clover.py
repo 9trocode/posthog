@@ -10,9 +10,7 @@ import requests
 from requests import Response
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.clover.clover import (
-    CloverAuth,
     CloverResumeConfig,
-    CloverTokenError,
     base_url,
     clover_source,
     endpoint_permissions,
@@ -26,9 +24,10 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.clover.set
     FILTER_WINDOW_MS,
     PAGE_SIZE,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.auth import BearerTokenAuth
 
-# Every Clover request — the pipeline client session, the credential probe, the per-endpoint
-# permission probes and the OAuth refresh — is built by make_tracked_session in the clover module.
+# Every Clover request — the pipeline client session, the credential probe and the per-endpoint
+# permission probes — is built by make_tracked_session in the clover module.
 SESSION_PATCH = "products.warehouse_sources.backend.temporal.data_imports.sources.clover.clover.make_tracked_session"
 NOW_PATCH = "products.warehouse_sources.backend.temporal.data_imports.sources.clover.clover._now_ms"
 
@@ -80,7 +79,7 @@ def _source(endpoint: str, manager: mock.MagicMock, **kwargs: Any) -> Any:
         team_id=1,
         job_id="job-1",
         resumable_source_manager=manager,
-        api_token="tok",
+        auth=BearerTokenAuth("tok"),
         **kwargs,
     )
 
@@ -112,7 +111,7 @@ class TestCloverTransport:
         [
             ("na", "https://api.clover.com"),
             ("eu", "https://api.eu.clover.com"),
-            ("latam", "https://api.clover.com.br"),
+            ("latam", "https://api.la.clover.com"),
             ("sandbox", "https://apisandbox.dev.clover.com"),
         ],
     )
@@ -149,7 +148,7 @@ class TestCloverTransport:
                 team_id=1,
                 job_id="job-1",
                 resumable_source_manager=_make_manager(),
-                api_token="tok",
+                auth=BearerTokenAuth("tok"),
             )
 
     @mock.patch(SESSION_PATCH)
@@ -355,84 +354,6 @@ class TestResponseShape:
         assert response.sort_mode == "desc"
 
 
-class TestCloverAuth:
-    @mock.patch(SESSION_PATCH)
-    def test_api_token_is_used_verbatim(self, mock_session: mock.MagicMock) -> None:
-        auth = CloverAuth(host="https://api.clover.com", api_token="tok")
-        assert auth.token() == "tok"
-        mock_session.assert_not_called()
-
-    @mock.patch(SESSION_PATCH)
-    def test_refresh_token_mints_and_caches(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.return_value = _response(
-            {"access_token": "minted", "access_token_expiration": 2_000_000_000}
-        )
-        auth = CloverAuth(host="https://api.clover.com", client_id="app", refresh_token="refresh")
-
-        assert auth.token() == "minted"
-        assert auth.token() == "minted"
-        # A live token is reused rather than re-minted on every request.
-        assert mock_session.return_value.post.call_count == 1
-        call = mock_session.return_value.post.call_args
-        assert call.args[0] == "https://api.clover.com/oauth/v2/refresh"
-        assert call.kwargs["json"] == {"client_id": "app", "refresh_token": "refresh"}
-        assert mock_session.call_args.kwargs["allow_redirects"] is False
-        assert mock_session.call_args.kwargs["capture"] is False
-
-    @mock.patch("time.time", return_value=2_000_000_000.0)
-    @mock.patch(SESSION_PATCH)
-    def test_expired_token_is_reminted(self, mock_session: mock.MagicMock, _time: mock.MagicMock) -> None:
-        mock_session.return_value.post.side_effect = [
-            _response({"access_token": "first", "access_token_expiration": 2_000_000_000}),
-            _response({"access_token": "second", "access_token_expiration": 2_100_000_000}),
-        ]
-        auth = CloverAuth(host="https://api.clover.com", client_id="app", refresh_token="refresh")
-
-        assert auth.token() == "first"
-        # The first token's absolute expiry is already in the past once the buffer is applied.
-        assert auth.token() == "second"
-
-    @mock.patch(SESSION_PATCH)
-    def test_missing_expiry_falls_back_to_short_ttl(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.return_value = _response({"access_token": "minted"})
-        auth = CloverAuth(host="https://api.clover.com", client_id="app", refresh_token="refresh")
-
-        assert auth.token() == "minted"
-        assert auth.token() == "minted"
-        assert mock_session.return_value.post.call_count == 1
-
-    @pytest.mark.parametrize("status_code", [400, 401, 403, 404])
-    @mock.patch(SESSION_PATCH)
-    def test_permanent_refresh_failures_raise_marked_error(
-        self, mock_session: mock.MagicMock, status_code: int
-    ) -> None:
-        mock_session.return_value.post.return_value = _response({"message": "nope"}, status_code=status_code)
-        auth = CloverAuth(host="https://api.clover.com", client_id="app", refresh_token="refresh")
-
-        with pytest.raises(CloverTokenError, match=r"\[clover_token_error\]"):
-            auth.token()
-
-    @mock.patch(SESSION_PATCH)
-    def test_token_response_without_access_token_raises(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.return_value = _response({"refresh_token": "only"})
-        auth = CloverAuth(host="https://api.clover.com", client_id="app", refresh_token="refresh")
-
-        with pytest.raises(CloverTokenError, match="no access_token"):
-            auth.token()
-
-    def test_missing_oauth_inputs_raise_before_any_request(self) -> None:
-        with pytest.raises(CloverTokenError, match="app ID and refresh token"):
-            CloverAuth(host="https://api.clover.com", client_id="app").token()
-
-    @mock.patch(SESSION_PATCH)
-    def test_secret_values_cover_every_credential(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.return_value = _response({"access_token": "minted"})
-        auth = CloverAuth(host="https://api.clover.com", client_id="app", refresh_token="refresh")
-        auth.token()
-
-        assert set(auth.secret_values()) == {"refresh", "minted"}
-
-
 class TestValidateCredentials:
     @pytest.mark.parametrize(
         "status_code, accept_forbidden, expected_valid",
@@ -452,62 +373,31 @@ class TestValidateCredentials:
         mock_session.return_value.get.return_value = _response({"id": MERCHANT_ID}, status_code=status_code)
 
         valid, _ = validate_credentials(
-            region="na", merchant_id=MERCHANT_ID, api_token="tok", accept_forbidden=accept_forbidden
+            region="na", merchant_id=MERCHANT_ID, auth=BearerTokenAuth("tok"), accept_forbidden=accept_forbidden
         )
         assert valid is expected_valid
 
-    @pytest.mark.parametrize(
-        "merchant_id, api_token, client_id, refresh_token, expected_error",
-        [
-            ("../evil", "tok", None, None, "alphanumeric"),
-            ("", "tok", None, None, "alphanumeric"),
-            (MERCHANT_ID, None, None, None, "API token"),
-            (MERCHANT_ID, None, "app", None, "API token"),
-        ],
-    )
+    @pytest.mark.parametrize("merchant_id", ["../evil", ""])
     @mock.patch(SESSION_PATCH)
-    def test_rejects_bad_input_without_calling_the_api(
-        self,
-        mock_session: mock.MagicMock,
-        merchant_id: str,
-        api_token: str | None,
-        client_id: str | None,
-        refresh_token: str | None,
-        expected_error: str,
+    def test_rejects_bad_merchant_id_without_calling_the_api(
+        self, mock_session: mock.MagicMock, merchant_id: str
     ) -> None:
-        valid, message = validate_credentials(
-            region="na",
-            merchant_id=merchant_id,
-            api_token=api_token,
-            client_id=client_id,
-            refresh_token=refresh_token,
-        )
+        valid, message = validate_credentials(region="na", merchant_id=merchant_id, auth=BearerTokenAuth("tok"))
 
         assert valid is False
-        assert message is not None and expected_error in message
+        assert message is not None and "alphanumeric" in message
         mock_session.assert_not_called()
 
     @mock.patch(SESSION_PATCH)
     def test_unknown_region_is_reported(self, mock_session: mock.MagicMock) -> None:
-        valid, message = validate_credentials(region="mars", merchant_id=MERCHANT_ID, api_token="tok")
+        valid, message = validate_credentials(region="mars", merchant_id=MERCHANT_ID, auth=BearerTokenAuth("tok"))
         assert valid is False
         assert message == "Unknown Clover region: mars"
 
     @mock.patch(SESSION_PATCH)
-    def test_token_refresh_failure_is_reported(self, mock_session: mock.MagicMock) -> None:
-        mock_session.return_value.post.return_value = _response({}, status_code=401)
-        mock_session.return_value.get.side_effect = lambda *a, **kw: kw["auth"].token()
-
-        valid, message = validate_credentials(
-            region="na", merchant_id=MERCHANT_ID, client_id="app", refresh_token="refresh"
-        )
-        assert valid is False
-        assert message is not None and "clover_token_error" in message
-
-    @mock.patch(SESSION_PATCH)
     def test_network_error_is_reported(self, mock_session: mock.MagicMock) -> None:
         mock_session.return_value.get.side_effect = requests.exceptions.ConnectionError("boom")
-        valid, message = validate_credentials(region="na", merchant_id=MERCHANT_ID, api_token="tok")
+        valid, message = validate_credentials(region="na", merchant_id=MERCHANT_ID, auth=BearerTokenAuth("tok"))
         assert valid is False
         assert message == "boom"
 
@@ -525,7 +415,7 @@ class TestEndpointPermissions:
             region="na",
             merchant_id=MERCHANT_ID,
             endpoints=["orders", "payments", "items"],
-            api_token="tok",
+            auth=BearerTokenAuth("tok"),
         )
 
         assert result["orders"] is None
@@ -537,7 +427,7 @@ class TestEndpointPermissions:
     def test_probe_uses_a_single_row_and_the_merchant_path(self, mock_session: mock.MagicMock) -> None:
         mock_session.return_value.get.return_value = _response({"elements": []})
 
-        endpoint_permissions(region="na", merchant_id=MERCHANT_ID, endpoints=["orders"], api_token="tok")
+        endpoint_permissions(region="na", merchant_id=MERCHANT_ID, endpoints=["orders"], auth=BearerTokenAuth("tok"))
 
         call = mock_session.return_value.get.call_args
         assert call.args[0] == f"https://api.clover.com/v3/merchants/{MERCHANT_ID}/orders"
@@ -547,9 +437,10 @@ class TestEndpointPermissions:
     def test_unknown_endpoints_and_bad_merchant_id_do_not_block(self, mock_session: mock.MagicMock) -> None:
         mock_session.return_value.get.return_value = _response({"elements": []})
 
-        assert endpoint_permissions(region="na", merchant_id="../evil", endpoints=["orders"], api_token="tok") == {
+        auth = BearerTokenAuth("tok")
+        assert endpoint_permissions(region="na", merchant_id="../evil", endpoints=["orders"], auth=auth) == {
             "orders": None
         }
-        assert endpoint_permissions(region="mars", merchant_id=MERCHANT_ID, endpoints=["orders"], api_token="tok") == {
+        assert endpoint_permissions(region="mars", merchant_id=MERCHANT_ID, endpoints=["orders"], auth=auth) == {
             "orders": None
         }

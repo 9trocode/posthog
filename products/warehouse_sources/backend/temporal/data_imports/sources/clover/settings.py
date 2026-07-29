@@ -4,17 +4,27 @@ from typing import Any
 from products.warehouse_sources.backend.types import IncrementalField, IncrementalFieldType
 
 # Clover runs the same v3 API on one host per deployment region, and a merchant only exists on
-# the host of the region their app was created in — pointing at the wrong one returns a 404.
+# the host of the region they were onboarded in — pointing at the wrong one returns a 404.
 CLOVER_REGION_HOSTS: dict[str, str] = {
     "na": "https://api.clover.com",
     "eu": "https://api.eu.clover.com",
-    "latam": "https://api.clover.com.br",
+    "latam": "https://api.la.clover.com",
     "sandbox": "https://apisandbox.dev.clover.com",
 }
 DEFAULT_REGION = "na"
 
-# Path the OAuth v2 refresh token is exchanged at, relative to the regional host.
-OAUTH_REFRESH_PATH = "/oauth/v2/refresh"
+# A Clover app is registered per region and can only authorize merchants in that region, so each
+# region connects through its own PostHog OAuth app (see CLOVER_OAUTH_REGIONS in
+# posthog/models/integration.py). This maps the form's region to the integration kind that serves it.
+CLOVER_REGION_INTEGRATION_KINDS: dict[str, str] = {
+    "na": "clover",
+    "eu": "clover-eu",
+    "latam": "clover-latam",
+    "sandbox": "clover-sandbox",
+}
+CLOVER_INTEGRATION_KIND_REGIONS: dict[str, str] = {
+    kind: region for region, kind in CLOVER_REGION_INTEGRATION_KINDS.items()
+}
 
 # `limit` defaults to 100 and is capped at 1000.
 PAGE_SIZE = 1000

@@ -7,6 +7,7 @@ from posthog.schema import (
     SourceConfig,
     SourceFieldInputConfig,
     SourceFieldInputConfigType,
+    SourceFieldOauthConfig,
     SourceFieldSelectConfig,
     SourceFieldSelectConfigOption,
 )
@@ -21,7 +22,13 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.clover.clo
     endpoint_permissions as clover_endpoint_permissions,
     validate_credentials as validate_clover_credentials,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.clover.oauth import (
+    CloverIntegrationAuth,
+    resolve_clover_oauth_token,
+)
 from products.warehouse_sources.backend.temporal.data_imports.sources.clover.settings import (
+    CLOVER_INTEGRATION_KIND_REGIONS,
+    CLOVER_REGION_INTEGRATION_KINDS,
     DEFAULT_REGION,
     ENDPOINTS,
     INCREMENTAL_FIELDS,
@@ -30,7 +37,12 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.bas
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.canonical_descriptions import (
     CanonicalDescriptions,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.mixins import OAuthMixin
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.registry import SourceRegistry
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.auth import (
+    AuthConfigBase,
+    BearerTokenAuth,
+)
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.schema import (
     SourceSchema,
@@ -39,17 +51,83 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.sch
 from products.warehouse_sources.backend.temporal.data_imports.sources.generated_configs.clover import CloverSourceConfig
 from products.warehouse_sources.backend.types import ExternalDataSourceType
 
+# Region is baked into the OAuth options rather than offered as its own dropdown: a Clover app is
+# registered per region and can only authorize merchants there, so the region is what decides which
+# PostHog OAuth app the Connect button uses. One option per region keeps that binding explicit and
+# the form one level deep.
+_OAUTH_REGION_OPTIONS: dict[str, str] = {
+    "oauth_na": "na",
+    "oauth_eu": "eu",
+    "oauth_latam": "latam",
+    "oauth_sandbox": "sandbox",
+}
 
-def _credentials(config: CloverSourceConfig) -> tuple[str | None, str | None, str | None]:
-    """Unpack the selected auth option into (api_token, client_id, refresh_token)."""
-    auth = config.auth_type
-    if auth.selection == "oauth":
-        return None, auth.client_id, auth.refresh_token
-    return auth.api_token, None, None
+_REGION_LABELS = {
+    "na": "North America",
+    "eu": "Europe",
+    "latam": "Latin America",
+    "sandbox": "sandbox",
+}
+
+
+def _oauth_option(selection: str, region: str) -> SourceFieldSelectConfigOption:
+    return SourceFieldSelectConfigOption(
+        label=f"Connect Clover ({_REGION_LABELS[region]})",
+        value=selection,
+        fields=cast(
+            list[FieldType],
+            [
+                SourceFieldOauthConfig(
+                    name="clover_integration_id",
+                    label="Clover account",
+                    required=False,
+                    kind=CLOVER_REGION_INTEGRATION_KINDS[region],
+                ),
+            ],
+        ),
+    )
+
+
+def _api_token_option() -> SourceFieldSelectConfigOption:
+    return SourceFieldSelectConfigOption(
+        label="API token",
+        value="api_token",
+        fields=cast(
+            list[FieldType],
+            [
+                SourceFieldSelectConfig(
+                    name="region",
+                    label="Region",
+                    required=True,
+                    defaultValue=DEFAULT_REGION,
+                    options=[
+                        SourceFieldSelectConfigOption(label=_REGION_LABELS[region].capitalize(), value=region)
+                        for region in CLOVER_REGION_INTEGRATION_KINDS
+                    ],
+                ),
+                SourceFieldInputConfig(
+                    name="merchant_id",
+                    label="Merchant ID",
+                    type=SourceFieldInputConfigType.TEXT,
+                    required=False,
+                    placeholder="",
+                    secret=False,
+                ),
+                SourceFieldInputConfig(
+                    name="api_token",
+                    label="API token",
+                    type=SourceFieldInputConfigType.PASSWORD,
+                    required=False,
+                    placeholder="",
+                    secret=True,
+                ),
+            ],
+        ),
+    )
 
 
 @SourceRegistry.register
-class CloverSource(ResumableSource[CloverSourceConfig, CloverResumeConfig]):
+class CloverSource(ResumableSource[CloverSourceConfig, CloverResumeConfig], OAuthMixin):
     lists_tables_without_credentials = True  # static endpoint catalog — safe for public docs
 
     supported_versions = ("v3",)
@@ -70,84 +148,22 @@ class CloverSource(ResumableSource[CloverSourceConfig, CloverResumeConfig]):
             releaseStatus=ReleaseStatus.ALPHA,
             caption="""Sync orders, payments, refunds, inventory and customers from a Clover merchant into the PostHog Data warehouse.
 
-Pick the region your Clover app was created in, then enter the merchant ID you want to sync. The simplest credential is an API token generated for that merchant in the Clover dashboard. If you run a Clover app instead, choose OAuth and enter the app ID plus the refresh token from the merchant's install. PostHog mints a short-lived access token for each sync.
+Pick the Clover region your business is in, then click Connect and authorize PostHog. Clover tells us which merchant you authorized, so there is nothing else to fill in. If you would rather not connect the app, choose API token and enter a merchant ID plus an API token generated for it in the Clover dashboard.
 
-Your app needs the read permission for every entity you want to sync, such as orders, payments and inventory. Tables you have not been granted are flagged in the table picker.""",
+You need to grant read access for every entity you want to sync, such as orders, payments and inventory. Tables you have not granted are flagged in the table picker.""",
             iconPath="/static/services/clover.png",
             docsUrl="https://posthog.com/docs/cdp/sources/clover",
             fields=cast(
                 list[FieldType],
                 [
                     SourceFieldSelectConfig(
-                        name="region",
-                        label="Region",
-                        required=True,
-                        defaultValue=DEFAULT_REGION,
-                        options=[
-                            SourceFieldSelectConfigOption(label="North America", value="na"),
-                            SourceFieldSelectConfigOption(label="Europe", value="eu"),
-                            SourceFieldSelectConfigOption(label="Latin America", value="latam"),
-                            SourceFieldSelectConfigOption(label="Sandbox (developer testing)", value="sandbox"),
-                        ],
-                    ),
-                    SourceFieldInputConfig(
-                        name="merchant_id",
-                        label="Merchant ID",
-                        type=SourceFieldInputConfigType.TEXT,
-                        required=True,
-                        placeholder="",
-                        secret=False,
-                    ),
-                    # Which sub-fields are needed depends on the selected option, so they are all
-                    # optional here and the combination is checked in validate_credentials.
-                    SourceFieldSelectConfig(
                         name="auth_type",
                         label="Authentication",
                         required=True,
-                        defaultValue="api_token",
+                        defaultValue="oauth_na",
                         options=[
-                            SourceFieldSelectConfigOption(
-                                label="API token",
-                                value="api_token",
-                                fields=cast(
-                                    list[FieldType],
-                                    [
-                                        SourceFieldInputConfig(
-                                            name="api_token",
-                                            label="API token",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="",
-                                            secret=True,
-                                        ),
-                                    ],
-                                ),
-                            ),
-                            SourceFieldSelectConfigOption(
-                                label="OAuth app",
-                                value="oauth",
-                                fields=cast(
-                                    list[FieldType],
-                                    [
-                                        SourceFieldInputConfig(
-                                            name="client_id",
-                                            label="App ID",
-                                            type=SourceFieldInputConfigType.TEXT,
-                                            required=False,
-                                            placeholder="",
-                                            secret=False,
-                                        ),
-                                        SourceFieldInputConfig(
-                                            name="refresh_token",
-                                            label="Refresh token",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="",
-                                            secret=True,
-                                        ),
-                                    ],
-                                ),
-                            ),
+                            *(_oauth_option(selection, region) for selection, region in _OAUTH_REGION_OPTIONS.items()),
+                            _api_token_option(),
                         ],
                     ),
                 ],
@@ -156,9 +172,15 @@ Your app needs the read permission for every entity you want to sync, such as or
 
     def get_non_retryable_errors(self) -> dict[str, str | None]:
         return {
-            "401 Client Error: Unauthorized for url": "Clover rejected your credentials. Generate a new API token, or reconnect your app, and update the source.",
-            "403 Client Error: Forbidden for url": "Your Clover app is missing a read permission for this table. Grant it in the Clover dashboard and sync again.",
-            "[clover_token_error]": "PostHog could not refresh your Clover access token. Check the app ID and refresh token, and that the merchant still has the app installed.",
+            "401 Client Error: Unauthorized for url": "Clover rejected your credentials. Reconnect your Clover account, or generate a new API token and update the source.",
+            "403 Client Error: Forbidden for url": "Your Clover connection is missing read access for this table. Grant it in the Clover dashboard and sync again.",
+            # Deterministic credential/config errors from OAuthMixin and the auth builder — the
+            # integration row is gone or unconfigured, so retrying can never succeed. Match on the
+            # stable prefix so the volatile integration ID is ignored.
+            "Missing Clover integration ID": "Clover is not connected. Reconnect your Clover account.",
+            "Integration not found": "The linked Clover integration no longer exists. Reconnect your Clover account.",
+            "Clover access token not found": "The Clover access token is missing. Reconnect your Clover account.",
+            "Clover integration is missing a merchant ID": "The Clover connection did not record a merchant. Reconnect your Clover account.",
         }
 
     def get_canonical_descriptions(self) -> CanonicalDescriptions:
@@ -181,6 +203,35 @@ Your app needs the read permission for every entity you want to sync, such as or
         # windows share their boundary millisecond, so append mode would duplicate those rows.
         return build_endpoint_schemas(ENDPOINTS, INCREMENTAL_FIELDS, names, merge_only=ENDPOINTS)
 
+    def _connection(self, config: CloverSourceConfig, team_id: int) -> tuple[str, str, AuthConfigBase]:
+        """Resolve (region, merchant id, transport auth) for the selected auth method.
+
+        On the OAuth path the region comes from the integration's kind rather than the form: the
+        kind is what pins the Clover app and host the token was issued against, so trusting it keeps
+        a stale or hand-edited region in the stored config from pointing a token at another region.
+        """
+        auth_type = config.auth_type
+        if auth_type.selection == "api_token":
+            if not auth_type.api_token:
+                raise ValueError("Missing Clover API token")
+            if not auth_type.merchant_id:
+                raise ValueError("Missing Clover merchant ID")
+            return auth_type.region, auth_type.merchant_id, BearerTokenAuth(auth_type.api_token)
+
+        integration_id = auth_type.clover_integration_id
+        if not integration_id:
+            raise ValueError("Missing Clover integration ID")
+        integration = self.get_oauth_integration(integration_id, team_id)
+        region = CLOVER_INTEGRATION_KIND_REGIONS.get(integration.kind)
+        if region is None:
+            raise ValueError(f"Integration {integration_id} is not a Clover integration")
+        merchant_id = (integration.config or {}).get("merchant_id")
+        if not merchant_id:
+            raise ValueError("Clover integration is missing a merchant ID")
+
+        token = resolve_clover_oauth_token(integration_id, team_id)
+        return region, merchant_id, CloverIntegrationAuth(integration_id, team_id, token)
+
     def validate_credentials(
         self,
         config: CloverSourceConfig,
@@ -188,15 +239,24 @@ Your app needs the read permission for every entity you want to sync, such as or
         schema_name: Optional[str] = None,
         api_version: str | None = None,
     ) -> tuple[bool, str | None]:
-        api_token, client_id, refresh_token = _credentials(config)
+        try:
+            region, merchant_id, auth = self._connection(config, team_id)
+        except ValueError as e:
+            # These are deterministic config/credential errors whose developer wording is unhelpful
+            # in the wizard and can carry a volatile integration ID. Reuse the curated messages from
+            # get_non_retryable_errors; fall back to the raw message if unmapped.
+            raw = str(e)
+            for pattern, friendly in self.get_non_retryable_errors().items():
+                if friendly and pattern in raw:
+                    return False, friendly
+            return False, raw
+
         return validate_clover_credentials(
-            region=config.region,
-            merchant_id=config.merchant_id,
-            api_token=api_token,
-            client_id=client_id,
-            refresh_token=refresh_token,
-            # At source-create a 403 only means the app wasn't granted that entity, which must not
-            # block connecting; a per-schema check is asking about that entity specifically.
+            region=region,
+            merchant_id=merchant_id,
+            auth=auth,
+            # At source-create a 403 only means the merchant hasn't granted that entity, which must
+            # not block connecting; a per-schema check is asking about that entity specifically.
             accept_forbidden=schema_name is None,
         )
 
@@ -207,14 +267,18 @@ Your app needs the read permission for every entity you want to sync, such as or
         endpoints: list[str],
         api_version: str | None = None,
     ) -> dict[str, str | None]:
-        api_token, client_id, refresh_token = _credentials(config)
+        try:
+            region, merchant_id, auth = self._connection(config, team_id)
+        except ValueError:
+            # A misconfigured connection is reported by validate_credentials; per-table access must
+            # never block the schema picker, so report everything reachable here.
+            return dict.fromkeys(endpoints)
+
         return clover_endpoint_permissions(
-            region=config.region,
-            merchant_id=config.merchant_id,
+            region=region,
+            merchant_id=merchant_id,
             endpoints=endpoints,
-            api_token=api_token,
-            client_id=client_id,
-            refresh_token=refresh_token,
+            auth=auth,
         )
 
     def get_resumable_source_manager(self, inputs: SourceInputs) -> ResumableSourceManager[CloverResumeConfig]:
@@ -226,17 +290,15 @@ Your app needs the read permission for every entity you want to sync, such as or
         resumable_source_manager: ResumableSourceManager[CloverResumeConfig],
         inputs: SourceInputs,
     ) -> SourceResponse:
-        api_token, client_id, refresh_token = _credentials(config)
+        region, merchant_id, auth = self._connection(config, inputs.team_id)
         return clover_source(
-            region=config.region,
-            merchant_id=config.merchant_id,
+            region=region,
+            merchant_id=merchant_id,
             endpoint=inputs.schema_name,
             team_id=inputs.team_id,
             job_id=inputs.job_id,
             resumable_source_manager=resumable_source_manager,
-            api_token=api_token,
-            client_id=client_id,
-            refresh_token=refresh_token,
+            auth=auth,
             incremental_field=inputs.incremental_field,
             should_use_incremental_field=inputs.should_use_incremental_field,
             db_incremental_field_last_value=inputs.db_incremental_field_last_value

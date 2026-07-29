@@ -857,7 +857,7 @@ export const integrationsLogic = kea<integrationsLogicType>([
             }
         },
         handleOauthCallback: async ({ kind, searchParams }) => {
-            const { state, code, error, stripe_user_id, account_id, user_id } = searchParams
+            const { state, code, error, stripe_user_id, account_id, user_id, merchant_id } = searchParams
             const { next, token, source, server_id } = fromParamsGivenUrl(state)
             const resolvedKind = kind
             let replaceUrl: string = next || urls.settings('project-integrations')
@@ -905,7 +905,10 @@ export const integrationsLogic = kea<integrationsLogicType>([
                 } else {
                     const integration = await api.integrations.create({
                         kind: resolvedKind,
-                        config: { state, code },
+                        // Clover names the authorizing merchant on the callback rather than in the
+                        // token response, so it has to travel with the code for the backend to
+                        // store it. Other providers never send it and it's simply absent.
+                        config: { state, code, ...(merchant_id ? { merchant_id } : {}) },
                     })
 
                     // Add the integration ID to the replaceUrl so that the landing page can use it
