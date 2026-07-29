@@ -2,8 +2,12 @@ import { MOCK_DEFAULT_USER } from 'lib/api.mock'
 
 import { expectLogic } from 'kea-test-utils'
 
+import { FEATURE_FLAGS } from 'lib/constants'
+import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
+
 import { initKeaTests } from '~/test/init'
 import type { CommentType } from '~/types'
+import { ActivityScope } from '~/types'
 
 import type { TicketAssignee } from '../../components/Assignee'
 import type { Ticket, TicketStatus } from '../../types'
@@ -422,5 +426,38 @@ describe('supportTicketSceneLogic loadPreviousTickets email gating', () => {
         }).toDispatchActions(['loadPreviousTicketsSuccess'])
 
         expect(ticketsListMock).toHaveBeenLastCalledWith(expectedParams)
+    })
+})
+
+describe('supportTicketSceneLogic sidePanelContext', () => {
+    let logic: ReturnType<typeof supportTicketSceneLogic.build>
+
+    beforeEach(() => {
+        initKeaTests()
+        logic = supportTicketSceneLogic({ id: 'new' })
+        logic.mount()
+        logic.actions.setTicket(makeTicket())
+    })
+
+    // Access control and discussions are separate consumers of the same selector key. Defining
+    // one selector per concern silently drops all but the last, so assert they coexist.
+    it('exposes access control and discussion context together', () => {
+        featureFlagLogic.actions.setFeatureFlags([], { [FEATURE_FLAGS.DISCUSSIONS_SLACK_SYNC]: true })
+
+        expect(logic.values.sidePanelContext).toEqual({
+            access_control_resource: 'ticket',
+            access_control_resource_id: 'ticket-1',
+            activity_scope: ActivityScope.TICKET,
+            activity_item_id: 'ticket-1',
+        })
+    })
+
+    it('keeps access control context when the discussions flag is off', () => {
+        featureFlagLogic.actions.setFeatureFlags([], { [FEATURE_FLAGS.DISCUSSIONS_SLACK_SYNC]: false })
+
+        expect(logic.values.sidePanelContext).toEqual({
+            access_control_resource: 'ticket',
+            access_control_resource_id: 'ticket-1',
+        })
     })
 })
