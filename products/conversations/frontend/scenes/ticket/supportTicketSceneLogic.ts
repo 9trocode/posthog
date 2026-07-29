@@ -45,6 +45,7 @@ import {
 import { signalsReportsList } from 'products/signals/frontend/generated/api'
 import type { SignalReportApi } from 'products/signals/frontend/generated/api.schemas'
 
+import type { FeatureFlagsSet } from '../../../../../frontend/src/lib/logic/featureFlagLogic'
 import type { TeamPublicType, TeamType } from '../../../../../frontend/src/types'
 import type { UserType } from '../../../../../frontend/src/types'
 import { assigneeSelectLogic } from '../../components/Assignee'
@@ -176,6 +177,7 @@ export function getEmailReplyBlockedReason(
 export interface supportTicketSceneLogicValues {
     resolveAssignee: (assignee: TicketAssignee) => Assignee // assigneeSelectLogic
     draftModeDefault: boolean // conversationsDraftModeLogic
+    featureFlags: FeatureFlagsSet // featureFlagLogic
     currentTeam: TeamPublicType | TeamType | null // teamLogic
     user: UserType | null // userLogic
     assignee: TicketAssignee
@@ -420,6 +422,7 @@ export interface supportTicketSceneLogicMeta {
             ticket: Ticket | null,
             currentTeam: TeamPublicType | TeamType | null
         ) => EmailReplyBlockedReason | null
+        sidePanelContext: (ticket: Ticket | null, featureFlags: any) => SidePanelSceneContext | null
         replyRecipientDescription: (ticket: Ticket | null) => string
         unsavedTicketChanges: (
             priority: TicketPriority | null,
@@ -798,7 +801,7 @@ export const supportTicketSceneLogic = kea<supportTicketSceneLogicType>([
         ],
         [SIDE_PANEL_CONTEXT_KEY]: [
             (s) => [s.ticket, s.featureFlags],
-            (ticket, featureFlags): SidePanelSceneContext | null =>
+            (ticket: Ticket | null, featureFlags): SidePanelSceneContext | null =>
                 ticket?.id && featureFlags[FEATURE_FLAGS.DISCUSSIONS_SLACK_SYNC]
                     ? {
                           activity_scope: ActivityScope.TICKET,
