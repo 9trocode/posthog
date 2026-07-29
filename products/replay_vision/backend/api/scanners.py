@@ -36,6 +36,7 @@ from products.replay_vision.backend.api.filters import (
 from products.replay_vision.backend.api.trigger import (
     WorkflowStartOutcome,
     check_observation_quota,
+    check_scanner_quota,
     check_team_in_flight_capacity,
     start_apply_scanner_workflow,
 )
@@ -76,6 +77,7 @@ from products.replay_vision.backend.quota import (
     CreditBudget,
     ScannerSpend,
     compute_quota_snapshot,
+    compute_scanner_budget,
     compute_scanner_budgets,
     current_period_bounds,
     sum_enabled_scanner_estimated_credits,
@@ -715,15 +717,17 @@ class BulkObserveResultSerializer(serializers.Serializer):
         choices=[
             ("started", "Started"),
             ("already_running", "Already running"),
-            ("skipped_limit", "Skipped — in-flight limit reached"),
-            ("skipped_quota", "Skipped — monthly credit quota reached"),
+            ("skipped_limit", "Skipped, in-flight limit reached"),
+            ("skipped_quota", "Skipped, monthly credit quota reached"),
+            ("skipped_scanner_limit", "Skipped, scanner's own credit limit reached"),
             ("failed", "Failed to start"),
         ],
         help_text=(
-            "'started' — a scan workflow was kicked off; 'already_running' — a scan for this session is "
-            "already in flight (no-op, not recharged); 'skipped_limit' — the in-flight cap was reached "
-            "before this session; 'skipped_quota' — the monthly credit quota would be exceeded; "
-            "'failed' — the workflow failed to start."
+            "'started' - a scan workflow was kicked off; 'already_running' - a scan for this session is "
+            "already in flight (no-op, not recharged); 'skipped_limit' - the in-flight cap was reached "
+            "before this session; 'skipped_quota' - the org's monthly credit quota would be exceeded; "
+            "'skipped_scanner_limit' - this scanner's own credit limit would be exceeded; "
+            "'failed' - the workflow failed to start."
         ),
     )
 
@@ -1152,6 +1156,9 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
         except QuotaLimitExceeded:
             self._report_quota_exhausted(scanner, "on_demand")
             raise
+        # Deliberately outside the analytics wrapper above: that event means "the org ran out of
+        # credits", and firing it for a self-imposed per-scanner cap would corrupt that metric.
+        check_scanner_quota(scanner)
         check_team_in_flight_capacity(self.team.id)
 
         body = ObserveRequestSerializer(data=request.data)
@@ -1295,11 +1302,16 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
         )
         snapshot = compute_quota_snapshot(self.team.organization_id)
         cost = observation_credits_for_model(scanner.model)
-        # Uncapped org (remaining None) → quota never binds; otherwise how many of THIS model's cost fit.
-        quota_limit = in_flight_limit if snapshot.remaining is None else (snapshot.remaining // cost if cost else 0)
-        # Report quota as the reason only when it's the strictly tighter limit.
-        if quota_limit < in_flight_limit:
-            return quota_limit, "skipped_quota", team_in_flight, scanner_in_flight
+        scanner_remaining = compute_scanner_budget(scanner).remaining
+        # Uncapped (remaining None) → that limit never binds; otherwise how many of THIS model's cost fit.
+        org_limit = in_flight_limit if snapshot.remaining is None else (snapshot.remaining // cost if cost else 0)
+        scanner_limit = in_flight_limit if scanner_remaining is None else (scanner_remaining // cost if cost else 0)
+        # Report whichever limit is strictly tighter, so the user knows which one to raise.
+        tightest = min(in_flight_limit, org_limit, scanner_limit)
+        if scanner_limit == tightest and scanner_limit < in_flight_limit and scanner_limit <= org_limit:
+            return scanner_limit, "skipped_scanner_limit", team_in_flight, scanner_in_flight
+        if org_limit < in_flight_limit:
+            return org_limit, "skipped_quota", team_in_flight, scanner_in_flight
         return in_flight_limit, "skipped_limit", team_in_flight, scanner_in_flight
 
     @extend_schema(parameters=[ScannerImpactQuerySerializer], responses={200: ScannerImpactSerializer})

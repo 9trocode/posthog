@@ -20,6 +20,7 @@ from posthog.temporal.common.search_attributes import (
     POSTHOG_TEAM_ID_KEY,
 )
 
+from products.replay_vision.backend.billing import observation_credits_for_model
 from products.replay_vision.backend.enqueue_claims import (
     pending_enqueue_claims_for_scanner,
     pending_enqueue_claims_for_team,
@@ -28,7 +29,7 @@ from products.replay_vision.backend.enqueue_claims import (
 )
 from products.replay_vision.backend.models.replay_observation import ObservationTrigger, ReplayObservation
 from products.replay_vision.backend.models.replay_scanner import ReplayScanner
-from products.replay_vision.backend.quota import compute_quota_snapshot
+from products.replay_vision.backend.quota import compute_quota_snapshot, compute_scanner_budget
 from products.replay_vision.backend.temporal.constants import (
     APPLY_SCANNER_EXECUTION_TIMEOUT,
     APPLY_SCANNER_WORKFLOW_NAME,
@@ -71,6 +72,20 @@ def check_observation_quota(organization_id: UUID, observation_credits: int) -> 
                 f"Starting this observation would exceed your monthly Replay vision limit of "
                 f"${snapshot.credit_limit / 100:,.2f}. Resets {snapshot.period_end.strftime('%b')} "
                 f"{snapshot.period_end.day}."
+            )
+        )
+
+
+def check_scanner_quota(scanner: ReplayScanner) -> None:
+    """Raise 402 when this scanner's own credit limit leaves no room for another observation."""
+    budget = compute_scanner_budget(scanner)
+    if budget.would_exceed(observation_credits_for_model(scanner.model)):
+        # would_exceed is only ever true when a limit is set, so credit_limit is non-None here.
+        assert budget.credit_limit is not None
+        raise QuotaLimitExceeded(
+            detail=(
+                f"This scanner has used its credit limit of {budget.credit_limit:,} credits for this period. "
+                f"Raise the scanner's limit to keep scanning."
             )
         )
 

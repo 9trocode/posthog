@@ -1767,6 +1767,42 @@ class TestObserveAction(_VisionAPITestCase):
         self.assertEqual(report.call_args.args[1], "replay_vision_quota_exhausted")
         self.assertEqual(report.call_args.args[2]["trigger"], "on_demand")
 
+    def test_observe_is_refused_when_the_scanner_limit_is_reached(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=1)
+
+        resp = self.client.post(self.observe_url(str(self.scanner.id)), data={"session_id": "sess-42"}, format="json")
+
+        self.assertEqual(resp.status_code, 402, resp.json())
+        self.assertIn("scanner", resp.json()["detail"].lower())
+        mock_async_to_sync.assert_not_called()
+
+    def test_observe_scanner_limit_does_not_report_org_quota_exhaustion(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        # A self-imposed per-scanner cap must never fire the org-exhaustion event: that metric means
+        # "the org ran out of credits", not "this scanner hit the limit its owner chose".
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=1)
+
+        with patch("products.replay_vision.backend.api.scanners.report_user_action") as report:
+            resp = self.client.post(
+                self.observe_url(str(self.scanner.id)), data={"session_id": "sess-42"}, format="json"
+            )
+
+        self.assertEqual(resp.status_code, 402, resp.json())
+        report.assert_not_called()
+
+    def test_observe_is_unaffected_when_no_scanner_limit_is_set(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        mock_sync_connect.return_value = MagicMock()
+        mock_async_to_sync.return_value = MagicMock()
+
+        resp = self.client.post(self.observe_url(str(self.scanner.id)), data={"session_id": "sess-42"}, format="json")
+
+        self.assertEqual(resp.status_code, 202, resp.json())
+
 
 @patch("products.replay_vision.backend.api.trigger.async_to_sync")
 @patch("products.replay_vision.backend.api.trigger.sync_connect")
@@ -1854,6 +1890,99 @@ class TestBulkObserveAction(_VisionAPITestCase):
         events = [call.args[1] for call in report.call_args_list]
         self.assertEqual(events, ["replay_vision_bulk_scan_started", "replay_vision_quota_exhausted"])
         self.assertEqual(report.call_args.args[2]["trigger"], "bulk")
+
+    def _seed_scanner_spend(self, scanner: ReplayScanner, credits: int) -> None:
+        # A receipt-less observation contributes nothing to compute_scanner_budget, which reads
+        # the ledger, so the spend must come from a real ReplayObservationUsage row.
+        observation = ReplayObservation.objects.create(
+            scanner=scanner,
+            session_id=f"seed-{uuid7()}",
+            scanner_snapshot=_snapshot_for(scanner),
+            triggered_by=ObservationTrigger.SCHEDULE,
+            status=ObservationStatus.SUCCEEDED,
+            completed_at=timezone.now(),
+        )
+        ReplayObservationUsage.objects.create(
+            observation_id=observation.id,
+            organization_id=self.team.organization_id,
+            team_id=self.team.id,
+            scanner_id=scanner.id,
+            observation_created_at=observation.created_at,
+            model=scanner.model,
+            credits=credits,
+        )
+
+    def test_bulk_observe_reports_the_scanner_limit_as_the_skip_reason(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        # The scanner's own limit is tighter than the wide-open org and in-flight caps, so every
+        # session must be skipped under the scanner-specific reason, not the generic quota one.
+        mock_sync_connect.return_value = MagicMock()
+        mock_async_to_sync.return_value = MagicMock()
+        cost = observation_credits_for_model(self.scanner.model)
+        self._seed_scanner_spend(self.scanner, cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+
+        resp = self.client.post(
+            self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1", "s-2"]}, format="json"
+        )
+
+        self.assertEqual(resp.status_code, 202, resp.json())
+        body = resp.json()
+        self.assertEqual(body["started"], 0)
+        self.assertEqual({r["scan_outcome"] for r in body["results"]}, {"skipped_scanner_limit"})
+
+    def test_bulk_observe_scanner_limit_tie_with_org_limit_wins_the_label(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        # When the scanner and org limits admit exactly the same number of scans, the scanner limit
+        # must name itself: it's the one the user can raise themselves.
+        mock_sync_connect.return_value = MagicMock()
+        mock_async_to_sync.return_value = MagicMock()
+        cost = observation_credits_for_model(self.scanner.model)
+        self._seed_scanner_spend(self.scanner, cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+
+        with patch("products.replay_vision.backend.quota.MONTHLY_CREDIT_QUOTA", cost):
+            resp = self.client.post(
+                self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1", "s-2"]}, format="json"
+            )
+
+        self.assertEqual(resp.status_code, 202, resp.json())
+        body = resp.json()
+        self.assertEqual(body["started"], 0)
+        self.assertEqual({r["scan_outcome"] for r in body["results"]}, {"skipped_scanner_limit"})
+
+    def test_bulk_observe_scanner_limit_does_not_report_org_quota_exhaustion(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        mock_sync_connect.return_value = MagicMock()
+        mock_async_to_sync.return_value = MagicMock()
+        cost = observation_credits_for_model(self.scanner.model)
+        self._seed_scanner_spend(self.scanner, cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+
+        with patch("products.replay_vision.backend.api.scanners.report_user_action") as report:
+            resp = self.client.post(self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1"]}, format="json")
+
+        self.assertEqual(resp.status_code, 202, resp.json())
+        events = [call.args[1] for call in report.call_args_list]
+        self.assertEqual(events, ["replay_vision_bulk_scan_started"])
+
+    def test_bulk_observe_is_unaffected_when_no_scanner_limit_is_set(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        mock_sync_connect.return_value = MagicMock()
+        mock_async_to_sync.return_value = MagicMock()
+
+        resp = self.client.post(
+            self.bulk_url(str(self.scanner.id)), data={"session_ids": ["a", "b", "c"]}, format="json"
+        )
+
+        self.assertEqual(resp.status_code, 202, resp.json())
+        body = resp.json()
+        self.assertEqual(body["started"], 3)
+        self.assertEqual([r["scan_outcome"] for r in body["results"]], ["started", "started", "started"])
 
     def test_quota_bound_batch_that_fits_does_not_report_exhaustion(
         self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
