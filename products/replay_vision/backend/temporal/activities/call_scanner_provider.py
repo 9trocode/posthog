@@ -90,6 +90,31 @@ async def _call_scanner_provider(inputs: CallScannerProviderInputs) -> ScannerCa
             sync_to_async(_load_team_name)(inputs.team_id),
             _load_llm_inputs(inputs.observation_id),
         )
+    return await run_scan(
+        snapshot=snapshot,
+        team_name=team_name,
+        llm_inputs=llm_inputs,
+        file_uri=inputs.file_uri,
+        mime_type=inputs.mime_type,
+        team_id=inputs.team_id,
+    )
+
+
+async def run_scan(
+    *,
+    snapshot: ScannerSnapshot,
+    llm_inputs: ScannerLlmInputs,
+    team_name: str,
+    file_uri: str,
+    mime_type: str,
+    team_id: int,
+) -> ScannerCallOutput:
+    """Run the scanner conversation over an already-uploaded video, independent of where the inputs came from.
+
+    The activity path above loads the snapshot and inputs from the observation row and Redis; the golden-dataset
+    eval suite (products/replay_vision/evals) feeds this same function from files on disk so prompt changes are
+    tested against the exact production pipeline.
+    """
     scanner = scanner_from_snapshot(snapshot)
 
     preamble_text = scanner.preamble(
@@ -98,14 +123,14 @@ async def _call_scanner_provider(inputs: CallScannerProviderInputs) -> ScannerCa
         navigation=[entry.model_dump() for entry in llm_inputs.navigation],
         navigation_dropped=llm_inputs.navigation_dropped,
     )
-    video_part = types.Part(file_data=types.FileData(file_uri=inputs.file_uri, mime_type=inputs.mime_type))
+    video_part = types.Part(file_data=types.FileData(file_uri=file_uri, mime_type=mime_type))
 
     finalized, signals = await _run_mission(
         scanner=scanner,
         snapshot=snapshot,
         video_part=video_part,
         preamble_text=preamble_text,
-        team_id=inputs.team_id,
+        team_id=team_id,
         llm_inputs=llm_inputs,
     )
     duration_ms = int(llm_inputs.metadata.duration_seconds * 1000)
@@ -496,4 +521,4 @@ async def _delete_video_cache(cache_client: GoogleGenAIClient, name: str) -> Non
         logger.info("replay_vision.video_cache.delete_failed", error=str(e))
 
 
-__all__ = ["call_scanner_provider_activity"]
+__all__ = ["call_scanner_provider_activity", "run_scan"]
