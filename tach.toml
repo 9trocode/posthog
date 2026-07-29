@@ -88,6 +88,7 @@ depends_on = [
     "products.dashboards",
     "products.data_catalog",
     "products.data_modeling",
+    "products.data_quality",
     "products.data_warehouse",
     "products.demo",
     "products.early_access_features",
@@ -1114,4 +1115,22 @@ expose = [
 ]
 from = [
     "products.data_catalog",
+]
+
+[[modules]]
+path = "products.data_quality"
+depends_on = [
+    "posthog",
+    "products.data_modeling",
+    "products.warehouse_sources",
+]
+layer = "modules"
+
+[[interfaces]]
+expose = [
+    "backend\\.facade.*",
+    "backend\\.presentation\\.views.*",
+]
+from = [
+    "products.data_quality",
 ]
