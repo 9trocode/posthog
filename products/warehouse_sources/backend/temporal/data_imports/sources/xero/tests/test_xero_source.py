@@ -4,8 +4,17 @@ from typing import Any, Optional
 import pytest
 from unittest import mock
 
-from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldInputConfigType
+from django.test import override_settings
 
+import requests
+
+from posthog.schema import ReleaseStatus, SourceFieldOauthAccountSelectConfig, SourceFieldOauthConfig
+
+from posthog.models.integration import OauthIntegration
+
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.integration_accounts import (
+    IntegrationAccountListingError,
+)
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.generated_configs.xero import XeroSourceConfig
 from products.warehouse_sources.backend.temporal.data_imports.sources.xero.settings import (
@@ -14,7 +23,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.xero.setti
     XERO_ENDPOINTS,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.xero.source import XeroSource
-from products.warehouse_sources.backend.temporal.data_imports.sources.xero.xero import XeroResumeConfig
+from products.warehouse_sources.backend.temporal.data_imports.sources.xero.xero import XeroAuthError, XeroResumeConfig
 from products.warehouse_sources.backend.types import ExternalDataSourceType
 
 SOURCE_MODULE = "products.warehouse_sources.backend.temporal.data_imports.sources.xero.source"
@@ -32,7 +41,7 @@ class TestXeroSource:
     def setup_method(self) -> None:
         self.source = XeroSource()
         self.team_id = 123
-        self.config = XeroSourceConfig(client_id="cid", client_secret="sec")
+        self.config = XeroSourceConfig(xero_integration_id=456, tenant_id="tenant-a")
 
     def test_source_type(self) -> None:
         assert self.source.source_type == ExternalDataSourceType.XERO
@@ -45,26 +54,26 @@ class TestXeroSource:
         assert config.releaseStatus == ReleaseStatus.ALPHA
         assert not config.unreleasedSource
 
-        fields = [f for f in config.fields if isinstance(f, SourceFieldInputConfig)]
-        assert [f.name for f in fields] == ["client_id", "client_secret", "refresh_token", "tenant_id"]
+        oauth_field, account_field = config.fields
+        assert isinstance(oauth_field, SourceFieldOauthConfig)
+        assert (oauth_field.name, oauth_field.kind, oauth_field.required) == ("xero_integration_id", "xero", True)
 
-    @pytest.mark.parametrize(
-        "field_name, required, secret",
-        [
-            ("client_id", True, False),
-            ("client_secret", True, True),
-            ("refresh_token", False, True),
-            ("tenant_id", False, False),
-        ],
-    )
-    def test_credential_fields_are_shaped_for_their_sensitivity(
-        self, field_name: str, required: bool, secret: bool
-    ) -> None:
-        config = self.source.get_source_config
-        field = next(f for f in config.fields if isinstance(f, SourceFieldInputConfig) and f.name == field_name)
-        assert field.required is required
-        assert field.secret is secret
-        assert (field.type == SourceFieldInputConfigType.PASSWORD) is secret
+        assert isinstance(account_field, SourceFieldOauthAccountSelectConfig)
+        assert account_field.name == "tenant_id"
+        assert account_field.required is True
+        assert account_field.integrationField == "xero_integration_id"
+        assert account_field.integrationKind == "xero"
+
+    @override_settings(XERO_APP_CLIENT_ID="client-id", XERO_APP_CLIENT_SECRET="client-secret")
+    def test_required_scopes_match_the_posthog_xero_app(self) -> None:
+        # A mismatch either warns about a scope the app never asks for, or stays silent when a
+        # connection really is missing one.
+        oauth_field = self.source.get_source_config.fields[0]
+        assert isinstance(oauth_field, SourceFieldOauthConfig)
+        assert oauth_field.requiredScopes is not None
+        assert set(oauth_field.requiredScopes.split()) == set(
+            OauthIntegration.oauth_config_for_kind("xero").scope.split()
+        )
 
     def test_get_schemas_covers_every_endpoint(self) -> None:
         schemas = self.source.get_schemas(self.config, self.team_id)
@@ -98,7 +107,6 @@ class TestXeroSource:
     @pytest.mark.parametrize(
         "observed_error",
         [
-            "Xero rejected the credentials (401). Check the client ID and secret",
             "401 Client Error: Unauthorized for url: https://api.xero.com/api.xro/2.0/Invoices",
             "403 Client Error: Forbidden for url: https://api.xero.com/api.xro/2.0/Journals",
             "Xero organization tenant-z is not connected to this app",
@@ -118,26 +126,101 @@ class TestXeroSource:
     def test_non_retryable_errors_leave_transient_failures_alone(self, observed_error: str) -> None:
         assert not any(key in observed_error for key in self.source.get_non_retryable_errors())
 
+    @pytest.mark.parametrize(
+        "config",
+        [
+            XeroSourceConfig(xero_integration_id=0, tenant_id="tenant-a"),
+            XeroSourceConfig(xero_integration_id=456, tenant_id=""),
+        ],
+    )
+    def test_validate_credentials_requires_a_connection_and_an_organization(self, config: XeroSourceConfig) -> None:
+        is_valid, message = self.source.validate_credentials(config, self.team_id)
+        assert is_valid is False
+        assert message is not None and "required" in message
+
     @mock.patch(f"{SOURCE_MODULE}.validate_xero_credentials")
-    def test_validate_credentials_passes_every_credential_field(self, mock_validate: mock.MagicMock) -> None:
+    @mock.patch.object(XeroSource, "_access_token", return_value="access-1")
+    def test_validate_credentials_probes_with_the_integration_token(
+        self, _mock_access_token: mock.MagicMock, mock_validate: mock.MagicMock
+    ) -> None:
         mock_validate.return_value = (True, None)
-        config = XeroSourceConfig(client_id="cid", client_secret="sec", refresh_token="refresh-1", tenant_id="tenant-a")
 
-        assert self.source.validate_credentials(config, self.team_id) == (True, None)
-        assert mock_validate.call_args.kwargs == {
-            "client_id": "cid",
-            "client_secret": "sec",
-            "refresh_token": "refresh-1",
-            "tenant_id": "tenant-a",
-        }
+        assert self.source.validate_credentials(self.config, self.team_id) == (True, None)
+        assert mock_validate.call_args.kwargs == {"access_token": "access-1", "tenant_id": "tenant-a"}
 
-    @mock.patch(f"{SOURCE_MODULE}.validate_xero_credentials")
-    def test_validate_credentials_surfaces_failure(self, mock_validate: mock.MagicMock) -> None:
-        mock_validate.return_value = (False, "Xero rejected the credentials")
-        assert self.source.validate_credentials(self.config, self.team_id) == (
-            False,
-            "Xero rejected the credentials",
-        )
+    @pytest.mark.parametrize(
+        "failure, expected_message",
+        [
+            (ValueError("Integration not found: 456"), "Integration not found: 456"),
+            (XeroAuthError("Could not refresh the Xero credentials."), "Could not refresh the Xero credentials."),
+            (requests.ConnectionError("connection reset"), "Could not reach Xero"),
+        ],
+    )
+    @mock.patch.object(XeroSource, "_access_token")
+    def test_validate_credentials_surfaces_connection_failures(
+        self, mock_access_token: mock.MagicMock, failure: Exception, expected_message: str
+    ) -> None:
+        mock_access_token.side_effect = failure
+
+        is_valid, message = self.source.validate_credentials(self.config, self.team_id)
+
+        assert is_valid is False
+        assert message is not None and expected_message in message
+
+    @mock.patch(f"{SOURCE_MODULE}.XeroClient")
+    @mock.patch.object(XeroSource, "_access_token", return_value="access-1")
+    def test_get_oauth_accounts_lists_connected_organizations(
+        self, _mock_access_token: mock.MagicMock, mock_client: mock.MagicMock
+    ) -> None:
+        mock_client.return_value.list_organisations.return_value = [
+            {"tenantId": "tenant-a", "tenantName": "Acme"},
+            {"tenantId": "tenant-b"},
+        ]
+
+        accounts = self.source.get_oauth_accounts(456, self.team_id)
+
+        assert [(a.value, a.display_name) for a in accounts] == [("tenant-a", "Acme"), ("tenant-b", "tenant-b")]
+
+    @pytest.mark.parametrize(
+        "failure, expected_message",
+        [
+            (ValueError("Integration not found: 456"), "could not be found"),
+            (XeroAuthError("Could not refresh the Xero credentials."), "Could not refresh the Xero credentials."),
+            (requests.ConnectionError("connection reset"), "Could not reach Xero"),
+        ],
+    )
+    @mock.patch.object(XeroSource, "_access_token")
+    def test_get_oauth_accounts_maps_token_failures_to_listing_errors(
+        self, mock_access_token: mock.MagicMock, failure: Exception, expected_message: str
+    ) -> None:
+        mock_access_token.side_effect = failure
+
+        with pytest.raises(IntegrationAccountListingError, match=expected_message):
+            self.source.get_oauth_accounts(456, self.team_id)
+
+    @pytest.mark.parametrize(
+        "status_code, expected_message",
+        [
+            (401, "Xero rejected this connection"),
+            (429, "rate limiting"),
+            (503, "trouble responding"),
+        ],
+    )
+    @mock.patch(f"{SOURCE_MODULE}.XeroClient")
+    @mock.patch.object(XeroSource, "_access_token", return_value="access-1")
+    def test_get_oauth_accounts_maps_api_failures_to_listing_errors(
+        self,
+        _mock_access_token: mock.MagicMock,
+        mock_client: mock.MagicMock,
+        status_code: int,
+        expected_message: str,
+    ) -> None:
+        response = requests.Response()
+        response.status_code = status_code
+        mock_client.return_value.list_organisations.side_effect = requests.HTTPError(response=response)
+
+        with pytest.raises(IntegrationAccountListingError, match=expected_message):
+            self.source.get_oauth_accounts(456, self.team_id)
 
     def test_get_resumable_source_manager_binds_resume_config(self) -> None:
         manager = self.source.get_resumable_source_manager(mock.MagicMock())
@@ -153,13 +236,16 @@ class TestXeroSource:
         ],
     )
     @mock.patch(f"{SOURCE_MODULE}.xero_source")
+    @mock.patch.object(XeroSource, "get_oauth_integration")
     def test_source_for_pipeline_plumbs_arguments(
         self,
+        mock_get_oauth_integration: mock.MagicMock,
         mock_xero_source: mock.MagicMock,
         should_use_incremental_field: bool,
         last_value: datetime.datetime,
         expected: Optional[datetime.datetime],
     ) -> None:
+        mock_get_oauth_integration.return_value = mock.MagicMock(access_token="access-1")
         manager = mock.MagicMock()
         inputs = _inputs(
             "contacts",
@@ -170,13 +256,18 @@ class TestXeroSource:
         self.source.source_for_pipeline(self.config, manager, inputs)
 
         kwargs = mock_xero_source.call_args.kwargs
-        assert kwargs["client_id"] == "cid"
-        assert kwargs["client_secret"] == "sec"
-        assert kwargs["refresh_token"] is None
-        assert kwargs["tenant_id"] is None
+        assert kwargs["access_token"] == "access-1"
+        assert kwargs["tenant_id"] == "tenant-a"
         assert kwargs["endpoint_name"] == "contacts"
         assert kwargs["resumable_source_manager"] is manager
         assert kwargs["db_incremental_field_last_value"] == expected
+
+    @mock.patch.object(XeroSource, "get_oauth_integration")
+    def test_source_for_pipeline_without_an_access_token(self, mock_get_oauth_integration: mock.MagicMock) -> None:
+        mock_get_oauth_integration.return_value = mock.MagicMock(access_token=None)
+
+        with pytest.raises(ValueError, match="Xero access token not found"):
+            self.source.source_for_pipeline(self.config, mock.MagicMock(), _inputs())
 
 
 class TestXeroSettings:

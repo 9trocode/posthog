@@ -10,8 +10,8 @@ from products.warehouse_sources.backend.types import IncrementalField, Increment
 #   "single" — the whole collection arrives in one response (Accounts, Users, ...)
 PaginationMode = Literal["page", "offset", "single"]
 
-# Column we stamp onto every row with the Xero organisation the row came from. One connection
-# can reach several organisations, so it is part of every primary key.
+# Column we stamp onto every row with the Xero organisation the row came from. A Xero login can
+# reach several organisations, so it is part of every primary key.
 TENANT_ID_COLUMN = "_tenant_id"
 TENANT_NAME_COLUMN = "_tenant_name"
 

@@ -4192,3 +4192,70 @@ class TestResendIntegrationModel(BaseTest):
         assert sent["client_id"] == "resend-client-id"
         assert sent["client_secret"] == "resend-client-secret"
         assert sent["token_type_hint"] == "refresh_token"
+
+
+@override_settings(XERO_APP_CLIENT_ID="xero-client-id", XERO_APP_CLIENT_SECRET="xero-client-secret")
+class TestXeroIntegrationModel(BaseTest):
+    def test_oauth_config(self):
+        config = OauthIntegration.oauth_config_for_kind("xero")
+        assert config.authorize_url == "https://login.xero.com/identity/connect/authorize"
+        assert config.token_url == "https://identity.xero.com/connect/token"
+        assert config.token_info_url == "https://api.xero.com/connections"
+        assert config.client_id == "xero-client-id"
+        assert config.client_secret == "xero-client-secret"
+        # Xero only issues a refresh token when offline_access is granted.
+        assert "offline_access" in config.scope.split()
+        assert config.id_path == "xero_tenant_id"
+
+    @override_settings(XERO_APP_CLIENT_ID="", XERO_APP_CLIENT_SECRET="")
+    def test_oauth_config_unconfigured_raises(self):
+        with pytest.raises(NotImplementedError, match="Xero app not configured"):
+            OauthIntegration.oauth_config_for_kind("xero")
+
+    @patch("posthog.models.integration.requests.get")
+    @patch("posthog.models.integration.requests.post")
+    def test_integration_from_oauth_response_labels_with_the_first_organisation(self, mock_post, mock_get):
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "access_token": "at_1",
+            "refresh_token": "rt_1",
+            "expires_in": 1800,
+        }
+        # The token response carries no organisation, so /connections (a list) supplies it.
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = [
+            {"id": "conn-1", "tenantId": "tenant-a", "tenantName": "Acme", "tenantType": "ORGANISATION"},
+            {"id": "conn-2", "tenantId": "tenant-b", "tenantName": "Beta", "tenantType": "ORGANISATION"},
+        ]
+
+        integration = OauthIntegration.integration_from_oauth_response(
+            "xero",
+            self.team.id,
+            self.user,
+            {"code": "code", "state": "token=state_token"},
+        )
+
+        assert integration.kind == "xero"
+        assert integration.integration_id == "tenant-a"
+        assert integration.config["xero_tenant_name"] == "Acme"
+        assert integration.sensitive_config["access_token"] == "at_1"
+        assert integration.sensitive_config["refresh_token"] == "rt_1"
+
+    @patch("posthog.models.integration.requests.get")
+    @patch("posthog.models.integration.requests.post")
+    def test_integration_from_oauth_response_without_an_organisation_raises(self, mock_post, mock_get):
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"access_token": "at_1", "refresh_token": "rt_1", "expires_in": 1800}
+        # A login that only reaches a practice tenant can't be used with the Accounting API.
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = [
+            {"id": "conn-1", "tenantId": "practice-1", "tenantName": "Practice", "tenantType": "PRACTICE"}
+        ]
+
+        with pytest.raises(ValidationError, match="No Xero organizations are connected"):
+            OauthIntegration.integration_from_oauth_response(
+                "xero",
+                self.team.id,
+                self.user,
+                {"code": "code", "state": "token=state_token"},
+            )
