@@ -15,6 +15,11 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.http import make_tracked_session
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
+from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.oauth import (
+    INTEGRATION_TOKEN_RECHECK_SECONDS,
+    MISSING_INTEGRATION_ID_ERROR,
+    resolve_google_drive_oauth_token,
+)
 from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.settings import (
     DRIVE_FIELDS,
     GOOGLE_DRIVE_ENDPOINTS,
@@ -28,7 +33,7 @@ GOOGLE_DRIVE_API_BASE = "https://www.googleapis.com/drive"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 # Read-only is all this source ever needs; asking for less than `drive.readonly` (e.g.
-# `drive.metadata.readonly`) would block the shared-drive permission listing.
+# `drive.metadata.readonly`) would block listing shared drives.
 DRIVE_READONLY_SCOPES = ("https://www.googleapis.com/auth/drive.readonly",)
 
 REQUEST_TIMEOUT_SECONDS = 60
@@ -42,7 +47,6 @@ INVALID_SERVICE_ACCOUNT_KEY_ERROR = (
     "Invalid Google Drive service account key: expected the JSON key file contents, "
     "including client_email and private_key"
 )
-MISSING_OAUTH_CREDENTIALS_ERROR = "Missing Google Drive OAuth client credentials"
 AUTH_FAILED_ERROR_PREFIX = "Google Drive authentication failed"
 RATE_LIMIT_ERROR_PREFIX = "Google Drive rate limit"
 
@@ -74,13 +78,13 @@ class GoogleDriveRetryableError(Exception):
 @dataclasses.dataclass(frozen=True)
 class GoogleDriveAuth:
     """Either a service account JSON key (optionally impersonating a Workspace user through
-    domain-wide delegation) or a customer-owned OAuth client plus refresh token."""
+    domain-wide delegation) or a Google account connected to PostHog's OAuth app, referenced by its
+    integration row so the token is read fresh rather than captured at config time."""
 
     service_account_key: Optional[str] = None
     impersonated_user_email: Optional[str] = None
-    client_id: Optional[str] = None
-    client_secret: Optional[str] = None
-    refresh_token: Optional[str] = None
+    integration_id: Optional[int] = None
+    team_id: Optional[int] = None
 
 
 @dataclasses.dataclass
@@ -142,11 +146,13 @@ def _error_reason(response: requests.Response) -> str:
 
 
 class GoogleDriveClient:
-    """Minted-token Drive client over the tracked session.
+    """Bearer-token Drive client over the tracked session.
 
-    Both auth methods produce a short-lived bearer token, so the client owns minting, caching, and
-    re-minting it. Neither session captures HTTP samples: the token exchange body is the access
-    token itself, and Drive responses carry tenant metadata the name-based scrubbers can't recognise.
+    Both auth methods produce a short-lived bearer token, so the client owns fetching, caching, and
+    re-fetching it: minted locally from the service account key, or read (and refreshed) off the
+    integration row for the OAuth path. Neither session captures HTTP samples: the token exchange
+    body is the access token itself, and Drive responses carry tenant metadata the name-based
+    scrubbers can't recognise.
     """
 
     def __init__(
@@ -175,17 +181,15 @@ class GoogleDriveClient:
         self._token_expires_at: float = 0.0
 
     def _redact_values(self) -> tuple[str, ...]:
-        values = [
-            self._auth.client_secret,
-            self._auth.refresh_token,
-            (self._service_account_info or {}).get("private_key"),
-        ]
-        return tuple(value for value in values if isinstance(value, str) and value)
+        # The OAuth path's only secret is the bearer token, and it only ever rides the Authorization
+        # header, which the tracked transport already scrubs by name.
+        private_key = (self._service_account_info or {}).get("private_key")
+        return (private_key,) if isinstance(private_key, str) and private_key else ()
 
-    def _mint_access_token(self) -> tuple[str, float]:
+    def _fetch_access_token(self, force_refresh: bool) -> tuple[str, float]:
         if self._service_account_info is not None:
             return self._mint_service_account_token(self._service_account_info)
-        return self._mint_refresh_token_grant()
+        return self._integration_access_token(force_refresh)
 
     def _mint_service_account_token(self, info: dict[str, Any]) -> tuple[str, float]:
         try:
@@ -213,47 +217,18 @@ class GoogleDriveClient:
             return token, aware.timestamp()
         return token, time.time() + DEFAULT_TOKEN_LIFETIME_SECONDS
 
-    def _mint_refresh_token_grant(self) -> tuple[str, float]:
-        if not self._auth.client_id or not self._auth.client_secret or not self._auth.refresh_token:
-            raise GoogleDriveAuthError(MISSING_OAUTH_CREDENTIALS_ERROR)
+    def _integration_access_token(self, force_refresh: bool) -> tuple[str, float]:
+        if self._auth.integration_id is None or self._auth.team_id is None:
+            raise GoogleDriveAuthError(MISSING_INTEGRATION_ID_ERROR)
 
         try:
-            response = self._token_session.post(
-                GOOGLE_TOKEN_URL,
-                data={
-                    "client_id": self._auth.client_id,
-                    "client_secret": self._auth.client_secret,
-                    "refresh_token": self._auth.refresh_token,
-                    "grant_type": "refresh_token",
-                },
-                timeout=REQUEST_TIMEOUT_SECONDS,
+            token = resolve_google_drive_oauth_token(
+                self._auth.integration_id, self._auth.team_id, force_refresh=force_refresh
             )
-        except requests.exceptions.RequestException as e:
-            raise GoogleDriveAuthError(f"{AUTH_FAILED_ERROR_PREFIX}: {e}") from e
+        except ValueError as e:
+            raise GoogleDriveAuthError(str(e)) from e
 
-        if not response.ok:
-            # Google's token endpoint names the cause in `error` (invalid_grant for a revoked or
-            # expired refresh token, invalid_client for bad client credentials). Surface it rather
-            # than a bare status, since neither is recoverable by retrying.
-            reason = ""
-            try:
-                body = response.json()
-                if isinstance(body, dict):
-                    reason = str(body.get("error") or "")
-            except ValueError:
-                pass
-            raise GoogleDriveAuthError(f"{AUTH_FAILED_ERROR_PREFIX}: status={response.status_code} {reason}".strip())
-
-        payload = response.json()
-        token = payload.get("access_token") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token:
-            raise GoogleDriveAuthError(f"{AUTH_FAILED_ERROR_PREFIX}: no access token was returned")
-
-        try:
-            lifetime = float(payload.get("expires_in") or DEFAULT_TOKEN_LIFETIME_SECONDS)
-        except (TypeError, ValueError):
-            lifetime = DEFAULT_TOKEN_LIFETIME_SECONDS
-        return token, time.time() + lifetime
+        return token, time.time() + INTEGRATION_TOKEN_RECHECK_SECONDS
 
     def access_token(self, force_refresh: bool = False) -> str:
         if (
@@ -261,7 +236,7 @@ class GoogleDriveClient:
             or self._access_token is None
             or time.time() >= self._token_expires_at - TOKEN_EXPIRY_MARGIN_SECONDS
         ):
-            self._access_token, self._token_expires_at = self._mint_access_token()
+            self._access_token, self._token_expires_at = self._fetch_access_token(force_refresh)
         return self._access_token
 
     def _send(self, url: str, params: dict[str, str], timeout: float, force_token_refresh: bool) -> requests.Response:
@@ -319,7 +294,7 @@ def validate_credentials(
         response = e.response
         status = response.status_code if response is not None else None
         if status == 401:
-            return False, "Google Drive rejected these credentials. Check the key or refresh token and try again."
+            return False, "Google Drive rejected these credentials. Reconnect the account or check the key."
         if status == 403:
             reason = _error_reason(response) if response is not None else ""
             if reason == "accessnotconfigured":

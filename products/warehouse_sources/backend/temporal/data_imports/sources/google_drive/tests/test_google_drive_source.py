@@ -6,7 +6,7 @@ from unittest import mock
 
 import structlog
 
-from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldSelectConfig
+from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldOauthConfig, SourceFieldSelectConfig
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceInputs
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
@@ -28,9 +28,7 @@ def _config(
     selection: str = "service_account",
     service_account_key: Optional[str] = SERVICE_ACCOUNT_KEY,
     impersonated_user_email: Optional[str] = None,
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    refresh_token: Optional[str] = None,
+    integration_id: Optional[int] = None,
     drive_id: Optional[str] = None,
 ) -> GoogleDriveSourceConfig:
     return GoogleDriveSourceConfig(
@@ -38,26 +36,14 @@ def _config(
             selection=cast(Any, selection),
             service_account_key=service_account_key,
             impersonated_user_email=impersonated_user_email,
-            client_id=client_id,
-            client_secret=client_secret,
-            refresh_token=refresh_token,
+            google_drive_integration_id=integration_id,
         ),
         drive_id=drive_id,
     )
 
 
-def _oauth_config(
-    client_id: Optional[str] = "cid",
-    client_secret: Optional[str] = "csecret",
-    refresh_token: Optional[str] = "rtoken",
-) -> GoogleDriveSourceConfig:
-    return _config(
-        selection="oauth",
-        service_account_key=None,
-        client_id=client_id,
-        client_secret=client_secret,
-        refresh_token=refresh_token,
-    )
+def _oauth_config(integration_id: Optional[int] = 42) -> GoogleDriveSourceConfig:
+    return _config(selection="oauth", service_account_key=None, integration_id=integration_id)
 
 
 def _source_inputs(
@@ -173,21 +159,23 @@ def test_canonical_descriptions_cover_every_endpoint() -> None:
         ),
         (
             _oauth_config(),
-            GoogleDriveAuth(client_id="cid", client_secret="csecret", refresh_token="rtoken"),
+            GoogleDriveAuth(integration_id=42, team_id=7),
         ),
     ],
 )
 def test_get_auth_builds_the_right_credential(config: GoogleDriveSourceConfig, expected_auth: GoogleDriveAuth) -> None:
-    assert GoogleDriveSource()._get_auth(config) == expected_auth
+    with mock.patch.object(GoogleDriveSource, "get_oauth_integration") as get_integration:
+        assert GoogleDriveSource()._get_auth(config, team_id=7) == expected_auth
+
+    if config.auth_method.selection == "oauth":
+        get_integration.assert_called_once_with(42, 7)
 
 
 @pytest.mark.parametrize(
     "config,expected_fragment",
     [
         (_config(service_account_key=None), "No Google Drive service account key"),
-        (_oauth_config(client_id=None), "client ID, client secret, or refresh token is missing"),
-        (_oauth_config(client_secret=None), "client ID, client secret, or refresh token is missing"),
-        (_oauth_config(refresh_token=None), "client ID, client secret, or refresh token is missing"),
+        (_oauth_config(integration_id=None), "No Google account is connected"),
     ],
 )
 def test_validate_credentials_maps_missing_config_to_a_friendly_error(
@@ -197,6 +185,27 @@ def test_validate_credentials_maps_missing_config_to_a_friendly_error(
 
     assert valid is False
     assert expected_fragment in cast(str, message)
+
+
+def test_validate_credentials_reports_a_deleted_integration_without_leaking_its_id() -> None:
+    with mock.patch.object(
+        GoogleDriveSource, "get_oauth_integration", side_effect=ValueError("Integration not found: 42")
+    ):
+        valid, message = GoogleDriveSource().validate_credentials(_oauth_config(), team_id=1)
+
+    assert valid is False
+    assert message == "The linked Google account no longer exists in PostHog. Please reconnect the source."
+
+
+def test_validate_credentials_passes_the_connected_account_to_the_transport() -> None:
+    with mock.patch.object(GoogleDriveSource, "get_oauth_integration"):
+        with mock.patch(
+            "products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.source.validate_google_drive_credentials",
+            return_value=(True, None),
+        ) as validate:
+            assert GoogleDriveSource().validate_credentials(_oauth_config(), team_id=7) == (True, None)
+
+    validate.assert_called_once_with(GoogleDriveAuth(integration_id=42, team_id=7), "v3")
 
 
 def test_validate_credentials_delegates_to_the_transport_with_the_resolved_version() -> None:
@@ -277,26 +286,42 @@ def test_a_blank_drive_id_is_passed_as_no_scope() -> None:
     assert transport.call_args.kwargs["drive_id"] is None
 
 
-def test_auth_fields_are_offered_per_method_and_secrets_are_marked() -> None:
+def test_source_for_pipeline_hands_the_transport_the_connected_account() -> None:
+    # The token itself is read per request off the integration row, so only the reference travels
+    inputs = _source_inputs()
+    manager = GoogleDriveSource().get_resumable_source_manager(inputs)
+
+    with mock.patch.object(GoogleDriveSource, "get_oauth_integration"):
+        with mock.patch(
+            "products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.source.google_drive_source"
+        ) as transport:
+            GoogleDriveSource().source_for_pipeline(_oauth_config(), manager, inputs)
+
+    assert transport.call_args.kwargs["auth"] == GoogleDriveAuth(integration_id=42, team_id=inputs.team_id)
+
+
+def test_connecting_a_google_account_is_the_default_auth_method() -> None:
     fields = GoogleDriveSource().get_source_config.fields
     auth_field = next(field for field in fields if isinstance(field, SourceFieldSelectConfig))
 
-    per_option: dict[str, list[str]] = {}
-    for option in auth_field.options:
-        option_fields = option.fields or []
-        per_option[option.value] = [field.name for field in option_fields if isinstance(field, SourceFieldInputConfig)]
-        for field in option_fields:
-            if isinstance(field, SourceFieldInputConfig) and field.name in {
-                "service_account_key",
-                "client_secret",
-                "refresh_token",
-            }:
-                assert field.secret is True
+    assert auth_field.defaultValue == "oauth"
 
-    assert per_option == {
-        "service_account": ["service_account_key", "impersonated_user_email"],
-        "oauth": ["client_id", "client_secret", "refresh_token"],
-    }
+    options = {option.value: option.fields or [] for option in auth_field.options}
+    assert set(options) == {"oauth", "service_account"}
+
+    oauth_field = options["oauth"][0]
+    assert isinstance(oauth_field, SourceFieldOauthConfig)
+    assert oauth_field.name == "google_drive_integration_id"
+    assert oauth_field.kind == "google-drive"
+    # drives.list is not reachable with the narrower drive.metadata.readonly scope
+    assert oauth_field.requiredScopes == "https://www.googleapis.com/auth/drive.readonly"
+
+    # The service account key stays as a second method, and users never paste OAuth client secrets
+    service_account_fields = [field.name for field in options["service_account"]]
+    assert service_account_fields == ["service_account_key", "impersonated_user_email"]
+    for field in options["service_account"]:
+        if isinstance(field, SourceFieldInputConfig) and field.name == "service_account_key":
+            assert field.secret is True
 
 
 def test_non_retryable_errors_cover_auth_and_permission_failures() -> None:
@@ -305,6 +330,8 @@ def test_non_retryable_errors_cover_auth_and_permission_failures() -> None:
     assert "401 Client Error" in errors
     assert "403 Client Error" in errors
     assert "Google Drive authentication failed" in errors
+    # A revoked or deleted connection needs a reconnect, not a retry
+    assert "Integration not found" in errors
 
 
 def test_rate_limits_are_reported_as_self_recovering() -> None:

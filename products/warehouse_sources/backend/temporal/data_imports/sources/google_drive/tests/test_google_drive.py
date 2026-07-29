@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from typing import Any, Optional, cast
 
@@ -13,7 +14,6 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.google_dri
 from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.google_drive import (
     AUTH_FAILED_ERROR_PREFIX,
     INVALID_SERVICE_ACCOUNT_KEY_ERROR,
-    MISSING_OAUTH_CREDENTIALS_ERROR,
     GoogleDriveAuth,
     GoogleDriveAuthError,
     GoogleDriveClient,
@@ -29,11 +29,14 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.google_dri
     google_drive_source,
     validate_credentials,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.oauth import (
+    MISSING_INTEGRATION_ID_ERROR,
+)
 from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.settings import (
     GOOGLE_DRIVE_ENDPOINTS,
 )
 
-OAUTH_AUTH = GoogleDriveAuth(client_id="cid", client_secret="csecret", refresh_token="rtoken")
+OAUTH_AUTH = GoogleDriveAuth(integration_id=42, team_id=7)
 SERVICE_ACCOUNT_KEY = json.dumps(
     {"type": "service_account", "client_email": "sa@project.iam.gserviceaccount.com", "private_key": "-----KEY-----"}
 )
@@ -76,19 +79,21 @@ def _response(json_body: Any, status: int = 200) -> mock.Mock:
     return response
 
 
-def _token_response(access_token: str = "minted-token", expires_in: int = 3600) -> mock.Mock:
-    return _response({"access_token": access_token, "expires_in": expires_in})
+@pytest.fixture(autouse=True)
+def integration_token() -> Iterator[mock.Mock]:
+    """The OAuth path reads its bearer token off the integration row, so stub that lookup for every
+    test here. Tests that care about the token sequence re-patch it with their own side effect."""
+    with mock.patch.object(google_drive, "resolve_google_drive_oauth_token", return_value="minted-token") as resolve:
+        yield resolve
 
 
 def _make_client(
     api_responses: list[Any],
-    token_responses: Optional[list[Any]] = None,
     auth: GoogleDriveAuth = OAUTH_AUTH,
 ) -> tuple[GoogleDriveClient, mock.Mock, mock.Mock]:
     api_session = mock.Mock()
     api_session.get.side_effect = list(api_responses)
     token_session = mock.Mock()
-    token_session.post.side_effect = list(token_responses if token_responses is not None else [_token_response()])
 
     with mock.patch.object(google_drive, "make_tracked_session", side_effect=[api_session, token_session]):
         client = GoogleDriveClient(auth)
@@ -237,56 +242,33 @@ def test_error_reason_survives_a_non_json_body() -> None:
     assert _error_reason(response) == ""
 
 
-def test_refresh_token_grant_mints_and_caches_the_access_token() -> None:
-    client, api_session, token_session = _make_client([_response({"files": []}), _response({"files": []})])
+def test_the_integration_token_is_read_once_and_reused(integration_token: mock.Mock) -> None:
+    client, api_session, _ = _make_client([_response({"files": []}), _response({"files": []})])
 
     client.get("/files", {})
     client.get("/files", {})
 
-    # One token exchange serves both requests
-    assert token_session.post.call_count == 1
-    assert token_session.post.call_args.kwargs["data"] == {
-        "client_id": "cid",
-        "client_secret": "csecret",
-        "refresh_token": "rtoken",
-        "grant_type": "refresh_token",
-    }
+    # One row lookup serves both requests
+    assert integration_token.call_count == 1
+    assert integration_token.call_args.args == (42, 7)
     assert api_session.get.call_args.kwargs["headers"]["Authorization"] == "Bearer minted-token"
 
 
-def test_expired_token_is_re_minted_before_the_next_request() -> None:
-    # A token whose remaining life is inside the safety margin must be replaced, or a long walk
-    # would send a token that lapses in flight.
-    client, api_session, token_session = _make_client(
-        [_response({"files": []}), _response({"files": []})],
-        token_responses=[_token_response("first", expires_in=1), _token_response("second")],
-    )
-
-    client.get("/files", {})
-    client.get("/files", {})
-
-    assert token_session.post.call_count == 2
-    authorizations = [call.kwargs["headers"]["Authorization"] for call in api_session.get.call_args_list]
-    assert authorizations == ["Bearer first", "Bearer second"]
-
-
-def test_a_401_re_mints_the_token_once_and_retries() -> None:
-    client, api_session, token_session = _make_client(
-        [_response({}, status=401), _response({"files": [{"id": "f1"}]})],
-        token_responses=[_token_response("stale"), _token_response("fresh")],
-    )
+def test_a_401_re_reads_the_token_once_and_retries(integration_token: mock.Mock) -> None:
+    # A cached token can be invalidated before its stated expiry, so the retry asks the row for a
+    # freshly refreshed one rather than replaying the same bearer.
+    integration_token.side_effect = ["stale", "fresh"]
+    client, api_session, _ = _make_client([_response({}, status=401), _response({"files": [{"id": "f1"}]})])
 
     assert client.get("/files", {}) == {"files": [{"id": "f1"}]}
-    assert token_session.post.call_count == 2
+    assert [call.kwargs["force_refresh"] for call in integration_token.call_args_list] == [False, True]
     authorizations = [call.kwargs["headers"]["Authorization"] for call in api_session.get.call_args_list]
     assert authorizations == ["Bearer stale", "Bearer fresh"]
 
 
-def test_a_persistent_401_is_raised_after_one_re_mint() -> None:
-    client, api_session, _ = _make_client(
-        [_response({}, status=401), _response({}, status=401)],
-        token_responses=[_token_response("a"), _token_response("b")],
-    )
+def test_a_persistent_401_is_raised_after_one_re_read(integration_token: mock.Mock) -> None:
+    integration_token.side_effect = ["a", "b"]
+    client, api_session, _ = _make_client([_response({}, status=401), _response({}, status=401)])
 
     with pytest.raises(requests.exceptions.HTTPError):
         client.get("/files", {})
@@ -383,34 +365,45 @@ def test_service_account_impersonation_is_omitted_when_unset() -> None:
 
 
 @pytest.mark.parametrize(
-    "auth,expected_message",
+    "auth",
     [
-        (GoogleDriveAuth(client_id="cid", client_secret="cs"), MISSING_OAUTH_CREDENTIALS_ERROR),
-        (GoogleDriveAuth(refresh_token="rt"), MISSING_OAUTH_CREDENTIALS_ERROR),
-        (GoogleDriveAuth(), MISSING_OAUTH_CREDENTIALS_ERROR),
+        GoogleDriveAuth(),
+        GoogleDriveAuth(integration_id=42),
+        GoogleDriveAuth(team_id=7),
     ],
 )
-def test_incomplete_oauth_credentials_fail_without_a_token_call(auth: GoogleDriveAuth, expected_message: str) -> None:
-    client, _, token_session = _make_client([], auth=auth)
+def test_an_unreferenced_integration_fails_without_a_lookup(
+    auth: GoogleDriveAuth, integration_token: mock.Mock
+) -> None:
+    client, _, _ = _make_client([], auth=auth)
 
-    with pytest.raises(GoogleDriveAuthError, match=expected_message):
+    with pytest.raises(GoogleDriveAuthError, match=MISSING_INTEGRATION_ID_ERROR):
         client.access_token()
 
-    token_session.post.assert_not_called()
+    integration_token.assert_not_called()
 
 
-def test_a_rejected_refresh_token_surfaces_googles_reason() -> None:
-    client, _, _ = _make_client([], token_responses=[_response({"error": "invalid_grant"}, status=400)])
+def test_a_missing_integration_row_becomes_an_auth_error(integration_token: mock.Mock) -> None:
+    # The row is gone (integration deleted, or moved to another team), which no retry can fix.
+    integration_token.side_effect = ValueError("Integration not found: 42")
+    client, _, _ = _make_client([])
 
-    with pytest.raises(GoogleDriveAuthError, match="invalid_grant"):
+    with pytest.raises(GoogleDriveAuthError, match="Integration not found: 42"):
         client.access_token()
 
 
-def test_a_token_response_without_a_token_is_an_auth_error() -> None:
-    client, _, _ = _make_client([], token_responses=[_response({"expires_in": 3600})])
+def test_a_service_account_that_mints_no_token_is_an_auth_error() -> None:
+    credentials = mock.Mock()
+    credentials.token = None
 
-    with pytest.raises(GoogleDriveAuthError, match=AUTH_FAILED_ERROR_PREFIX):
-        client.access_token()
+    with mock.patch.object(google_drive, "make_tracked_session", side_effect=[mock.Mock(), mock.Mock()]):
+        with mock.patch.object(
+            google_drive.service_account.Credentials, "from_service_account_info", return_value=credentials
+        ):
+            client = GoogleDriveClient(GoogleDriveAuth(service_account_key=SERVICE_ACCOUNT_KEY))
+
+            with pytest.raises(GoogleDriveAuthError, match=AUTH_FAILED_ERROR_PREFIX):
+                client.access_token()
 
 
 def test_secret_values_are_registered_for_redaction() -> None:
@@ -675,11 +668,8 @@ def test_validate_credentials_probes_about() -> None:
     ],
 )
 def test_validate_credentials_maps_http_failures(status: int, body: Any, expected_fragment: str) -> None:
-    # A 401 re-mints the token and retries once, so both paths need a second canned response
-    client, _, _ = _make_client(
-        [_response(body, status=status), _response(body, status=status)],
-        token_responses=[_token_response(), _token_response()],
-    )
+    # A 401 re-reads the token and retries once, so both paths need a second canned response
+    client, _, _ = _make_client([_response(body, status=status), _response(body, status=status)])
 
     with mock.patch.object(google_drive, "GoogleDriveClient", return_value=client):
         valid, message = validate_credentials(OAUTH_AUTH)

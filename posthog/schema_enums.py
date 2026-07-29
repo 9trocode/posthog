@@ -2803,6 +2803,7 @@ class IntegrationKind(StrEnum):
     GOOGLE_CLOUD_STORAGE = "google-cloud-storage"
     GOOGLE_ADS = "google-ads"
     GOOGLE_ANALYTICS = "google-analytics"
+    GOOGLE_DRIVE = "google-drive"
     GOOGLE_SEARCH_CONSOLE = "google-search-console"
     GOOGLE_SHEETS = "google-sheets"
     LINKEDIN_ADS = "linkedin-ads"

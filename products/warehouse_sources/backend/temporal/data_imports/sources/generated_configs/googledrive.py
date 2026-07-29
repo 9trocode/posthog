@@ -8,12 +8,12 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common imp
 
 @config.config
 class GoogleDriveAuthMethodConfig(config.Config):
-    selection: Literal["service_account", "oauth"] = "service_account"
+    google_drive_integration_id: int | None = config.value(
+        converter=config.str_to_optional_int, default_factory=lambda: None
+    )
+    selection: Literal["oauth", "service_account"] = "oauth"
     service_account_key: str | None = None
     impersonated_user_email: str | None = None
-    client_id: str | None = None
-    client_secret: str | None = None
-    refresh_token: str | None = None
 
 
 @config.config

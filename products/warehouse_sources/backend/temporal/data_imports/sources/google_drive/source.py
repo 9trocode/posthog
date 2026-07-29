@@ -7,6 +7,7 @@ from posthog.schema import (
     SourceConfig,
     SourceFieldInputConfig,
     SourceFieldInputConfigType,
+    SourceFieldOauthConfig,
     SourceFieldSelectConfig,
     SourceFieldSelectConfigOption,
 )
@@ -19,6 +20,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.bas
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.canonical_descriptions import (
     CanonicalDescriptions,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.mixins import OAuthMixin
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.registry import SourceRegistry
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.schema import SourceSchema
@@ -26,13 +28,17 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.generated_
     GoogleDriveSourceConfig,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.google_drive import (
+    DRIVE_READONLY_SCOPES,
     GOOGLE_DRIVE_API_VERSION_V3,
-    MISSING_OAUTH_CREDENTIALS_ERROR,
     MISSING_SERVICE_ACCOUNT_KEY_ERROR,
     GoogleDriveAuth,
     GoogleDriveResumeConfig,
     google_drive_source,
     validate_credentials as validate_google_drive_credentials,
+)
+from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.oauth import (
+    MISSING_ACCESS_TOKEN_ERROR,
+    MISSING_INTEGRATION_ID_ERROR,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.google_drive.settings import (
     ENDPOINT_DESCRIPTIONS,
@@ -42,7 +48,7 @@ from products.warehouse_sources.backend.types import ExternalDataSourceType
 
 
 @SourceRegistry.register
-class GoogleDriveSource(ResumableSource[GoogleDriveSourceConfig, GoogleDriveResumeConfig]):
+class GoogleDriveSource(ResumableSource[GoogleDriveSourceConfig, GoogleDriveResumeConfig], OAuthMixin):
     api_docs_url = "https://developers.google.com/workspace/drive/api/reference/rest/v3"
     # Drive's version is a path segment (`/drive/v3/`) and v2 is retired, so v3 is the only pin.
     supported_versions = (GOOGLE_DRIVE_API_VERSION_V3,)
@@ -62,9 +68,9 @@ class GoogleDriveSource(ResumableSource[GoogleDriveSourceConfig, GoogleDriveResu
             label="Google Drive",
             releaseStatus=ReleaseStatus.ALPHA,
             keywords=["gdrive", "google workspace"],
-            caption="""Sync your Google Drive file inventory, shared drives, and shared drive access grants. This reads file metadata only — it does not download file contents.
+            caption="""Sync your Google Drive file inventory, shared drives, and shared drive access grants. This reads file metadata only and never downloads file contents.
 
-Whichever method you pick needs the `https://www.googleapis.com/auth/drive.readonly` scope, and the Google Drive API must be enabled in the Google Cloud project that owns the credentials.""",
+Connect a Google account and grant read-only access to Drive. To sync a drive no single person should own the connection to, switch the authentication type and paste a service account key instead.""",
             iconPath="/static/services/google_drive.png",
             docsUrl="https://posthog.com/docs/cdp/sources/google-drive",
             fields=cast(
@@ -74,8 +80,24 @@ Whichever method you pick needs the `https://www.googleapis.com/auth/drive.reado
                         name="auth_method",
                         label="Authentication type",
                         required=True,
-                        defaultValue="service_account",
+                        defaultValue="oauth",
                         options=[
+                            SourceFieldSelectConfigOption(
+                                label="Google account",
+                                value="oauth",
+                                fields=cast(
+                                    list[FieldType],
+                                    [
+                                        SourceFieldOauthConfig(
+                                            name="google_drive_integration_id",
+                                            label="Google Drive account",
+                                            required=False,
+                                            kind="google-drive",
+                                            requiredScopes=" ".join(DRIVE_READONLY_SCOPES),
+                                        ),
+                                    ],
+                                ),
+                            ),
                             SourceFieldSelectConfigOption(
                                 label="Service account key",
                                 value="service_account",
@@ -99,40 +121,6 @@ Whichever method you pick needs the `https://www.googleapis.com/auth/drive.reado
                                             placeholder="you@yourcompany.com",
                                             caption="Optional. With domain-wide delegation set up, the service account reads Drive as this user.",
                                             secret=False,
-                                        ),
-                                    ],
-                                ),
-                            ),
-                            SourceFieldSelectConfigOption(
-                                label="OAuth client and refresh token",
-                                value="oauth",
-                                fields=cast(
-                                    list[FieldType],
-                                    [
-                                        SourceFieldInputConfig(
-                                            name="client_id",
-                                            label="Client ID",
-                                            type=SourceFieldInputConfigType.TEXT,
-                                            required=False,
-                                            placeholder="....apps.googleusercontent.com",
-                                            secret=False,
-                                        ),
-                                        SourceFieldInputConfig(
-                                            name="client_secret",
-                                            label="Client secret",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="",
-                                            secret=True,
-                                        ),
-                                        SourceFieldInputConfig(
-                                            name="refresh_token",
-                                            label="Refresh token",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="1//...",
-                                            caption="A refresh token for your own OAuth client, authorized for the Drive account you want to sync.",
-                                            secret=True,
                                         ),
                                     ],
                                 ),
@@ -163,11 +151,16 @@ Whichever method you pick needs the `https://www.googleapis.com/auth/drive.reado
         return {
             "401 Client Error": "Google Drive rejected these credentials. They may have been revoked or rotated — reconnect the source with a fresh key or refresh token.",
             "403 Client Error": "These credentials cannot read Drive. Grant the drive.readonly scope, enable the Google Drive API in the Google Cloud project, and reconnect.",
-            # Raised while minting the access token: a revoked refresh token, a rotated service
-            # account key, or delegation that was withdrawn. None of it recovers on retry.
-            "Google Drive authentication failed": "PostHog could not get an access token for Google Drive. Check the service account key or refresh token, then reconnect.",
+            # Raised while getting the access token: a rotated service account key, delegation that
+            # was withdrawn, or a revoked Google connection. None of it recovers on retry.
+            "Google Drive authentication failed": "PostHog could not get an access token for Google Drive. Reconnect your Google account, or check the service account key.",
             MISSING_SERVICE_ACCOUNT_KEY_ERROR: "No Google Drive service account key is configured. Please update the source configuration.",
-            MISSING_OAUTH_CREDENTIALS_ERROR: "The Google Drive client ID, client secret, or refresh token is missing. Please update the source configuration.",
+            # Deterministic credential errors from the OAuth path: the integration row is missing or
+            # holds no token, so retrying can never succeed. Match on the stable prefix so the
+            # volatile integration ID is ignored.
+            MISSING_INTEGRATION_ID_ERROR: "No Google account is connected. Please reconnect the source.",
+            "Integration not found": "The linked Google account no longer exists in PostHog. Please reconnect the source.",
+            MISSING_ACCESS_TOKEN_ERROR: "The Google Drive connection has no access token. Please reconnect the source.",
             "Invalid Google Drive service account key": None,
         }
 
@@ -176,17 +169,15 @@ Whichever method you pick needs the `https://www.googleapis.com/auth/drive.reado
         # re-raises once the budget is spent, so Temporal retrying the activity is the right outcome.
         return {"Google Drive rate limit"}
 
-    def _get_auth(self, config: GoogleDriveSourceConfig) -> GoogleDriveAuth:
+    def _get_auth(self, config: GoogleDriveSourceConfig, team_id: int) -> GoogleDriveAuth:
         if config.auth_method.selection == "oauth":
-            if not config.auth_method.client_id or not config.auth_method.client_secret:
-                raise ValueError(MISSING_OAUTH_CREDENTIALS_ERROR)
-            if not config.auth_method.refresh_token:
-                raise ValueError(MISSING_OAUTH_CREDENTIALS_ERROR)
-            return GoogleDriveAuth(
-                client_id=config.auth_method.client_id,
-                client_secret=config.auth_method.client_secret,
-                refresh_token=config.auth_method.refresh_token,
-            )
+            integration_id = config.auth_method.google_drive_integration_id
+            if not integration_id:
+                raise ValueError(MISSING_INTEGRATION_ID_ERROR)
+            # Ownership check up front, so a deleted or foreign integration fails here with a stable
+            # error instead of at the first request. The token itself is read later, per request.
+            self.get_oauth_integration(integration_id, team_id)
+            return GoogleDriveAuth(integration_id=integration_id, team_id=team_id)
 
         if not config.auth_method.service_account_key:
             raise ValueError(MISSING_SERVICE_ACCOUNT_KEY_ERROR)
@@ -230,10 +221,15 @@ Whichever method you pick needs the `https://www.googleapis.com/auth/drive.reado
         api_version: str | None = None,
     ) -> tuple[bool, str | None]:
         try:
-            auth = self._get_auth(config)
+            auth = self._get_auth(config, team_id)
         except ValueError as e:
+            # The OAuth mixin's "Integration not found: <id>" carries a volatile ID, so match on the
+            # curated prefixes rather than looking the raw message up as a key.
             raw = str(e)
-            return False, self.get_non_retryable_errors().get(raw) or raw
+            for pattern, friendly in self.get_non_retryable_errors().items():
+                if friendly and pattern in raw:
+                    return False, friendly
+            return False, raw
 
         return validate_google_drive_credentials(auth, self.resolve_api_version(api_version))
 
@@ -247,7 +243,7 @@ Whichever method you pick needs the `https://www.googleapis.com/auth/drive.reado
         inputs: SourceInputs,
     ) -> SourceResponse:
         return google_drive_source(
-            auth=self._get_auth(config),
+            auth=self._get_auth(config, inputs.team_id),
             endpoint=inputs.schema_name,
             api_version=self.resolve_api_version(inputs.api_version),
             source_logger=inputs.logger,
