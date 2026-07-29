@@ -60,6 +60,8 @@ export interface DataTableVisualizationProps {
     editMode?: boolean
     readOnly?: boolean
     embedded?: boolean
+    /** True on shared/exported surfaces, where authenticated-only overlays must not render */
+    inSharedMode?: boolean
     exportContext?: ExportContext
     /** Dashboard variables to override the ones in the query */
     variablesOverride?: Record<string, HogQLVariable> | null
@@ -80,6 +82,7 @@ export function DataTableVisualization({
     attachTo,
     editMode,
     embedded,
+    inSharedMode,
 }: DataTableVisualizationProps): JSX.Element {
     const [key] = useState(`DataVisualizationNode.${uniqueKey ?? uniqueNode++}`)
     const queryRef = useRef(query)
@@ -156,6 +159,7 @@ export function DataTableVisualization({
                                 exportContext={exportContext}
                                 editMode={editMode}
                                 embedded={embedded}
+                                inSharedMode={inSharedMode}
                             />
                         </BindLogic>
                     </BindLogic>
@@ -270,6 +274,7 @@ function InternalDataTableVisualization(props: DataTableVisualizationProps): JSX
                 goalLines={[...alertThresholdLines, ...goalLines]}
                 presetChartHeight={presetChartHeight}
                 insightNumericId={insight?.id}
+                inSharedMode={props.inSharedMode}
             />
         )
     } else if (effectiveVisualizationType === ChartDisplayType.ActionsPie) {
