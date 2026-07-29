@@ -12,7 +12,7 @@ from products.replay_vision.backend.billing import observation_credits_for_model
 from products.replay_vision.backend.enqueue_claims import release_enqueue_claim
 from products.replay_vision.backend.models.replay_observation import ObservationStatus, ReplayObservation
 from products.replay_vision.backend.models.replay_scanner import ReplayScanner
-from products.replay_vision.backend.quota import compute_quota_snapshot
+from products.replay_vision.backend.quota import compute_quota_snapshot, compute_scanner_budget
 from products.replay_vision.backend.temporal.decorators import track_activity
 from products.replay_vision.backend.temporal.metrics import record_quota_exhausted_skip
 from products.replay_vision.backend.temporal.types import (
@@ -83,6 +83,25 @@ def _create_observation(inputs: CreateObservationInputs) -> CreateObservationOut
         activity.logger.info(
             "Skipping observation: monthly quota exhausted",
             extra={"scanner_id": str(inputs.scanner_id), "team_id": inputs.team_id, "session_id": inputs.session_id},
+        )
+        return CreateObservationOutput(
+            observation_id=None,
+            was_created=False,
+            scanner_type=scanner.scanner_type,
+        )
+
+    scanner_budget = compute_scanner_budget(scanner)
+    if scanner_budget.would_exceed(observation_credits_for_model(scanner.model)):
+        record_quota_exhausted_skip(scanner.scanner_type, "scanner")
+        activity.logger.info(
+            "Skipping observation: scanner credit limit reached",
+            extra={
+                "scanner_id": str(inputs.scanner_id),
+                "team_id": inputs.team_id,
+                "session_id": inputs.session_id,
+                "credit_limit": scanner_budget.credit_limit,
+                "credits_used": scanner_budget.credits_used,
+            },
         )
         return CreateObservationOutput(
             observation_id=None,

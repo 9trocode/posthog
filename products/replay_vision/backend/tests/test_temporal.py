@@ -485,6 +485,63 @@ class TestCreateObservationActivity:
         )
         assert not ReplayObservation.objects.filter(scanner=scanner, session_id="sess-no-consent").exists()
 
+    @staticmethod
+    def _seed_spent_credits(scanner: ReplayScanner, credits: int) -> None:
+        # Mirrors production: a succeeded observation's spend only counts once it has a usage receipt.
+        if credits <= 0:
+            return
+        observation = ReplayObservation.objects.create(
+            scanner=scanner,
+            team=scanner.team,
+            session_id=f"sess-spent-{ReplayObservation.objects.count()}",
+            status=ObservationStatus.SUCCEEDED,
+            scanner_snapshot=_snapshot_for(scanner),
+            triggered_by=ObservationTrigger.ON_DEMAND,
+            completed_at=timezone.now(),
+        )
+        ReplayObservationUsage.objects.create(
+            observation_id=observation.id,
+            organization_id=scanner.team.organization_id,
+            team_id=scanner.team_id,
+            scanner_id=scanner.id,
+            observation_created_at=observation.created_at,
+            model=scanner.model,
+            credits=credits,
+        )
+
+    @parameterized.expand(
+        [
+            (None, 0, True),
+            (None, 10_000, True),
+            (100, 0, True),
+            (100, 80, True),
+            (100, 90, False),
+            (100, 100, False),
+            (15, 0, True),
+            (14, 0, False),
+        ]
+    )
+    def test_scanner_credit_limit_gates_observation_creation(
+        self, limit: int | None, already_spent_credits: int, expect_created: bool
+    ) -> None:
+        scanner = _make_scanner(monthly_credit_limit=limit)
+        self._seed_spent_credits(scanner, already_spent_credits)
+
+        result = create_observation_activity(
+            CreateObservationInputs(
+                scanner_id=scanner.id,
+                team_id=scanner.team_id,
+                session_id="sess-scanner-limit",
+                triggered_by=ObservationTrigger.SCHEDULE,
+                triggered_by_user_id=None,
+                workflow_id="wf-scanner-limit",
+            )
+        )
+
+        assert result.was_created is expect_created
+        exists = ReplayObservation.objects.filter(scanner=scanner, session_id="sess-scanner-limit").exists()
+        assert exists is expect_created
+
 
 @pytest.mark.django_db(transaction=True)
 class TestEgressConsentRecheck:
