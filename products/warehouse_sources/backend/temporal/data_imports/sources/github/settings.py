@@ -63,7 +63,33 @@ class GithubEndpointConfig:
     # an incremental fan-out skips parents whose value predates the child watermark — they can
     # hold no unseen children — keeping the reconciliation window cheap to re-walk every sync.
     fan_out_parent_recency_field: Optional[str] = None
+    # The grant this endpoint's data needs, phrased so it slots into "grant <hint>". GitHub answers
+    # a list call with 403 "Resource not accessible by ..." when the connected token holds no grant
+    # for it; naming the grant is the difference between a log line the user can act on and one they
+    # can't. Both token flavors, since a source can be either.
+    required_permission: Optional[str] = None
 
+
+# Grant wording for `required_permission`, shared by the endpoints that read the same resource.
+# Fine-grained token (and GitHub App) permission first, then the classic-PAT scope, since a source
+# can be connected either way and the two name the same grant differently.
+_ACTIONS_READ = (
+    'the "Actions: read" repository permission on a fine-grained token, or the `repo` scope on a classic token'
+)
+_CONTENTS_READ = (
+    'the "Contents: read" repository permission on a fine-grained token, or the `repo` scope on a classic token'
+)
+_DEPLOYMENTS_READ = 'the "Deployments: read" repository permission on a fine-grained token, or the `repo_deployment` scope on a classic token'
+_ISSUES_READ = (
+    'the "Issues: read" repository permission on a fine-grained token, or the `repo` scope on a classic token'
+)
+_METADATA_READ = (
+    'the "Metadata: read" repository permission on a fine-grained token, or the `repo` scope on a classic token'
+)
+_ORG_MEMBERS_READ = 'the "Members: read" organization permission on a fine-grained token, or the `read:org` scope on a classic token, on an organization-owned repository'
+_PULL_REQUESTS_READ = (
+    'the "Pull requests: read" repository permission on a fine-grained token, or the `repo` scope on a classic token'
+)
 
 GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
     "issues": GithubEndpointConfig(
@@ -85,6 +111,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
             },
         ],
         default_incremental_field="updated_at",
+        required_permission=_ISSUES_READ,
     ),
     "pull_requests": GithubEndpointConfig(
         name="pull_requests",
@@ -106,6 +133,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         ],
         default_incremental_field="updated_at",
         sort_mode="desc",  # Use descending sort to enable incremental sync
+        required_permission=_PULL_REQUESTS_READ,
     ),
     "reviews": GithubEndpointConfig(
         name="reviews",
@@ -152,6 +180,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         # Reviews need only the repo Pull requests read grant the source already validates at
         # create, unlike the org-scoped teams tables, so leave the table selectable by default.
         should_sync_default=True,
+        required_permission=_PULL_REQUESTS_READ,
     ),
     "commits": GithubEndpointConfig(
         name="commits",
@@ -168,18 +197,21 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         default_incremental_field="created_at",
         primary_key="sha",  # Commits use sha as unique identifier
         sort_mode="desc",  # GitHub commits API always returns newest-first, ignores sort/direction params
+        required_permission=_CONTENTS_READ,
     ),
     "stargazers": GithubEndpointConfig(
         name="stargazers",
         path="/repos/{repository}/stargazers",
         partition_key="starred_at",
         incremental_fields=[],  # No incremental support
+        required_permission=_METADATA_READ,
     ),
     "releases": GithubEndpointConfig(
         name="releases",
         path="/repos/{repository}/releases",
         partition_key="created_at",
         incremental_fields=[],  # No incremental support
+        required_permission=_CONTENTS_READ,
     ),
     "workflow_runs": GithubEndpointConfig(
         name="workflow_runs",
@@ -219,6 +251,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         # Crawling a busy repo's whole run history on connect is huge against a shared, rate-limited
         # budget. History, if wanted, is a deliberate one-off backfill.
         initial_lookback_days=0,
+        required_permission=_ACTIONS_READ,
     ),
     "workflow_jobs": GithubEndpointConfig(
         name="workflow_jobs",
@@ -264,6 +297,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         # (terminal) outranks started_at (running) outranks created_at (queued). Each is NULL until
         # the job reaches that stage, so NULLs-last ordering keeps the latest state.
         version_keys=["completed_at", "started_at", "created_at"],
+        required_permission=_ACTIONS_READ,
     ),
     "deployments": GithubEndpointConfig(
         name="deployments",
@@ -295,6 +329,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         # crawling the full /deployments history against a shared, rate-limited budget. History,
         # if wanted, is a deliberate one-off backfill.
         initial_lookback_days=0,
+        required_permission=_DEPLOYMENTS_READ,
     ),
     "deployment_statuses": GithubEndpointConfig(
         name="deployment_statuses",
@@ -334,6 +369,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         fan_out_parent_recency_field="updated_at",
         # A deployment status is append-only (each transition is a new, immutable id), so no
         # webhook dedupe is needed — unlike reviews/runs, one id never emits multiple events.
+        required_permission=_DEPLOYMENTS_READ,
     ),
     "teams": GithubEndpointConfig(
         name="teams",
@@ -346,6 +382,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         # lack, and 404s on user-owned repos. Off by default so a fresh source doesn't enable
         # a table whose first sync fails; the picker's permission probe explains the grant.
         should_sync_default=False,
+        required_permission=_ORG_MEMBERS_READ,
     ),
     "team_members": GithubEndpointConfig(
         name="team_members",
@@ -365,6 +402,7 @@ GITHUB_ENDPOINTS: dict[str, GithubEndpointConfig] = {
         # past 5,000 members at 100/page. 400 pages bounds a runaway paginator at 40,000
         # memberships per team while clearing any plausible real team; the cap still logs.
         max_pages_per_parent=400,
+        required_permission=_ORG_MEMBERS_READ,
     ),
 }
 

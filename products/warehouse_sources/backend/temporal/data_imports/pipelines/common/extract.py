@@ -189,6 +189,19 @@ def report_heartbeat_timeout(inputs: "ImportDataActivityInputs", logger: Filteri
         logger.debug(f"Error while reporting heartbeat timeout: {e}", exc_info=e)
 
 
+# Cap on the give-up message below. The full text is already on the chained cause, and an
+# unbounded copy of it would push the activity failure toward Temporal's payload limit.
+NON_RETRYABLE_MESSAGE_MAX_LENGTH = 1000
+
+
+def _give_up_message(error_msg: str) -> str:
+    """The message NonRetryableException carries when we stop retrying. Without one, every give-up
+    lands in error tracking as a blank, stack-only issue that collapses unrelated root causes
+    together. Whitespace is collapsed so a multi-line driver error still reads as a title."""
+    collapsed = " ".join(error_msg.split())[:NON_RETRYABLE_MESSAGE_MAX_LENGTH]
+    return collapsed or "Data import gave up after repeated non-retryable errors"
+
+
 async def handle_non_retryable_error(
     team_id: int,
     source_id: str,
@@ -200,7 +213,7 @@ async def handle_non_retryable_error(
     async with _get_redis() as redis_client:
         if redis_client is None:
             await logger.adebug(f"Failed to get Redis client for non-retryable error tracking. error={error_msg}")
-            raise NonRetryableException() from error
+            raise NonRetryableException(_give_up_message(error_msg)) from error
 
         retry_key = build_non_retryable_errors_redis_key(team_id, source_id, run_id)
         attempts = await redis_client.incr(retry_key)
@@ -213,7 +226,7 @@ async def handle_non_retryable_error(
             raise error
 
     await logger.adebug(f"Non-retryable error after {attempts} runs, giving up. error={error_msg}")
-    raise NonRetryableException() from error
+    raise NonRetryableException(_give_up_message(error_msg)) from error
 
 
 async def reset_rows_synced_if_needed(

@@ -1,4 +1,5 @@
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -13,7 +14,9 @@ from products.warehouse_sources.backend.models.external_data_schema import Exter
 from products.warehouse_sources.backend.models.external_data_source import ExternalDataSource
 from products.warehouse_sources.backend.models.oom_event import ExternalDataSchemaOOMEvent
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.common.extract import (
+    NON_RETRYABLE_MESSAGE_MAX_LENGTH,
     handle_corrupted_delta_log,
+    handle_non_retryable_error,
     handle_reset_or_full_refresh,
     persist_primary_keys,
     report_heartbeat_timeout,
@@ -23,6 +26,11 @@ from products.warehouse_sources.backend.temporal.data_imports.pipelines.common.e
 from products.warehouse_sources.backend.temporal.data_imports.util import NonRetryableException
 
 _EXTRACT_MODULE = "products.warehouse_sources.backend.temporal.data_imports.pipelines.common.extract"
+
+
+@asynccontextmanager
+async def _async_cm(value):
+    yield value
 
 
 class TestResolvePrimaryKeys:
@@ -484,3 +492,45 @@ class TestHandleResetOrFullRefresh:
         helper.reset_table.assert_awaited_once()
         schema.refresh_from_db()
         assert "reset_pipeline" not in schema.sync_type_config
+
+
+class TestHandleNonRetryableError:
+    @parameterized.expand(
+        [
+            # A multi-line driver error has to collapse to one readable line.
+            (
+                "collapses_whitespace",
+                "connection failed:\n  FATAL: no such database",
+                "connection failed: FATAL: no such database",
+            ),
+            # A blank underlying message still needs a title, or the issue lands unidentifiable again.
+            ("falls_back_when_blank", "   ", "Data import gave up after repeated non-retryable errors"),
+        ]
+    )
+    def test_give_up_carries_a_message(self, _name: str, error_msg: str, expected: str):
+        # Raising a bare NonRetryableException put every give-up into error tracking as a blank,
+        # stack-only issue, collapsing unrelated root causes onto one fingerprint.
+        cause = RuntimeError(error_msg)
+        logger = MagicMock(adebug=AsyncMock())
+        redis = AsyncMock()
+        redis.incr.return_value = 99  # past NON_RETRYABLE_ERROR_RETRY_LIMIT, so this run gives up
+
+        with patch(f"{_EXTRACT_MODULE}._get_redis", return_value=_async_cm(redis)):
+            with pytest.raises(NonRetryableException) as raised:
+                async_to_sync(handle_non_retryable_error)(1, "source", "run", error_msg, logger, cause)
+
+        assert str(raised.value) == expected
+        assert raised.value.__cause__ is cause
+
+    def test_give_up_message_is_bounded(self):
+        # The full text already rides on the chained cause; an unbounded copy would push the
+        # activity failure toward Temporal's payload limit.
+        logger = MagicMock(adebug=AsyncMock())
+        redis = AsyncMock()
+        redis.incr.return_value = 99
+
+        with patch(f"{_EXTRACT_MODULE}._get_redis", return_value=_async_cm(redis)):
+            with pytest.raises(NonRetryableException) as raised:
+                async_to_sync(handle_non_retryable_error)(1, "source", "run", "x" * 10_000, logger, RuntimeError())
+
+        assert len(str(raised.value)) == NON_RETRYABLE_MESSAGE_MAX_LENGTH

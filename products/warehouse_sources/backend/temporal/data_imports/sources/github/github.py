@@ -68,6 +68,21 @@ class GithubEmptyRepositoryError(Exception):
     pass
 
 
+class GithubPermissionError(Exception):
+    """GitHub answers a list call with 403 "Resource not accessible by integration" (GitHub App) or
+    "Resource not accessible by personal access token" (fine-grained token) when the connection
+    holds no grant for that endpoint — a token without `deployments: read` reading
+    ``/repos/{repo}/deployments``, say. A repo-scoped connection legitimately lacks the extra grants
+    some tables need, so ``_fetch_page`` raises this and the caller syncs zero rows for that table —
+    a benign skip like the org-scoped 404 — rather than hard-failing the schema. The message names
+    the grant to add, so the log line says what to do about it.
+
+    Deliberately narrow: the other 403s (SAML enforcement, a blocked repository) are not a
+    per-table grant gap and stay fatal, since skipping them would quietly empty every table."""
+
+    pass
+
+
 class GithubOrgNotFoundError(Exception):
     """GitHub returns 404 on the org-scoped endpoints (``/orgs/{org}/teams`` and the members
     fan-out) when the repository owner is a personal account rather than an organization, or the
@@ -236,6 +251,27 @@ def _is_empty_repository_response(response: requests.Response) -> bool:
     except (ValueError, TypeError):
         message = response.text or ""
     return isinstance(message, str) and "repository is empty" in message.lower()
+
+
+# GitHub's wording for "this token holds no grant for this endpoint": "...by integration" on a
+# GitHub App, "...by personal access token" on a fine-grained token. Matched on the shared prefix.
+_PERMISSION_DENIED_MESSAGE_PREFIX = "resource not accessible by"
+
+
+def _permission_denied_message(response: requests.Response) -> str | None:
+    """GitHub's own message when a 403 means the token lacks this endpoint's grant, else None.
+    Rate-limited 403s never reach here — ``raise_if_github_rate_limited`` raises on those first —
+    and the remaining non-grant 403s return None so they stay fatal."""
+    if response.status_code != 403:
+        return None
+    try:
+        body = response.json()
+        message = body.get("message", "") if isinstance(body, dict) else ""
+    except (ValueError, TypeError):
+        message = response.text or ""
+    if not isinstance(message, str) or _PERMISSION_DENIED_MESSAGE_PREFIX not in message.lower():
+        return None
+    return message
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -508,6 +544,7 @@ def _fetch_page(
     logger: FilteringBoundLogger,
     egress_identity: GithubEgressIdentity | None = None,
     skip_on_not_found: bool = False,
+    permission_hint: str | None = None,
 ) -> requests.Response:
     # One gated + recorded GET through the shared egress client. The App path bills the shared
     # per-installation budget at BATCH (deferrable bulk); the PAT path (installation_id None) skips the
@@ -531,9 +568,16 @@ def _fetch_page(
         raise GithubRetryableError(f"Github API error (retryable): status={response.status_code}, url={page_url}")
 
     # Rate limited (secondary 429, or primary 403 with a rate-limit body): raise
-    # so we retry honoring the reset/Retry-After. A genuine permission 403 carries
-    # no rate-limit body and falls through to raise_for_status below, staying fatal.
+    # so we retry honoring the reset/Retry-After.
     raise_if_github_rate_limited(response)
+
+    # A 403 that isn't a rate limit can still be a missing grant for this one endpoint. Signal it
+    # so the caller syncs zero rows for that table instead of failing the schema, and name the grant
+    # to add — otherwise it escapes as a bare HTTPError the user can do nothing with.
+    denied_message = _permission_denied_message(response)
+    if denied_message is not None:
+        grant = f" Grant {permission_hint} and re-sync." if permission_hint else ""
+        raise GithubPermissionError(f"GitHub denied access: {denied_message}.{grant} url={page_url}")
 
     # An empty repository (no commits yet) returns 409 on the commits
     # endpoint. Signal it so the loop can sync zero rows without raising
@@ -563,6 +607,7 @@ def _iter_pages(
     page_cap_context: dict[str, Any] | None = None,
     egress_identity: GithubEgressIdentity | None = None,
     skip_on_not_found: bool = False,
+    permission_hint: str | None = None,
 ) -> Iterator[tuple[list[dict[str, Any]], str]]:
     """Yield (items, page_url) for each page of a paginated GitHub list,
     unwrapping the envelope and following the Link header. Stops at ``max_pages``,
@@ -571,7 +616,14 @@ def _iter_pages(
     page_count = 0
     while True:
         try:
-            response = _fetch_page(url, headers, logger, egress_identity, skip_on_not_found=skip_on_not_found)
+            response = _fetch_page(
+                url,
+                headers,
+                logger,
+                egress_identity,
+                skip_on_not_found=skip_on_not_found,
+                permission_hint=permission_hint,
+            )
         except GithubOrgNotFoundError:
             logger.debug(f"Github: org-scoped endpoint not found, syncing zero rows: url={url}")
             return
@@ -628,6 +680,7 @@ def _iter_child_for_parent(
         max_pages=config.max_pages_per_parent,
         page_cap_context={"repository": repository, fan_out_param: parent_value},
         egress_identity=egress_identity,
+        permission_hint=config.required_permission,
     ):
         for item in items:
             if item_filter and not item_filter(item):
@@ -742,46 +795,53 @@ def _fan_out_get_rows(
         # _build_initial_params belong to list endpoints that define those params.
         parent_url = _build_initial_url(parent_config, repository, {"per_page": parent_config.page_size})
 
-    for parents, page_url in _iter_pages(
-        parent_url,
-        headers,
-        parent_config.response_data_path,
-        logger,
-        egress_identity=egress_identity,
-        skip_on_not_found=parent_org_scoped,
-    ):
-        stop_after_this_page = _should_stop_desc(parents, "desc", parent_cursor_field, parent_cutoff)
+    try:
+        for parents, page_url in _iter_pages(
+            parent_url,
+            headers,
+            parent_config.response_data_path,
+            logger,
+            egress_identity=egress_identity,
+            skip_on_not_found=parent_org_scoped,
+            permission_hint=parent_config.required_permission,
+        ):
+            stop_after_this_page = _should_stop_desc(parents, "desc", parent_cursor_field, parent_cutoff)
 
-        for parent in parents:
-            # Direct access on the parent's fan-out field (id/slug): a parent missing it is a broken
-            # response that should fail loudly, not get silently dropped.
-            parent_value = parent[child_config.fan_out_parent_field]
-            # Only fan out parents at/above the watermark; older ones were synced before.
-            if parent_cutoff is not None and _is_older_than_cutoff(parent.get(parent_cursor_field), parent_cutoff):
-                continue
-            if (
-                parent_recency_field is not None
-                and parent_recency_cutoff is not None
-                and _is_older_than_cutoff(parent.get(parent_recency_field), parent_recency_cutoff)
-            ):
-                continue
-            inject = (
-                _make_parent_field_injector(parent, child_config.fan_out_include_parent_fields)
-                if child_config.fan_out_include_parent_fields
-                else None
-            )
-            for item in _iter_child_for_parent(
-                repository, parent_value, headers, logger, child_config, egress_identity
-            ):
-                batcher.batch(inject(item) if inject else item)
-                if batcher.should_yield():
-                    yield batcher.get_table()
-                    # Checkpoint the parent page; resume re-fans it out and dedupes by primary key.
-                    if not stop_after_this_page:
-                        resumable_source_manager.save_state(GithubResumeConfig(next_url=page_url))
+            for parent in parents:
+                # Direct access on the parent's fan-out field (id/slug): a parent missing it is a broken
+                # response that should fail loudly, not get silently dropped.
+                parent_value = parent[child_config.fan_out_parent_field]
+                # Only fan out parents at/above the watermark; older ones were synced before.
+                if parent_cutoff is not None and _is_older_than_cutoff(parent.get(parent_cursor_field), parent_cutoff):
+                    continue
+                if (
+                    parent_recency_field is not None
+                    and parent_recency_cutoff is not None
+                    and _is_older_than_cutoff(parent.get(parent_recency_field), parent_recency_cutoff)
+                ):
+                    continue
+                inject = (
+                    _make_parent_field_injector(parent, child_config.fan_out_include_parent_fields)
+                    if child_config.fan_out_include_parent_fields
+                    else None
+                )
+                for item in _iter_child_for_parent(
+                    repository, parent_value, headers, logger, child_config, egress_identity
+                ):
+                    batcher.batch(inject(item) if inject else item)
+                    if batcher.should_yield():
+                        yield batcher.get_table()
+                        # Checkpoint the parent page; resume re-fans it out and dedupes by primary key.
+                        if not stop_after_this_page:
+                            resumable_source_manager.save_state(GithubResumeConfig(next_url=page_url))
 
-        if stop_after_this_page:
-            break
+            if stop_after_this_page:
+                break
+    except GithubPermissionError as e:
+        # The token lacks the grant for this repository, so the parent list and every child call
+        # alike are denied. Stop the walk rather than re-requesting once per remaining parent, and
+        # emit whatever was already batched below.
+        logger.warning(f"Github: token cannot read {endpoint}, syncing zero rows. {e}")
 
     if batcher.should_yield(include_incomplete_chunk=True):
         yield batcher.get_table()
@@ -846,12 +906,24 @@ def get_rows(
     org_scoped = endpoint in ORG_SCOPED_ENDPOINTS
     while True:
         try:
-            response = _fetch_page(url, headers, logger, egress_identity, skip_on_not_found=org_scoped)
+            response = _fetch_page(
+                url,
+                headers,
+                logger,
+                egress_identity,
+                skip_on_not_found=org_scoped,
+                permission_hint=config.required_permission,
+            )
         except GithubEmptyRepositoryError:
             logger.debug(f"Github: repository has no commits (empty repository), syncing zero rows: url={url}")
             break
         except GithubOrgNotFoundError:
             logger.debug(f"Github: no accessible org teams for {endpoint}, syncing zero rows: url={url}")
+            break
+        except GithubPermissionError as e:
+            # The token holds no grant for this table. Sync zero rows and say which grant is missing,
+            # rather than hard-failing the schema with an error the user can do nothing with.
+            logger.warning(f"Github: token cannot read {endpoint}, syncing zero rows. {e}")
             break
 
         data = response.json()

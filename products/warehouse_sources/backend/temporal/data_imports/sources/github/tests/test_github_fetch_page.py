@@ -62,6 +62,52 @@ def test_fetch_page_404_skips_only_for_org_scoped_endpoints(skip_on_not_found, e
             )
 
 
+def _forbidden_response(message: str) -> mock.Mock:
+    response = mock.Mock(spec=requests.Response)
+    response.status_code = 403
+    response.ok = False
+    # No rate-limit markers, so raise_if_github_rate_limited lets it through as a real denial.
+    response.headers = {}
+    response.text = f'{{"message": "{message}"}}'
+    response.json.return_value = {"message": message}
+    response.request = None
+    response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        "403 Client Error: Forbidden for url", response=response
+    )
+    return response
+
+
+@pytest.mark.parametrize(
+    "message,expected_exc",
+    [
+        # GitHub App wording and fine-grained token wording for a missing endpoint grant: benign
+        # skip, so the schema syncs zero rows instead of hard-failing on a table the token can't read.
+        ("Resource not accessible by integration", github.GithubPermissionError),
+        ("Resource not accessible by personal access token", github.GithubPermissionError),
+        # Any other 403 is not a per-table grant gap — skipping it would quietly empty every table.
+        ("Resource protected by organization SAML enforcement", requests.exceptions.HTTPError),
+    ],
+)
+def test_fetch_page_403_skips_only_for_missing_endpoint_grant(message, expected_exc):
+    session = mock.Mock()
+    session.request.return_value = _forbidden_response(message)
+
+    with mock.patch.object(github, "make_tracked_session", return_value=session):
+        with pytest.raises(expected_exc) as raised:
+            github._fetch_page(
+                "https://api.github.com/repos/o/r/deployments",
+                {},
+                mock.Mock(),
+                permission_hint="the DEPLOY grant",
+            )
+
+    if expected_exc is github.GithubPermissionError:
+        # The grant has to be named — a message the user can't act on is the bug being fixed.
+        assert "the DEPLOY grant" in str(raised.value)
+    # A denial is deterministic, so it must not burn the retry budget.
+    assert session.request.call_count == 1
+
+
 def test_fetch_page_retries_chunked_encoding_error():
     session = mock.Mock()
     session.request.side_effect = [requests.exceptions.ChunkedEncodingError("Connection broken"), _ok_response()]
