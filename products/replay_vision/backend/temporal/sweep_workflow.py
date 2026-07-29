@@ -21,6 +21,7 @@ with wf.unsafe.imports_passed_through():
 from products.replay_vision.backend.models.replay_observation import ObservationTrigger
 from products.replay_vision.backend.temporal.activities import (
     advance_scanner_watermark_activity,
+    check_scanner_budget_activity,
     count_in_flight_applies_activity,
     count_in_flight_by_team_activity,
     find_scanner_candidates_activity,
@@ -29,6 +30,7 @@ from products.replay_vision.backend.temporal.activities import (
 from products.replay_vision.backend.temporal.constants import (
     APPLY_SCANNER_EXECUTION_TIMEOUT,
     APPLY_SCANNER_WORKFLOW_NAME,
+    CHECK_SCANNER_BUDGET_TIMEOUT,
     COUNT_IN_FLIGHT_APPLIES_TIMEOUT,
     PROCESS_VISION_ACTION_EXECUTION_TIMEOUT,
     PROCESS_VISION_ACTION_WORKFLOW_NAME,
@@ -41,6 +43,7 @@ from products.replay_vision.backend.temporal.constants import (
 from products.replay_vision.backend.temporal.sweep_types import (
     AdvanceScannerWatermarkInputs,
     CandidateSessionPayload,
+    CheckScannerBudgetInputs,
     CountInFlightAppliesInputs,
     FindScannerCandidatesInputs,
     RefreshPromptSuggestionInputs,
@@ -85,6 +88,18 @@ class SweepScannerWorkflow(PostHogWorkflow):
                 wf.logger.warning(
                     "replay_vision.prompt_suggestion_refresh_failed", extra={"scanner_id": str(inputs.scanner_id)}
                 )
+
+        # A scanner over its own credit limit does no work this tick: no candidate read, no dispatch.
+        # Patched so sweeps already in flight across the deploy replay their recorded history unchanged.
+        if wf.patched("replay-vision-scanner-credit-limit"):
+            budget = await wf.execute_activity(
+                check_scanner_budget_activity,
+                CheckScannerBudgetInputs(scanner_id=inputs.scanner_id, team_id=inputs.team_id),
+                start_to_close_timeout=CHECK_SCANNER_BUDGET_TIMEOUT,
+                retry_policy=common.RetryPolicy(maximum_attempts=1),
+            )
+            if budget.capped:
+                return
 
         # Hard concurrency caps: per scanner (one bad config) and per team (many scanners), enforced as the
         # min of the two headrooms. Skip entirely when saturated. Keeps any single tenant from flooding the

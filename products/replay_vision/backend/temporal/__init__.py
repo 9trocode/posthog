@@ -4,6 +4,7 @@ from typing import Any
 from products.replay_vision.backend.temporal.activities import (
     advance_scanner_watermark_activity,
     call_scanner_provider_activity,
+    check_scanner_budget_activity,
     cleanup_gemini_file_activity,
     count_in_flight_applies_activity,
     count_in_flight_by_team_activity,
@@ -79,6 +80,7 @@ ACTIVITIES: list[Callable[..., Any]] = [
     find_scanner_candidates_activity,
     count_in_flight_applies_activity,
     count_in_flight_by_team_activity,
+    check_scanner_budget_activity,
     advance_scanner_watermark_activity,
     refresh_prompt_suggestion_activity,
     select_evaluation_sessions_activity,
@@ -121,6 +123,7 @@ __all__ = [
     "advance_scanner_watermark_activity",
     "refresh_prompt_suggestion_activity",
     "call_scanner_provider_activity",
+    "check_scanner_budget_activity",
     "cleanup_gemini_file_activity",
     "count_in_flight_applies_activity",
     "count_in_flight_by_team_activity",
