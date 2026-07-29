@@ -28,7 +28,7 @@ const tabs: { key: BillingSectionId; label: string }[] = [
 
 export function BillingSection(): JSX.Element {
     const { location, searchParams } = useValues(router)
-    const { canAccessBilling, canOnlyViewUsageAndSpend } = useValues(billingLogic)
+    const { canAccessBilling, canViewUsageAndSpend, canOnlyViewUsageAndSpend } = useValues(billingLogic)
 
     const section = location.pathname.includes('spend')
         ? 'spend'
@@ -44,7 +44,7 @@ export function BillingSection(): JSX.Element {
         }
     }, [section, canOnlyViewUsageAndSpend])
 
-    const visibleTabs = tabs.filter((tab) => tab.key !== 'overview' || canAccessBilling)
+    const visibleTabs = tabs.filter((tab) => (tab.key === 'overview' ? canAccessBilling : canViewUsageAndSpend))
 
     const handleTabChange = (key: BillingSectionId): void => {
         const newUrl = urls.organizationBillingSection(key)
@@ -75,7 +75,7 @@ export function BillingSection(): JSX.Element {
 
     return (
         <div className="flex flex-col">
-            <LemonTabs activeKey={section} onChange={handleTabChange} tabs={visibleTabs} />
+            {visibleTabs.length > 0 && <LemonTabs activeKey={section} onChange={handleTabChange} tabs={visibleTabs} />}
 
             {section === 'overview' && <Billing />}
             {section === 'usage' && <BillingUsage />}
