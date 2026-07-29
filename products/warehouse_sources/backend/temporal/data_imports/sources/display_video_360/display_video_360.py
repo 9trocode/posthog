@@ -9,6 +9,8 @@ from collections.abc import Iterator
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
+from django.conf import settings
+
 import requests
 from google.auth.credentials import Credentials
 from google.auth.exceptions import GoogleAuthError
@@ -16,6 +18,8 @@ from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials as OAuthCredentials
 from structlog.types import FilteringBoundLogger
+
+from posthog.models.integration import Integration
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.http import (
@@ -101,12 +105,13 @@ def _auth(config: DisplayVideo360SourceConfig) -> DisplayVideo360AuthTypeConfig:
     return auth
 
 
-def redact_values(config: DisplayVideo360SourceConfig) -> tuple[str, ...]:
+def redact_values(config: DisplayVideo360SourceConfig, integration: Integration | None = None) -> tuple[str, ...]:
     """Credential strings to mask in logged URLs and captured HTTP samples."""
     auth: DisplayVideo360AuthTypeConfig | None = config.auth_type
-    if auth is None:
-        return ()
-    return tuple(v for v in (auth.service_account_key, auth.client_secret, auth.refresh_token) if v)
+    candidates = [auth.service_account_key if auth is not None else None]
+    if integration is not None:
+        candidates.extend([integration.access_token, integration.refresh_token])
+    return tuple(value for value in candidates if value)
 
 
 def parse_service_account_key(raw: str | None) -> dict[str, Any]:
@@ -135,7 +140,7 @@ def parse_service_account_key(raw: str | None) -> dict[str, Any]:
     return parsed
 
 
-def _credentials(config: DisplayVideo360SourceConfig) -> Credentials:
+def _credentials(config: DisplayVideo360SourceConfig, integration: Integration | None = None) -> Credentials:
     auth = _auth(config)
 
     if auth.selection == "service_account":
@@ -145,23 +150,16 @@ def _credentials(config: DisplayVideo360SourceConfig) -> Credentials:
         except (ValueError, GoogleAuthError) as e:
             raise DisplayVideo360CredentialsError(f"The service account key could not be loaded: {e}") from e
 
-    missing = [
-        label
-        for label, value in (
-            ("client ID", auth.client_id),
-            ("client secret", auth.client_secret),
-            ("refresh token", auth.refresh_token),
+    if integration is None or not integration.refresh_token:
+        raise DisplayVideo360CredentialsError(
+            "No Google account is connected. Connect an account with access to Display & Video 360."
         )
-        if not value
-    ]
-    if missing:
-        raise DisplayVideo360CredentialsError(f"Missing OAuth credentials: {', '.join(missing)}.")
 
     return OAuthCredentials(
         token=None,
-        refresh_token=auth.refresh_token,
-        client_id=auth.client_id,
-        client_secret=auth.client_secret,
+        refresh_token=integration.refresh_token,
+        client_id=settings.DISPLAY_VIDEO_360_APP_CLIENT_ID,
+        client_secret=settings.DISPLAY_VIDEO_360_APP_CLIENT_SECRET,
         token_uri=GOOGLE_TOKEN_URI,
         # No `scopes=` on purpose: with a refresh-token grant google-auth forwards the requested
         # scopes to Google's token endpoint, which rejects anything that isn't an exact subset of
@@ -170,10 +168,12 @@ def _credentials(config: DisplayVideo360SourceConfig) -> Credentials:
     )
 
 
-def display_video_360_session(config: DisplayVideo360SourceConfig) -> AuthorizedSession:
+def display_video_360_session(
+    config: DisplayVideo360SourceConfig, integration: Integration | None = None
+) -> AuthorizedSession:
     """An authenticated session for both Google APIs, riding the tracked transport."""
-    session = AuthorizedSession(_credentials(config))
-    adapter = make_tracked_adapter(redact_values=redact_values(config))
+    session = AuthorizedSession(_credentials(config, integration))
+    adapter = make_tracked_adapter(redact_values=redact_values(config, integration))
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
@@ -654,11 +654,12 @@ def get_rows(
     api_version: str,
     logger: FilteringBoundLogger,
     resumable_source_manager: ResumableSourceManager[DisplayVideo360ResumeConfig],
+    integration: Integration | None = None,
     should_use_incremental_field: bool = False,
     db_incremental_field_last_value: Any = None,
 ) -> Iterator[list[dict[str, Any]]]:
     endpoint = DISPLAY_VIDEO_360_ENDPOINTS[endpoint_name]
-    session = display_video_360_session(config)
+    session = display_video_360_session(config, integration)
     resume = resumable_source_manager.load_state() if resumable_source_manager.can_resume() else None
 
     if endpoint.kind == "report":
@@ -706,13 +707,15 @@ def get_rows(
     )
 
 
-def validate_credentials(config: DisplayVideo360SourceConfig, api_version: str) -> tuple[bool, str | None]:
+def validate_credentials(
+    config: DisplayVideo360SourceConfig, api_version: str, integration: Integration | None = None
+) -> tuple[bool, str | None]:
     """One cheap probe: fetch the configured partner through the entity API."""
     if not config.partner_id or not config.partner_id.strip():
         return False, "Enter the Display & Video 360 partner ID the data should be read from."
 
     try:
-        session = display_video_360_session(config)
+        session = display_video_360_session(config, integration)
     except DisplayVideo360CredentialsError as e:
         return False, str(e)
 
@@ -721,8 +724,8 @@ def validate_credentials(config: DisplayVideo360SourceConfig, api_version: str) 
         response = session.get(url, timeout=30)
     except GoogleAuthError:
         return False, (
-            "PostHog could not authenticate with Google. Check the service account key or OAuth client "
-            "details, and make sure the credentials still have access to Display & Video 360."
+            "PostHog could not authenticate with Google. Reconnect your Google account or check the service "
+            "account key, and make sure the credentials still have access to Display & Video 360."
         )
     except requests.RequestException as e:
         return False, f"Could not reach the Display & Video 360 API: {e}"
@@ -730,12 +733,12 @@ def validate_credentials(config: DisplayVideo360SourceConfig, api_version: str) 
     if response.ok:
         return True, None
     if response.status_code == 401:
-        return False, "Google rejected the credentials. Check the service account key or OAuth client details."
+        return False, "Google rejected the credentials. Reconnect your Google account or check the service account key."
     if response.status_code == 403:
         return False, (
-            "The credentials are valid but cannot read Display & Video 360. Add the service account or user "
-            "as a Display & Video 360 user with access to this partner, and enable both the Display & Video 360 "
-            "API and the Bid Manager API on the Google Cloud project."
+            "The credentials are valid but cannot read Display & Video 360. Add the connected account or service "
+            "account as a Display & Video 360 user with access to this partner, and enable both the Display & "
+            "Video 360 API and the Bid Manager API on the Google Cloud project."
         )
     if response.status_code == 404:
         return False, f"Partner '{config.partner_id.strip()}' was not found. Check the partner ID and try again."
@@ -748,6 +751,7 @@ def display_video_360_source(
     api_version: str,
     logger: FilteringBoundLogger,
     resumable_source_manager: ResumableSourceManager[DisplayVideo360ResumeConfig],
+    integration: Integration | None = None,
     should_use_incremental_field: bool = False,
     db_incremental_field_last_value: Optional[Any] = None,
 ) -> SourceResponse:
@@ -761,6 +765,7 @@ def display_video_360_source(
             api_version=api_version,
             logger=logger,
             resumable_source_manager=resumable_source_manager,
+            integration=integration,
             should_use_incremental_field=should_use_incremental_field,
             db_incremental_field_last_value=db_incremental_field_last_value,
         ),

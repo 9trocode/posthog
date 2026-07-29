@@ -3,7 +3,15 @@ from typing import Any
 import pytest
 from unittest import mock
 
-from posthog.schema import ReleaseStatus, SourceFieldInputConfig, SourceFieldInputConfigType, SourceFieldSelectConfig
+from posthog.schema import (
+    ReleaseStatus,
+    SourceFieldInputConfig,
+    SourceFieldInputConfigType,
+    SourceFieldOauthConfig,
+    SourceFieldSelectConfig,
+)
+
+from posthog.models.integration import Integration
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceInputs
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
@@ -38,6 +46,12 @@ def _make_config(**overrides: Any) -> DisplayVideo360SourceConfig:
     defaults: dict[str, Any] = {"partner_id": "1234", "advertiser_ids": None}
     defaults.update(overrides)
     return DisplayVideo360SourceConfig(auth_type=auth, **defaults)
+
+
+def _oauth_config(integration_id: int | None = 42) -> DisplayVideo360SourceConfig:
+    return _make_config(
+        auth_type=DisplayVideo360AuthTypeConfig(selection="oauth", display_video_360_integration_id=integration_id)
+    )
 
 
 def _make_inputs(**overrides: Any) -> SourceInputs:
@@ -95,13 +109,22 @@ class TestDisplayVideo360Source:
         assert isinstance(auth_field, SourceFieldSelectConfig)
         assert auth_field.name == "auth_type"
         assert auth_field.required is True
-        assert auth_field.defaultValue == "service_account"
+        # OAuth is the default: nobody should have to register their own Google Cloud client.
+        assert auth_field.defaultValue == "oauth"
         assert {option.value for option in auth_field.options} == {"service_account", "oauth"}
 
         service_account_option = next(o for o in auth_field.options if o.value == "service_account")
         assert [f.name for f in service_account_option.fields or []] == ["service_account_key"]
+
         oauth_option = next(o for o in auth_field.options if o.value == "oauth")
-        assert [f.name for f in oauth_option.fields or []] == ["client_id", "client_secret", "refresh_token"]
+        (oauth_connect,) = oauth_option.fields or []
+        assert isinstance(oauth_connect, SourceFieldOauthConfig)
+        assert oauth_connect.name == "display_video_360_integration_id"
+        assert oauth_connect.kind == "display-video-360"
+        # Entity reads need display-video; the performance tables are Bid Manager reports.
+        assert oauth_connect.requiredScopes == (
+            "https://www.googleapis.com/auth/display-video https://www.googleapis.com/auth/doubleclickbidmanager"
+        )
 
         assert isinstance(partner_field, SourceFieldInputConfig)
         assert partner_field.name == "partner_id"
@@ -122,13 +145,20 @@ class TestDisplayVideo360Source:
             if isinstance(field, SourceFieldInputConfig) and field.secret
         ]
 
-        assert {field.name for field in secret_fields} == {"service_account_key", "client_secret", "refresh_token"}
+        assert {field.name for field in secret_fields} == {"service_account_key"}
         for field in secret_fields:
             assert field.type in (SourceFieldInputConfigType.PASSWORD, SourceFieldInputConfigType.TEXTAREA)
 
     @pytest.mark.parametrize(
         "expected_key",
-        ["401 Client Error", "403 Client Error", "invalid_grant", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"],
+        [
+            "401 Client Error",
+            "403 Client Error",
+            "invalid_grant",
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+            "Missing integration ID",
+            "Integration not found",
+        ],
     )
     def test_non_retryable_errors(self, expected_key: str) -> None:
         assert expected_key in self.source.get_non_retryable_errors()
@@ -189,13 +219,47 @@ class TestDisplayVideo360Source:
         with mock.patch(f"{SOURCE_MODULE}.validate_display_video_360_credentials", return_value=probe_result) as probe:
             assert self.source.validate_credentials(self.config, self.team_id) == expected
 
-        probe.assert_called_once_with(self.config, "v4")
+        # No integration: the service account path never touches the Integration table.
+        probe.assert_called_once_with(self.config, "v4", None)
 
     def test_validate_credentials_honors_a_pinned_api_version(self) -> None:
         with mock.patch(f"{SOURCE_MODULE}.validate_display_video_360_credentials", return_value=(True, None)) as probe:
             self.source.validate_credentials(self.config, self.team_id, api_version="v3")
 
-        probe.assert_called_once_with(self.config, "v3")
+        probe.assert_called_once_with(self.config, "v3", None)
+
+    def test_validate_credentials_passes_the_connected_integration(self) -> None:
+        config = _oauth_config()
+        integration = Integration(kind="display-video-360")
+
+        with (
+            mock.patch.object(DisplayVideo360Source, "get_oauth_integration", return_value=integration) as fetch,
+            mock.patch(f"{SOURCE_MODULE}.validate_display_video_360_credentials", return_value=(True, None)) as probe,
+        ):
+            assert self.source.validate_credentials(config, self.team_id) == (True, None)
+
+        fetch.assert_called_once_with(42, self.team_id)
+        probe.assert_called_once_with(config, "v4", integration)
+
+    @pytest.mark.parametrize(
+        ("config_factory", "fetch_error"),
+        [
+            (lambda: _oauth_config(integration_id=None), None),
+            (lambda: _oauth_config(), ValueError("Integration not found: 42")),
+        ],
+    )
+    def test_validate_credentials_reports_a_missing_connection(
+        self, config_factory: Any, fetch_error: Exception | None
+    ) -> None:
+        with (
+            mock.patch.object(DisplayVideo360Source, "get_oauth_integration", side_effect=fetch_error),
+            mock.patch(f"{SOURCE_MODULE}.validate_display_video_360_credentials") as probe,
+        ):
+            is_valid, error = self.source.validate_credentials(config_factory(), self.team_id)
+
+        assert is_valid is False
+        assert error is not None and "Connect a Google account" in error
+        probe.assert_not_called()
 
     def test_resume_manager_is_namespaced_per_schema(self) -> None:
         # Entity page tokens and report windows are not interchangeable, so a retry that switches
@@ -217,11 +281,26 @@ class TestDisplayVideo360Source:
             config=self.config,
             endpoint="campaigns",
             api_version="v4",
+            integration=None,
             logger=inputs.logger,
             resumable_source_manager=manager,
             should_use_incremental_field=False,
             db_incremental_field_last_value=None,
         )
+
+    def test_source_for_pipeline_resolves_the_connected_integration(self) -> None:
+        config = _oauth_config()
+        inputs = _make_inputs(schema_name="campaigns")
+        integration = Integration(kind="display-video-360")
+
+        with (
+            mock.patch.object(DisplayVideo360Source, "get_oauth_integration", return_value=integration) as fetch,
+            mock.patch(f"{SOURCE_MODULE}.display_video_360_source") as build_source,
+        ):
+            self.source.source_for_pipeline(config, mock.MagicMock(spec=ResumableSourceManager), inputs)
+
+        fetch.assert_called_once_with(42, inputs.team_id)
+        assert build_source.call_args.kwargs["integration"] is integration
 
     def test_source_for_pipeline_drops_the_cursor_when_incremental_is_off(self) -> None:
         inputs = _make_inputs(should_use_incremental_field=False, db_incremental_field_last_value="2026-01-01")

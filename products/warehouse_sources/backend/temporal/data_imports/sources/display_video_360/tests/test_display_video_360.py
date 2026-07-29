@@ -5,8 +5,12 @@ from typing import Any, cast
 import pytest
 from unittest import mock
 
+from django.test import override_settings
+
 import requests
 from google.oauth2.credentials import Credentials as OAuthCredentials
+
+from posthog.models.integration import Integration
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.display_video_360 import display_video_360 as dv
@@ -48,16 +52,18 @@ def _service_account_config(**overrides: Any) -> DisplayVideo360SourceConfig:
 
 
 def _oauth_config(**auth_overrides: Any) -> DisplayVideo360SourceConfig:
-    auth: dict[str, Any] = {
-        "selection": "oauth",
-        "client_id": "client-id",
-        "client_secret": "client-secret",
-        "refresh_token": "refresh-token",
-    }
+    auth: dict[str, Any] = {"selection": "oauth", "display_video_360_integration_id": 42}
     auth.update(auth_overrides)
     return DisplayVideo360SourceConfig(
         auth_type=DisplayVideo360AuthTypeConfig(**auth), partner_id="1234", advertiser_ids=None
     )
+
+
+def _integration(**token_overrides: Any) -> Integration:
+    # Unsaved on purpose: the transport only reads the token fields off the row.
+    tokens: dict[str, Any] = {"access_token": "access-token", "refresh_token": "refresh-token"}
+    tokens.update(token_overrides)
+    return Integration(kind="display-video-360", sensitive_config=tokens)
 
 
 class FakeResponse:
@@ -192,22 +198,28 @@ class TestServiceAccountKeyParsing:
 
 
 class TestCredentials:
-    def test_oauth_credentials_refresh_without_pinning_scopes(self) -> None:
-        credentials = cast(OAuthCredentials, dv._credentials(_oauth_config()))
+    def test_oauth_credentials_come_from_the_connected_integration(self) -> None:
+        with override_settings(
+            DISPLAY_VIDEO_360_APP_CLIENT_ID="posthog-client-id",
+            DISPLAY_VIDEO_360_APP_CLIENT_SECRET="posthog-client-secret",
+        ):
+            credentials = cast(OAuthCredentials, dv._credentials(_oauth_config(), _integration()))
 
+        # The user never supplies a client: the refresh rides PostHog's registered OAuth app.
         assert credentials.refresh_token == "refresh-token"
+        assert credentials.client_id == "posthog-client-id"
+        assert credentials.client_secret == "posthog-client-secret"
         assert credentials.token_uri == dv.GOOGLE_TOKEN_URI
         # Pinning scopes on a refresh-token grant makes Google reject the refresh with
         # `invalid_scope` whenever the consent granted a different set.
         assert not credentials.scopes
 
     @pytest.mark.parametrize(
-        ("missing_field", "expected_fragment"),
-        [("client_id", "client ID"), ("client_secret", "client secret"), ("refresh_token", "refresh token")],
+        "integration", [None, _integration(refresh_token=None), _integration(refresh_token="")], ids=str
     )
-    def test_incomplete_oauth_credentials_are_rejected(self, missing_field: str, expected_fragment: str) -> None:
-        with pytest.raises(DisplayVideo360CredentialsError, match=expected_fragment):
-            dv._credentials(_oauth_config(**{missing_field: None}))
+    def test_oauth_without_a_usable_integration_is_rejected(self, integration: Integration | None) -> None:
+        with pytest.raises(DisplayVideo360CredentialsError, match="No Google account is connected"):
+            dv._credentials(_oauth_config(), integration)
 
     def test_missing_auth_block_is_rejected(self) -> None:
         config = DisplayVideo360SourceConfig(auth_type=cast(Any, None), partner_id="1234", advertiser_ids=None)
@@ -215,7 +227,7 @@ class TestCredentials:
             dv._credentials(config)
 
     def test_secrets_are_redacted_from_the_transport(self) -> None:
-        assert set(dv.redact_values(_oauth_config())) == {"client-secret", "refresh-token"}
+        assert set(dv.redact_values(_oauth_config(), _integration())) == {"access-token", "refresh-token"}
         assert dv.redact_values(_service_account_config()) == (SERVICE_ACCOUNT_KEY,)
 
 
@@ -785,12 +797,10 @@ class TestValidateCredentials:
         assert error is not None and "partner ID" in error
 
     def test_unusable_credentials_are_reported_without_a_request(self) -> None:
-        config = _oauth_config(refresh_token=None)
-
-        is_valid, error = validate_credentials(config, "v4")
+        is_valid, error = validate_credentials(_oauth_config(), "v4", None)
 
         assert is_valid is False
-        assert error is not None and "refresh token" in error
+        assert error is not None and "No Google account is connected" in error
 
     def test_the_probe_uses_the_resolved_api_version(self) -> None:
         session = mock.MagicMock()

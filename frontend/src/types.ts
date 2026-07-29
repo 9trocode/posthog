@@ -5446,6 +5446,7 @@ export const INTEGRATION_KINDS = [
     'google-analytics',
     'google-search-console',
     'google-sheets',
+    'display-video-360',
     'linkedin-ads',
     'snapchat',
     'stripe',

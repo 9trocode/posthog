@@ -7,9 +7,12 @@ from posthog.schema import (
     SourceConfig,
     SourceFieldInputConfig,
     SourceFieldInputConfigType,
+    SourceFieldOauthConfig,
     SourceFieldSelectConfig,
     SourceFieldSelectConfigOption,
 )
+
+from posthog.models.integration import Integration
 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import (
     SourceInputs,
@@ -19,10 +22,12 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.bas
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.canonical_descriptions import (
     CanonicalDescriptions,
 )
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.mixins import OAuthMixin
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.registry import SourceRegistry
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.schema import SourceSchema
 from products.warehouse_sources.backend.temporal.data_imports.sources.display_video_360.display_video_360 import (
+    DISPLAY_VIDEO_SCOPES,
     DisplayVideo360ResumeConfig,
     display_video_360_source,
     validate_credentials as validate_display_video_360_credentials,
@@ -41,7 +46,7 @@ from products.warehouse_sources.backend.types import ExternalDataSourceType
 
 
 @SourceRegistry.register
-class DisplayVideo360Source(ResumableSource[DisplayVideo360SourceConfig, DisplayVideo360ResumeConfig]):
+class DisplayVideo360Source(ResumableSource[DisplayVideo360SourceConfig, DisplayVideo360ResumeConfig], OAuthMixin):
     supported_versions = (DISPLAY_VIDEO_API_VERSION,)
     default_version = DISPLAY_VIDEO_API_VERSION
     api_docs_url = "https://developers.google.com/display-video/api/reference/rest"
@@ -61,10 +66,10 @@ class DisplayVideo360Source(ResumableSource[DisplayVideo360SourceConfig, Display
             label="Display & Video 360",
             caption="""Connect Display & Video 360 to sync your partners, advertisers, campaigns, insertion orders, line items, creatives, and daily performance reports into the PostHog Data warehouse.
 
-Enable both the **Display & Video 360 API** and the **Bid Manager API** on a Google Cloud project, then pick how PostHog should authenticate:
+Pick how PostHog should authenticate:
 
-- **Service account key** — paste the JSON key file. The service account's email also has to be added as a Display & Video 360 user with access to the partner; enabling the APIs on its own isn't enough.
-- **OAuth client** — create an OAuth client in the same project, authorize it for the `display-video` and `doubleclickbidmanager` scopes, then paste the client ID, client secret, and refresh token.
+- **Google account** - click Connect and grant the `display-video` and `doubleclickbidmanager` scopes. The account you connect needs access to the partner in Display & Video 360.
+- **Service account key** - paste the JSON key file. Enable both the **Display & Video 360 API** and the **Bid Manager API** on the service account's Google Cloud project, and add its email as a Display & Video 360 user with access to the partner.
 
 Performance tables are generated as Bid Manager reports, so they only reach as far back as Display & Video 360 retains reporting data.""",
             iconPath="/static/services/display_video_360.png",
@@ -77,8 +82,24 @@ Performance tables are generated as Bid Manager reports, so they only reach as f
                         name="auth_type",
                         label="Authentication",
                         required=True,
-                        defaultValue="service_account",
+                        defaultValue="oauth",
                         options=[
+                            SourceFieldSelectConfigOption(
+                                label="Google account",
+                                value="oauth",
+                                fields=cast(
+                                    list[FieldType],
+                                    [
+                                        SourceFieldOauthConfig(
+                                            name="display_video_360_integration_id",
+                                            label="Display & Video 360 account",
+                                            required=False,
+                                            kind="display-video-360",
+                                            requiredScopes=" ".join(DISPLAY_VIDEO_SCOPES),
+                                        ),
+                                    ],
+                                ),
+                            ),
                             SourceFieldSelectConfigOption(
                                 label="Service account key",
                                 value="service_account",
@@ -91,39 +112,6 @@ Performance tables are generated as Bid Manager reports, so they only reach as f
                                             type=SourceFieldInputConfigType.TEXTAREA,
                                             required=False,
                                             placeholder='{"type": "service_account", ...}',
-                                            secret=True,
-                                        ),
-                                    ],
-                                ),
-                            ),
-                            SourceFieldSelectConfigOption(
-                                label="OAuth client",
-                                value="oauth",
-                                fields=cast(
-                                    list[FieldType],
-                                    [
-                                        SourceFieldInputConfig(
-                                            name="client_id",
-                                            label="OAuth client ID",
-                                            type=SourceFieldInputConfigType.TEXT,
-                                            required=False,
-                                            placeholder="000000000000-xxxx.apps.googleusercontent.com",
-                                            secret=False,
-                                        ),
-                                        SourceFieldInputConfig(
-                                            name="client_secret",
-                                            label="OAuth client secret",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="",
-                                            secret=True,
-                                        ),
-                                        SourceFieldInputConfig(
-                                            name="refresh_token",
-                                            label="Refresh token",
-                                            type=SourceFieldInputConfigType.PASSWORD,
-                                            required=False,
-                                            placeholder="1//...",
                                             secret=True,
                                         ),
                                     ],
@@ -160,14 +148,18 @@ Performance tables are generated as Bid Manager reports, so they only reach as f
 
     def get_non_retryable_errors(self) -> dict[str, str | None]:
         return {
-            "401 Client Error": "Google rejected your Display & Video 360 credentials. Update the service account key or OAuth client details and reconnect.",
-            "403 Client Error": "Your credentials cannot read Display & Video 360. Add the service account or user as a Display & Video 360 user with partner access, and enable both the Display & Video 360 API and the Bid Manager API.",
+            "401 Client Error": "Google rejected your Display & Video 360 credentials. Reconnect your Google account or update the service account key.",
+            "403 Client Error": "Your credentials cannot read Display & Video 360. Add the connected account or service account as a Display & Video 360 user with partner access, and enable both the Display & Video 360 API and the Bid Manager API.",
             # google-auth raises this while refreshing when a refresh token has been revoked or a
             # service account key has been rotated away. No retry can recover it.
-            "invalid_grant": "Your Display & Video 360 connection has expired or been revoked. Enter new credentials and reconnect.",
-            "ACCESS_TOKEN_SCOPE_INSUFFICIENT": "The credentials are missing the Display & Video 360 or Bid Manager scope. Re-authorize with both scopes and reconnect.",
+            "invalid_grant": "Your Display & Video 360 connection has expired or been revoked. Reconnect your Google account.",
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT": "The credentials are missing the Display & Video 360 or Bid Manager scope. Reconnect and grant both scopes.",
             "The service account key": "The service account JSON key could not be read. Paste the complete key file and reconnect.",
-            "Missing OAuth credentials": "The OAuth client ID, client secret, and refresh token are all required. Add the missing values and reconnect.",
+            # Raised by `get_oauth_integration` when the source still points at an integration row
+            # that has since been deleted, or was saved before an account was connected. No retry
+            # can recreate it.
+            "Missing integration ID": "Connect a Google account with access to Display & Video 360 before syncing.",
+            "Integration not found": "The connected Display & Video 360 account no longer exists. Connect it again.",
         }
 
     def get_canonical_descriptions(self) -> CanonicalDescriptions:
@@ -208,6 +200,16 @@ Performance tables are generated as Bid Manager reports, so they only reach as f
 
         return schemas
 
+    def _resolve_integration(self, config: DisplayVideo360SourceConfig, team_id: int) -> Integration | None:
+        """The connected Google account, or None when the source authenticates with a service account key."""
+        auth = config.auth_type
+        if auth is None or auth.selection != "oauth":
+            return None
+        integration_id = auth.display_video_360_integration_id
+        if not integration_id:
+            raise ValueError("Missing integration ID")
+        return self.get_oauth_integration(integration_id, team_id)
+
     def validate_credentials(
         self,
         config: DisplayVideo360SourceConfig,
@@ -215,7 +217,11 @@ Performance tables are generated as Bid Manager reports, so they only reach as f
         schema_name: Optional[str] = None,
         api_version: str | None = None,
     ) -> tuple[bool, str | None]:
-        return validate_display_video_360_credentials(config, self.resolve_api_version(api_version))
+        try:
+            integration = self._resolve_integration(config, team_id)
+        except ValueError:
+            return False, "Connect a Google account with access to Display & Video 360 to continue."
+        return validate_display_video_360_credentials(config, self.resolve_api_version(api_version), integration)
 
     def get_resumable_source_manager(self, inputs: SourceInputs) -> ResumableSourceManager[DisplayVideo360ResumeConfig]:
         # Entity page tokens and report date windows share one dataclass but are never
@@ -234,6 +240,7 @@ Performance tables are generated as Bid Manager reports, so they only reach as f
             config=config,
             endpoint=inputs.schema_name,
             api_version=self.resolve_api_version(inputs.api_version),
+            integration=self._resolve_integration(config, inputs.team_id),
             logger=inputs.logger,
             resumable_source_manager=resumable_source_manager,
             should_use_incremental_field=inputs.should_use_incremental_field,
