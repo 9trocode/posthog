@@ -22,12 +22,15 @@ _TIMESTAMP_SLACK = dt.timedelta(hours=1)
 def fetch_session_group_keys(*, team: Team, session_id: str, start: dt.datetime, end: dt.datetime) -> dict[int, str]:
     """Group keys the session's events carry, keyed by group type index.
 
-    `max` over each column picks the lexicographically largest non-empty key, which is just "the key"
-    for the normal case of one group per type per session, and is at least deterministic when a session
-    somehow spans two.
+    Takes each key off the latest event that carried it. A session normally holds one key per group type,
+    but when it holds two (a user switching org mid-session) the most recent one is the group the observed
+    activity belongs to, where a lexicographic pick would attribute the observation to whichever key
+    happened to sort highest.
     """
     tag_queries(team_id=team.id, product=Product.REPLAY_VISION, feature=Feature.QUERY)
-    selects = ", ".join(f"max(`$group_{i}`) AS group_{i}" for i in GROUP_TYPE_INDEXES)
+    selects = ", ".join(
+        f"argMaxIf(`$group_{i}`, timestamp, `$group_{i}` != '') AS group_{i}" for i in GROUP_TYPE_INDEXES
+    )
     query = parse_select(
         f"SELECT {selects} FROM events WHERE `$session_id` = {{session_id}} "
         "AND timestamp >= {start} AND timestamp <= {end}",
