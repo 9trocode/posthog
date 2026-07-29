@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from products.posthog_ai.eval_harness.scorers.contract import Score
 from products.replay_vision.backend.temporal.types import ScannerSnapshot
 from products.replay_vision.evals.collector import order_candidates
 from products.replay_vision.evals.dataset import GoldenCase
@@ -38,7 +39,7 @@ def _golden(scanner_type: str, label_is_correct: bool | None, recorded_output: d
         team_name="Team",
         snapshot=ScannerSnapshot(
             name="Test scanner",
-            scanner_type=scanner_type,  # type: ignore[arg-type]
+            scanner_type=scanner_type,
             scanner_version=1,
             model="gemini-3.6-flash",
             provider="google",
@@ -118,9 +119,13 @@ def test_scan_completed_fails_on_schema_breakage() -> None:
 
 def test_summary_alignment_prepare_gates_on_reference() -> None:
     judge = SummaryAlignment()
-    assert judge._prepare(_monitor_output("yes"), {}).score is None
+    skipped = judge._prepare(_monitor_output("yes"), {})
+    assert isinstance(skipped, Score)
+    assert skipped.score is None
     spec = {"summary_alignment": {"reference": {"title": "t", "summary": "s"}}}
-    assert judge._prepare({"model_output": None}, spec).score == 0.0
+    no_output = judge._prepare({"model_output": None}, spec)
+    assert isinstance(no_output, Score)
+    assert no_output.score == 0.0
     prepared = judge._prepare({"model_output": {"title": "t2", "summary": "s2"}}, spec)
     assert isinstance(prepared, dict)
     assert "t2" in prepared["output"]
