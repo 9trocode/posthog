@@ -448,6 +448,9 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
                 self.context["get_team"]().organization_id, self._page_scanner_ids(scanner)
             )
             self.context["_scanner_budgets"] = budgets
+        # Indexed, not `.get(default)` like `_scanner_spend`: a missing entry means the page id list didn't
+        # cover this scanner, and defaulting a limit figure to zero would report a blocked scanner as fine.
+        # Displayed spend can safely fall back to zero; this cannot.
         return budgets[scanner.id]
 
     @extend_schema_field(serializers.IntegerField())

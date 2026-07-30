@@ -2654,6 +2654,20 @@ class TestScannerSpend(_VisionAPITestCase):
         self.assertEqual(resp.status_code, 200, resp.json())
         self.assertEqual(self._credits_by_name(resp.json())["spender"], observation_credits_for_model(spender.model))
 
+    def _spend_against_limit(self, scanner: ReplayScanner, session_id: str) -> None:
+        """Ledger spend, which is what the limit is enforced on. `_succeeded_observation` deliberately
+        writes no receipt, because it seeds the displayed column, which reads observation rows."""
+        observation = self._succeeded_observation(scanner, session_id)
+        ReplayObservationUsage.objects.create(
+            observation_id=observation.id,
+            organization_id=self.team.organization_id,
+            team_id=self.team.pk,
+            scanner_id=scanner.id,
+            observation_created_at=observation.created_at,
+            model=scanner.model,
+            credits=observation_credits_for_model(scanner.model),
+        )
+
     def test_limit_reached_is_reported_per_scanner(self) -> None:
         scanner = self._create_scanner()
         cost = observation_credits_for_model(scanner.model)
@@ -2663,12 +2677,29 @@ class TestScannerSpend(_VisionAPITestCase):
         self.assertEqual(resp.status_code, 200, resp.json())
         self.assertIs(resp.json()["limit_reached"], False)
 
-        self._succeeded_observation(scanner, "over-limit", created_at=None)
+        self._spend_against_limit(scanner, "over-limit")
 
         resp = self.client.get(f"{self.scanners_url}{scanner.id}/")
         self.assertEqual(resp.status_code, 200, resp.json())
         self.assertIs(resp.json()["limit_reached"], True)
         self.assertEqual(resp.json()["credits_used_against_limit"], cost)
+
+    def test_limit_fields_are_per_row_on_the_list_endpoint(self) -> None:
+        # The page's budgets are computed once and cached on the shared serializer context, so a lookup
+        # keyed on the wrong scanner would give every row the first row's answer.
+        capped = self._create_scanner(name="capped")
+        self._create_scanner(name="uncapped")
+        cost = observation_credits_for_model(capped.model)
+        ReplayScanner.objects.filter(pk=capped.pk).update(credit_limit=cost)
+        self._spend_against_limit(capped, "capped-spend")
+
+        resp = self.client.get(self.scanners_url)
+        self.assertEqual(resp.status_code, 200, resp.json())
+        by_name = {row["name"]: row for row in resp.json()["results"]}
+        self.assertIs(by_name["capped"]["limit_reached"], True)
+        self.assertIs(by_name["uncapped"]["limit_reached"], False)
+        self.assertEqual(by_name["capped"]["credits_used_against_limit"], cost)
+        self.assertEqual(by_name["uncapped"]["credits_used_against_limit"], 0)
 
     def test_limit_below_one_observation_reports_reached_before_any_spend(self) -> None:
         # `limit_reached` answers "can this scanner run again", not "has it spent its limit". A cap
@@ -2683,24 +2714,24 @@ class TestScannerSpend(_VisionAPITestCase):
         self.assertIs(resp.json()["limit_reached"], True)
         self.assertEqual(resp.json()["credits_used_against_limit"], 0)
 
-    def test_list_endpoint_computes_scanner_budgets_in_a_single_query(self) -> None:
-        scanners = [self._create_scanner(name=f"scanner-{i}") for i in range(5)]
-        for scanner in scanners:
-            self._succeeded_observation(scanner, f"seed-{scanner.id}")
+    def test_list_endpoint_query_count_does_not_scale_with_page_size(self) -> None:
+        # Both spend figures are computed once per page and cached on the shared serializer context.
+        # Asserting the count rather than matching SQL text keeps this from breaking on a query refactor
+        # that preserves the property, and from passing on an N+1 that happens to be shaped differently.
+        one = self._create_scanner(name="scanner-0")
+        ReplayScanner.objects.filter(pk=one.pk).update(credit_limit=10_000)
+        self._spend_against_limit(one, "seed-0")
+        with CaptureQueriesContext(connection) as single_page:
+            self.assertEqual(self.client.get(self.scanners_url).status_code, 200)
 
-        with CaptureQueriesContext(connection) as ctx:
-            resp = self.client.get(self.scanners_url)
-        self.assertEqual(resp.status_code, 200, resp.json())
+        for i in range(1, 5):
+            extra = self._create_scanner(name=f"scanner-{i}")
+            ReplayScanner.objects.filter(pk=extra.pk).update(credit_limit=10_000)
+            self._spend_against_limit(extra, f"seed-{i}")
+        with CaptureQueriesContext(connection) as five_page:
+            self.assertEqual(self.client.get(self.scanners_url).status_code, 200)
 
-        queries = [q["sql"] for q in ctx.captured_queries]
-        # `compute_scanner_budgets`' limit lookup is a dedicated query keyed on the scanner id list,
-        # distinct from the list endpoint's own row fetch (which also selects credit_limit).
-        limit_lookup_queries = [q for q in queries if "credit_limit" in q and " IN (" in q]
-        usage_sum_queries = [q for q in queries if "replayobservationusage" in q.lower() and "SUM" in q.upper()]
-        # One query reads every scanner's credit_limit, one sums settled usage for the page —
-        # neither should scale with the number of scanners on the page.
-        self.assertEqual(len(limit_lookup_queries), 1)
-        self.assertEqual(len(usage_sum_queries), 1)
+        self.assertEqual(len(five_page.captured_queries), len(single_page.captured_queries))
 
 
 class TestCurrentPeriodBounds(SimpleTestCase):

@@ -12,102 +12,80 @@ interface Props {
     scannerId: string
 }
 
-// Seeded with headroom above the forecast rather than exactly on it, so the limit doesn't bind the moment
-// normal month-to-month variance nudges usage up.
-const SEED_HEADROOM_MULTIPLIER = 2
-
 export function ScannerCreditLimit({ scannerId }: Props): JSX.Element {
-    const { scannerEstimate } = useValues(replayScannerLogic({ id: scannerId }))
-    const estimatedMonthly = scannerEstimate?.estimated_credits_per_month ?? null
-    const creditsPerObservation = scannerEstimate?.credits_per_observation ?? null
+    const { creditLimitState } = useValues(replayScannerLogic({ id: scannerId }))
+    const {
+        limit,
+        isEmptyButEnabled,
+        isOn,
+        estimatedMonthly,
+        creditsPerObservation,
+        isBelowEstimate,
+        cannotAffordOneScan,
+        seedValue,
+    } = creditLimitState
 
     return (
         <LemonField name="credit_limit">
-            {({ value, onChange }) => {
-                // NaN represents "toggled on, field left empty" - distinct from null (toggle off/unlimited)
-                // so an untouched field can't silently save as unlimited.
-                const isEmptyButEnabled = typeof value === 'number' && Number.isNaN(value)
-                const currentLimit = typeof value === 'number' && !Number.isNaN(value) ? value : null
-                const limitOn = currentLimit != null || isEmptyButEnabled
-                const isBelowEstimate =
-                    currentLimit != null && estimatedMonthly != null && currentLimit < estimatedMonthly
-                // A cap under one scan's cost never lets a single scan through, so the scanner is
-                // stopped from the moment it is saved. Worth its own warning, not just "below estimate".
-                const cannotAffordOneScan =
-                    currentLimit != null && creditsPerObservation != null && currentLimit < creditsPerObservation
-                const toggleOn = (): void => {
-                    // Seed from the real estimate when we have one; otherwise leave the field empty rather
-                    // than invent a number the user has to notice and override.
-                    onChange(
-                        estimatedMonthly != null
-                            ? Math.max(1, Math.round(estimatedMonthly * SEED_HEADROOM_MULTIPLIER))
-                            : NaN
-                    )
-                }
-                return (
-                    <LemonCard hoverEffect={false} className="p-3 space-y-3">
-                        <div className="flex items-start justify-between gap-2">
-                            <div className="space-y-1">
-                                <LemonLabel>Credit limit</LemonLabel>
-                                <div className="text-xs text-muted">
-                                    Cap what this scanner spends in a billing period, on top of your organization's
-                                    limit.
-                                </div>
+            {({ onChange }) => (
+                <LemonCard hoverEffect={false} className="p-3 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                        <div className="space-y-1">
+                            <LemonLabel>Credit limit</LemonLabel>
+                            <div className="text-xs text-muted">
+                                Cap what this scanner spends in a billing period, on top of your organization's limit.
                             </div>
-                            <LemonSwitch
-                                checked={limitOn}
-                                onChange={(checked) => (checked ? toggleOn() : onChange(null))}
-                                data-attr="vision-scanner-credit-limit-toggle"
-                            />
                         </div>
-                        {limitOn && (
-                            <>
-                                <div className="flex items-center gap-4">
-                                    <div className="w-40">
-                                        <LemonInput
-                                            type="number"
-                                            value={isEmptyButEnabled ? NaN : (currentLimit ?? undefined)}
-                                            onChange={(v) =>
-                                                onChange(
-                                                    v == null || Number.isNaN(v) ? NaN : Math.max(1, Math.round(v))
-                                                )
-                                            }
-                                            min={1}
-                                            step={1}
-                                            suffix={<span>credits</span>}
-                                        />
-                                    </div>
-                                    <span className="text-sm text-muted">
-                                        {currentLimit != null && `≈ ${creditsToUsd(currentLimit)} per period`}
-                                        {currentLimit != null && estimatedMonthly != null && ' · '}
-                                        {estimatedMonthly != null &&
-                                            `Estimated usage: ${creditsToUsd(estimatedMonthly)}/month`}
-                                    </span>
+                        <LemonSwitch
+                            checked={isOn}
+                            onChange={(checked) => onChange(checked ? seedValue : null)}
+                            data-attr="vision-scanner-credit-limit-toggle"
+                        />
+                    </div>
+                    {isOn && (
+                        <>
+                            <div className="flex items-center gap-4">
+                                <div className="w-40">
+                                    <LemonInput
+                                        type="number"
+                                        value={isEmptyButEnabled ? NaN : (limit ?? undefined)}
+                                        onChange={(v) =>
+                                            onChange(v == null || Number.isNaN(v) ? NaN : Math.max(1, Math.round(v)))
+                                        }
+                                        min={1}
+                                        step={1}
+                                        suffix={<span>credits</span>}
+                                    />
                                 </div>
-                                {cannotAffordOneScan ? (
+                                <span className="text-sm text-muted">
+                                    {limit != null && `≈ ${creditsToUsd(limit)} per period`}
+                                    {limit != null && estimatedMonthly != null && ' · '}
+                                    {estimatedMonthly != null &&
+                                        `Estimated usage: ${creditsToUsd(estimatedMonthly)} a month`}
+                                </span>
+                            </div>
+                            {cannotAffordOneScan ? (
+                                <div className="text-xs text-warning">
+                                    One scan by this scanner costs {creditsPerObservation} credits, so this limit stops
+                                    it before it scans anything. Raise it to at least {creditsPerObservation} credits.
+                                </div>
+                            ) : (
+                                isBelowEstimate && (
                                     <div className="text-xs text-warning">
-                                        One scan by this scanner costs {creditsPerObservation} credits, so this limit
-                                        stops it before it scans anything. Raise it to at least {creditsPerObservation}{' '}
-                                        credits.
+                                        This is below the estimated {creditsToUsd(estimatedMonthly ?? 0)} a month, so
+                                        the scanner is likely to stop before the period resets.
                                     </div>
-                                ) : (
-                                    isBelowEstimate && (
-                                        <div className="text-xs text-warning">
-                                            This is below the estimated {creditsToUsd(estimatedMonthly ?? 0)}/month, so
-                                            the scanner is likely to hit its limit before the period resets.
-                                        </div>
-                                    )
-                                )}
-                                <div className="text-xs text-muted">
-                                    When this scanner reaches its limit, it stops scanning until the next billing
-                                    period. It stays enabled, but sessions it skipped this period aren't scanned later,
-                                    even after you raise the limit.
-                                </div>
-                            </>
-                        )}
-                    </LemonCard>
-                )
-            }}
+                                )
+                            )}
+                            <div className="text-xs text-muted">
+                                When this scanner reaches its limit, it stops scanning until the next billing period. It
+                                stays enabled, but sessions it skipped this period aren't scanned later, even after you
+                                raise the limit.
+                            </div>
+                        </>
+                    )}
+                </LemonCard>
+            )}
         </LemonField>
     )
 }

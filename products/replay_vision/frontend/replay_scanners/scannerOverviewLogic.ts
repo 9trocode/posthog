@@ -266,7 +266,9 @@ export const scannerOverviewLogic = kea<scannerOverviewLogicType>([
                 return {
                     limit,
                     used,
-                    usedPct: limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100,
+                    usedPct: Math.min(100, Math.round((used / limit) * 100)),
+                    // Comes from the API, not from usedPct: a scanner stops as soon as what's left can't
+                    // cover another scan, so this can be true below 100%.
                     limitReached: !!scanner.limit_reached,
                 }
             },
