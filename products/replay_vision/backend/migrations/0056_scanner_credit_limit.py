@@ -10,7 +10,7 @@ from posthog.migration_helpers import AddConstraintNotValid
 class Migration(migrations.Migration):
     dependencies = [
         ("posthog", "1271_add_pardot_integration_kind"),
-        ("replay_vision", "0054_revert_remapped_preview_scanners"),
+        ("replay_vision", "0055_alter_replayscanner_model"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
