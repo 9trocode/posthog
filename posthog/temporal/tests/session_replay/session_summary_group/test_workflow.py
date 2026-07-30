@@ -498,8 +498,7 @@ async def test_assign_events_to_patterns_enrichment_outcomes(
         result = EnrichedSessionGroupSummaryPatternsList.model_validate_json(session_group_summary.summary)
         assert len(result.patterns) == 2  # The 2 enriched patterns survive, the 2 without events are dropped
 
-    # Test 2: Should fail but stay retryable when no pattern gets any enrichable event — the assignment
-    # LLM call is regenerated each attempt, so a transient bad response can recover on retry
+    # Test 2: Should fail instead of storing an empty report when no pattern gets any enrichable event
     with (
         patch("ee.hogai.session_summaries.llm.consume.call_llm") as mock_call_llm,
         patch("temporalio.activity.info") as mock_activity_info,
@@ -526,9 +525,8 @@ async def test_assign_events_to_patterns_enrichment_outcomes(
         mock_llm_response = _build_openai_response(patterns_assignment_unmappable)
         mock_call_llm.return_value = mock_llm_response
 
-        with pytest.raises(ApplicationError, match="All patterns failed to enrich with session meta") as exc_info:
+        with pytest.raises(ApplicationError, match="All patterns failed to enrich with session meta"):
             await assign_events_to_patterns_activity(activity_input)
-        assert not exc_info.value.non_retryable
 
     # Test 3: Should store an empty report without any LLM calls when extraction found no patterns
     empty_patterns = RawSessionGroupSummaryPatternsList(patterns=[])

@@ -356,19 +356,12 @@ async def _generate_patterns_assignments(
     return patterns_assignments_list_of_lists
 
 
-@temporalio.activity.defn
-async def assign_events_to_patterns_activity(
+async def _enrich_patterns_with_events_context(
     inputs: SessionGroupSummaryOfSummariesInputs,
-) -> str:
-    """Summarize a group of sessions in one call. Returns session_group_summary_id."""
-    session_ids = _get_session_ids_from_inputs(inputs)
-    # Not checking for existing summary in the DB, as the input of `~300 exactly the same ids + context` seems highly unlikely
-    redis_client, redis_input_key, _ = get_redis_state_client(
-        key_base=inputs.redis_key_base,
-        input_label=StateActivitiesEnum.SESSION_GROUP_EXTRACTED_PATTERNS,
-        output_label=StateActivitiesEnum.SESSION_GROUP_PATTERNS_ASSIGNMENTS,
-        state_id=generate_state_id_from_session_ids(session_ids),
-    )
+    patterns_extraction: RawSessionGroupSummaryPatternsList,
+    session_ids: list[str],
+) -> EnrichedSessionGroupSummaryPatternsList:
+    """Assign events to the extracted patterns through LLM calls and enrich them with event context."""
     # Get ready session summaries from DB
     # Disable thread-sensitive as the call is heavy (N summaries through pagination)
     ready_summaries = await database_sync_to_async(get_ready_summaries_from_db, thread_sensitive=False)(
@@ -396,6 +389,57 @@ async def assign_events_to_patterns_activity(
         intermediate_session_summaries_str[i : i + PATTERNS_ASSIGNMENT_CHUNK_SIZE]
         for i in range(0, len(intermediate_session_summaries_str), PATTERNS_ASSIGNMENT_CHUNK_SIZE)
     ]
+    # Assign events <> patterns through LLM calls in chunks to keep the content meaningful
+    patterns_assignments_list_of_lists = await _generate_patterns_assignments(
+        patterns=patterns_extraction,
+        session_summaries_chunks_str=session_summaries_chunks_str,
+        session_ids=session_ids,
+        model_to_use=inputs.model_to_use,
+        extra_summary_context=inputs.extra_summary_context,
+        trace_id=temporalio.activity.info().workflow_id,
+        user_id=inputs.user_id,
+        user_distinct_id=inputs.user_distinct_id_to_log,
+        trigger_session_id=inputs.trigger_session_id,
+    )
+    # Create event ids mappings from ready summaries to identify events and sessions assigned to patterns
+    combined_event_ids_mappings = create_event_ids_mapping_from_ready_summaries(
+        session_id_to_ready_summaries_mapping=session_id_to_ready_summaries_mapping
+    )
+    # Combine patterns assignments to have a single pattern-to-events list
+    # Deduplicates to keep only one event per session per pattern
+    combined_patterns_assignments = combine_patterns_assignments_from_single_session_summaries(
+        patterns_assignments_list_of_lists=patterns_assignments_list_of_lists,
+        event_id_to_session_id_mapping=combined_event_ids_mappings,
+    )
+    # Combine patterns ids with full event ids (from DB) and previous/next events in the segment per each assigned event
+    pattern_id_to_event_context_mapping = combine_patterns_ids_with_events_context(
+        combined_event_ids_mappings=combined_event_ids_mappings,
+        combined_patterns_assignments=combined_patterns_assignments,
+        session_id_to_ready_summaries_mapping=session_id_to_ready_summaries_mapping,
+        session_id_to_person_mapping=session_id_to_person_mapping,
+    )
+    # Combine patterns info (name, description, etc.) with enriched events context
+    return combine_patterns_with_events_context(
+        patterns=patterns_extraction,
+        pattern_id_to_event_context_mapping=pattern_id_to_event_context_mapping,
+        session_ids=session_ids,
+        user_id=inputs.user_id,
+    )
+
+
+@temporalio.activity.defn
+async def assign_events_to_patterns_activity(
+    inputs: SessionGroupSummaryOfSummariesInputs,
+) -> str:
+    """Summarize a group of sessions in one call. Returns session_group_summary_id."""
+    session_ids = _get_session_ids_from_inputs(inputs)
+    # Not checking for existing summary in the DB, as the input of `~300 exactly the same ids + context` seems highly unlikely
+    redis_client, redis_input_key, _ = get_redis_state_client(
+        key_base=inputs.redis_key_base,
+        input_label=StateActivitiesEnum.SESSION_GROUP_EXTRACTED_PATTERNS,
+        output_label=StateActivitiesEnum.SESSION_GROUP_PATTERNS_ASSIGNMENTS,
+        state_id=generate_state_id_from_session_ids(session_ids),
+    )
     # Get extracted patterns from Redis to be able to assign events to them
     patterns_extraction_raw = await get_data_class_from_redis(
         redis_client=redis_client,
@@ -414,44 +458,11 @@ async def assign_events_to_patterns_activity(
         patterns_extraction_raw,
     )
     if not patterns_extraction.patterns:
-        # No patterns found is a valid outcome; skip the assignment LLM calls and store an empty report
+        # No patterns found is a valid outcome; skip the summaries reads and assignment LLM calls, and store an empty report
         patterns_with_events_context = EnrichedSessionGroupSummaryPatternsList(patterns=[])
     else:
-        # Assign events <> patterns through LLM calls in chunks to keep the content meaningful
-        patterns_assignments_list_of_lists = await _generate_patterns_assignments(
-            patterns=patterns_extraction,
-            session_summaries_chunks_str=session_summaries_chunks_str,
-            session_ids=session_ids,
-            model_to_use=inputs.model_to_use,
-            extra_summary_context=inputs.extra_summary_context,
-            trace_id=temporalio.activity.info().workflow_id,
-            user_id=inputs.user_id,
-            user_distinct_id=inputs.user_distinct_id_to_log,
-            trigger_session_id=inputs.trigger_session_id,
-        )
-        # Create event ids mappings from ready summaries to identify events and sessions assigned to patterns
-        combined_event_ids_mappings = create_event_ids_mapping_from_ready_summaries(
-            session_id_to_ready_summaries_mapping=session_id_to_ready_summaries_mapping
-        )
-        # Combine patterns assignments to have a single pattern-to-events list
-        # Deduplicates to keep only one event per session per pattern
-        combined_patterns_assignments = combine_patterns_assignments_from_single_session_summaries(
-            patterns_assignments_list_of_lists=patterns_assignments_list_of_lists,
-            event_id_to_session_id_mapping=combined_event_ids_mappings,
-        )
-        # Combine patterns ids with full event ids (from DB) and previous/next events in the segment per each assigned event
-        pattern_id_to_event_context_mapping = combine_patterns_ids_with_events_context(
-            combined_event_ids_mappings=combined_event_ids_mappings,
-            combined_patterns_assignments=combined_patterns_assignments,
-            session_id_to_ready_summaries_mapping=session_id_to_ready_summaries_mapping,
-            session_id_to_person_mapping=session_id_to_person_mapping,
-        )
-        # Combine patterns info (name, description, etc.) with enriched events context
-        patterns_with_events_context = combine_patterns_with_events_context(
-            patterns=patterns_extraction,
-            pattern_id_to_event_context_mapping=pattern_id_to_event_context_mapping,
-            session_ids=session_ids,
-            user_id=inputs.user_id,
+        patterns_with_events_context = await _enrich_patterns_with_events_context(
+            inputs=inputs, patterns_extraction=patterns_extraction, session_ids=session_ids
         )
     # Store data in DB to be able to display in the UI
     try:
