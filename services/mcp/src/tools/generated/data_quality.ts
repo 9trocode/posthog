@@ -6,7 +6,6 @@ import {
     DataQualityCheckSuiteRunsCheckRunsListParams,
     DataQualityCheckSuiteRunsRetrieveParams,
     DataQualityChecksCreateBody,
-    DataQualityChecksCreateQueryParams,
     DataQualityChecksDestroyParams,
     DataQualityChecksHealthRetrieveQueryParams,
     DataQualityChecksPartialUpdateBody,
@@ -17,7 +16,7 @@ import {
 } from '@/generated/data_quality/api'
 import type { Context, ToolBase, ZodObjectAny } from '@/tools/types'
 
-const DataQualityCheckCreateSchema = DataQualityChecksCreateQueryParams.extend(DataQualityChecksCreateBody.shape)
+const DataQualityCheckCreateSchema = DataQualityChecksCreateBody
 
 const dataQualityCheckCreate = (): ToolBase<typeof DataQualityCheckCreateSchema, Schemas.DataQualityCheck> => ({
     name: 'data-quality-check-create',
@@ -78,11 +77,6 @@ const dataQualityCheckCreate = (): ToolBase<typeof DataQualityCheckCreateSchema,
             method: 'POST',
             path: `/api/projects/${encodeURIComponent(String(projectId))}/data_quality/checks/`,
             body,
-            query: {
-                check_type: params.check_type,
-                subject_type: params.subject_type,
-                subject_uuid: params.subject_uuid,
-            },
         })
         return result
     },

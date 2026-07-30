@@ -43,12 +43,6 @@ export const DataQualityChecksCreateParams = /* @__PURE__ */ zod.object({
         ),
 })
 
-export const DataQualityChecksCreateQueryParams = /* @__PURE__ */ zod.object({
-    check_type: zod.string().optional().describe('Filter the list to one check type.'),
-    subject_type: zod.string().optional().describe("Filter the list to 'table' or 'view' subjects."),
-    subject_uuid: zod.string().optional().describe('Filter the list to one table or view.'),
-})
-
 export const dataQualityChecksCreateBodyNameMax = 128
 
 export const dataQualityChecksCreateBodyNameRegExp = new RegExp('^[A-Za-z][A-Za-z0-9_]\*$')
@@ -102,7 +96,7 @@ export const DataQualityChecksCreateBody = /* @__PURE__ */ zod.object({
             "'error' failures mark the subject failing and notify; 'warn' failures only surface.\n\n\* `error` - error\n\* `warn` - warn"
         ),
     enabled: zod.boolean().optional().describe('Disabled checks are never run by any trigger.'),
-    tags: zod.unknown().optional().describe('Free-form labels for grouping and filtering.'),
+    tags: zod.array(zod.string()).optional().describe('Free-form string labels for grouping and filtering.'),
     run_on_materialization: zod
         .boolean()
         .optional()
@@ -112,7 +106,7 @@ export const DataQualityChecksCreateBody = /* @__PURE__ */ zod.object({
         .min(dataQualityChecksCreateBodyScheduleIntervalMinutesMin)
         .max(dataQualityChecksCreateBodyScheduleIntervalMinutesMax)
         .nullish()
-        .describe('Independent cadence in minutes, minimum 5. Omit for no schedule of its own.'),
+        .describe('Independent cadence in minutes, minimum 5. Null or omitted means no schedule.'),
     created_source: zod
         .enum(['user', 'ai_generated'])
         .describe('\* `user` - user\n\* `ai_generated` - ai_generated')
@@ -201,7 +195,7 @@ export const DataQualityChecksPartialUpdateBody = /* @__PURE__ */ zod.object({
             "'error' failures mark the subject failing and notify; 'warn' failures only surface.\n\n\* `error` - error\n\* `warn` - warn"
         ),
     enabled: zod.boolean().optional().describe('Disabled checks are never run by any trigger.'),
-    tags: zod.unknown().optional().describe('Free-form labels for grouping and filtering.'),
+    tags: zod.array(zod.string()).optional().describe('Free-form string labels for grouping and filtering.'),
     run_on_materialization: zod
         .boolean()
         .optional()
@@ -211,7 +205,7 @@ export const DataQualityChecksPartialUpdateBody = /* @__PURE__ */ zod.object({
         .min(dataQualityChecksPartialUpdateBodyScheduleIntervalMinutesMin)
         .max(dataQualityChecksPartialUpdateBodyScheduleIntervalMinutesMax)
         .nullish()
-        .describe('Independent cadence in minutes, minimum 5. Omit for no schedule of its own.'),
+        .describe('Independent cadence in minutes, minimum 5. Null or omitted means no schedule.'),
     created_source: zod
         .enum(['user', 'ai_generated'])
         .describe('\* `user` - user\n\* `ai_generated` - ai_generated')
