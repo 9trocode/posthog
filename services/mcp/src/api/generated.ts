@@ -5561,6 +5561,10 @@ export namespace Schemas {
       AwsS3: 'aws-s3',
       S3Compatible: 's3-compatible',
       Snowflake: 'snowflake',
+      Clover: 'clover',
+      CloverEu: 'clover-eu',
+      CloverLatam: 'clover-latam',
+      CloverSandbox: 'clover-sandbox',
     } as const;
 
     export interface ErrorTrackingExternalReferenceIntegration {
