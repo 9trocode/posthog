@@ -433,7 +433,9 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
         # The context dict is shared across the list's children, so the page's totals are computed once.
         totals = self.context.get("_scanner_credits_used")
         if totals is None:
-            totals = credits_used_by_scanner(self.context["get_team"]().organization_id, self._page_scanner_ids(scanner))
+            totals = credits_used_by_scanner(
+                self.context["get_team"]().organization_id, self._page_scanner_ids(scanner)
+            )
             self.context["_scanner_credits_used"] = totals
         return totals.get(scanner.id, ScannerSpend(0, 0))
 
