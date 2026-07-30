@@ -1357,7 +1357,7 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
         snapshot = compute_quota_snapshot(self.team.organization_id)
         cost = observation_credits_for_model(scanner.model)
         scanner_remaining = compute_scanner_budget(scanner).remaining
-        # Uncapped (remaining None) → that limit never binds; otherwise how many of THIS model's cost fit.
+        # Uncapped (remaining None) means that limit never binds. Otherwise, how many of THIS model's cost fit.
         org_limit = in_flight_limit if snapshot.remaining is None else (snapshot.remaining // cost if cost else 0)
         scanner_limit = in_flight_limit if scanner_remaining is None else (scanner_remaining // cost if cost else 0)
         # Report whichever limit is strictly tighter, so the user knows which one to raise.
