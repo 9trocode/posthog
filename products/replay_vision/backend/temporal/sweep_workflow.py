@@ -89,9 +89,9 @@ class SweepScannerWorkflow(PostHogWorkflow):
                     "replay_vision.scanner_budget_check_failed", extra={"scanner_id": str(inputs.scanner_id)}
                 )
 
-        # The sweep is also the heartbeat for this scanner's "and then…" vision actions. Run it first
-        # and best-effort: a vision-action problem must never block the scanner's core session scan,
-        # and it's independent of the in-flight throttle below (which is about apply-scanner load).
+        # The sweep is also the heartbeat for this scanner's "and then…" vision actions. Best-effort:
+        # a vision-action problem must never block the scanner's core session scan, and it's
+        # independent of the in-flight throttle below (which is about apply-scanner load).
         await self._dispatch_due_vision_actions(inputs)
 
         # Same heartbeat keeps the prompt recommendation fresh. The activity self-gates to at most one
