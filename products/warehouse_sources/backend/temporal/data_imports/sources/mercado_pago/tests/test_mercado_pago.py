@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 import requests
 from parameterized import parameterized
 
-from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.rest_source.auth import BearerTokenAuth
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.mercado_pago.mercado_pago import (
     MISSING_ACCESS_TOKEN_ERROR,
     MercadoPagoResumeConfig,

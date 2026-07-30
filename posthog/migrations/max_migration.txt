@@ -1,1 +1,1 @@
-1265_add_mercado_pago_integration_kind
+1277_add_mercado_pago_integration_kind
