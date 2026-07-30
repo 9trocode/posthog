@@ -123,7 +123,7 @@ describe('scannerOverviewLogic', () => {
                 await expectLogic(logic, () =>
                     logic.actions.loadScannerSuccess({
                         ...logic.values.scanner,
-                        monthly_credit_limit: limit,
+                        credit_limit: limit,
                         credits_used_against_limit: used,
                         limit_reached: expectedReached,
                     })

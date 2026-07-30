@@ -257,12 +257,14 @@ function CreditLimitOverview({ scannerId }: { scannerId: string }): JSX.Element 
         >
             <LemonProgress percent={usedPct} strokeColor={limitReached ? 'var(--danger)' : undefined} />
             <div className="text-sm tabular-nums">
-                {formatCreditCount(used)} of {formatCreditCount(limit)} (≈ {creditsToUsd(limit)}/month)
+                {formatCreditCount(used)} of {formatCreditCount(limit)} (≈ {creditsToUsd(limit)} per period)
             </div>
             {limitReached && (
+                // The tag can appear below 100%: a scanner stops as soon as what's left can't cover a whole
+                // scan, so the copy has to explain that rather than claim the budget is fully spent.
                 <div className="text-xs text-muted">
-                    This scanner has stopped scanning until its monthly limit resets. Sessions skipped while capped are
-                    not scanned later.
+                    What's left won't cover another scan, so this scanner has stopped until its limit resets at the
+                    start of the next billing period. Sessions skipped while capped are not scanned later.
                 </div>
             )}
         </OverviewPanel>

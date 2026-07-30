@@ -123,7 +123,7 @@ export function ScannerEditorSceneComponent(): JSX.Element {
         triggers:
             showScannerErrors &&
             (scannerValidationErrors?.sampling_rate != null ||
-                scannerValidationErrors?.monthly_credit_limit != null ||
+                scannerValidationErrors?.credit_limit != null ||
                 durationValidationError != null),
     }
 
