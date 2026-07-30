@@ -40,8 +40,10 @@ WHERE table_name = 'orders'
 
 Re-creating a byte-identical check is a harmless no-op — checks are keyed by a fingerprint of the
 subject, type, column, and config, so an identical create upserts. A _near_-duplicate is not
-harmless: it doubles the noise for whoever reads the results. If an existing check is close but
-wrong, update or delete it rather than adding a sibling.
+harmless: it doubles the noise for whoever reads the results. If an existing check's assertion is
+close but wrong, create the corrected check and delete the old one — the assertion (subject, type,
+column, config) is immutable, so an update that tries to change it is rejected. Update is only for
+metadata, severity, ownership, and scheduling.
 
 ## Choosing checks
 

@@ -6,7 +6,7 @@ from unittest.mock import patch
 from parameterized import parameterized
 
 from posthog.constants import AvailableFeature
-from posthog.models import User
+from posthog.models import OrganizationMembership, User
 
 from products.data_modeling.backend.facade.models import DataWarehouseSavedQuery
 from products.data_quality.backend.facade.enums import (
@@ -16,10 +16,12 @@ from products.data_quality.backend.facade.enums import (
     SubjectType,
     SuiteRunTrigger,
 )
-from products.data_quality.backend.logic.notifications import _QueryAccessResolver
+from products.data_quality.backend.logic.notifications import _WarehouseSubjectResolver
 from products.data_quality.backend.logic.runner import run_check
 from products.data_quality.backend.models import DataQualityCheck, DataQualitySuiteRun
 from products.notifications.backend.facade.enums import TargetType
+
+from ee.models.rbac.access_control import AccessControl
 
 RUNNER_QUERY = "products.data_quality.backend.logic.runner.execute_hogql_query"
 CREATE_NOTIFICATION = "products.data_quality.backend.logic.notifications.create_notification"
@@ -82,7 +84,8 @@ class TestDataQualityNotifications(BaseTest):
         payload = create_notification.call_args.args[0]
         assert payload.title == "Data quality check failed on orders"
         assert "4 failing rows" in payload.body
-        assert payload.resource_id == str(check.id)
+        # The notification points at the warehouse subject object, not the check row.
+        assert payload.resource_id == str(check.subject_uuid)
 
     def test_recipients_are_filtered_to_members_who_can_see_warehouse_objects(self) -> None:
         # The body names a table and column, so it must not reach members denied warehouse access.
@@ -116,10 +119,33 @@ class TestDataQualityNotifications(BaseTest):
 
         mock_uac_cls.side_effect = FakeUAC
 
-        resolved = _QueryAccessResolver(self.team).resolve(TargetType.TEAM, str(self.team.id), self.team.id)
+        check = self._check()
+        resolved = _WarehouseSubjectResolver(check, self.team).resolve(TargetType.TEAM, str(self.team.id), self.team.id)
 
         assert self.user.id in resolved
         assert denied.id not in resolved
+
+    def test_members_denied_the_subject_object_do_not_get_the_notification(self) -> None:
+        # A member with general warehouse and query access but an explicit denial on THIS view must
+        # not receive its name, column, or failing-row count -- the built-in resource-level filter
+        # only asks whether they can see warehouse objects at all.
+        self.organization.available_product_features = [{"key": AvailableFeature.ACCESS_CONTROL}]
+        self.organization.save()
+        allowed = User.objects.create_and_join(self.organization, "allowed@test.com", "password")
+        blocked = User.objects.create_and_join(self.organization, "blocked@test.com", "password")
+        AccessControl.objects.create(
+            team=self.team,
+            resource="warehouse_view",
+            resource_id=str(self.view.id),
+            organization_member=OrganizationMembership.objects.get(organization=self.organization, user=blocked),
+            access_level="none",
+        )
+        check = self._check()
+
+        resolved = _WarehouseSubjectResolver(check, self.team).resolve(TargetType.TEAM, str(self.team.id), self.team.id)
+
+        assert allowed.id in resolved
+        assert blocked.id not in resolved
 
     def test_a_notification_failure_does_not_fail_the_run(self) -> None:
         check = self._check()

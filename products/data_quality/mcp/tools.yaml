@@ -85,7 +85,7 @@ tools:
         annotations:
             readOnly: false
             destructive: false
-            idempotent: true
+            idempotent: false
         title: Run a data quality check
         description: >
             Run one check now. Returns a suite run to poll with data-quality-suite-run; read the per-check outcomes with
@@ -132,7 +132,7 @@ tools:
         annotations:
             readOnly: false
             destructive: false
-            idempotent: true
+            idempotent: false
         title: Run every check on a table or view
         description: >
             Run all enabled checks on one table or view. Returns a suite run to poll. Use this to re-validate a model

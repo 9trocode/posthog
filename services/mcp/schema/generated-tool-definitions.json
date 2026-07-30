@@ -2148,7 +2148,7 @@
         "required_scopes": ["data_quality:write", "query:read"],
         "annotations": {
             "destructiveHint": false,
-            "idempotentHint": true,
+            "idempotentHint": false,
             "openWorldHint": true,
             "readOnlyHint": false
         },
@@ -2193,7 +2193,7 @@
         "required_scopes": ["data_quality:write", "query:read"],
         "annotations": {
             "destructiveHint": false,
-            "idempotentHint": true,
+            "idempotentHint": false,
             "openWorldHint": true,
             "readOnlyHint": false
         },
