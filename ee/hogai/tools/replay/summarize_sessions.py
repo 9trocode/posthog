@@ -177,7 +177,6 @@ class SummarizeSessionsTool(MaxTool):
                 # Recordings that were already missing at validation time still get reported as skipped
                 pre_dropped_session_ids=missing_session_ids,
             )
-            content: str | None = result.content
             artifact: dict | None = None
             if result.summary_id:
                 artifact = {
@@ -207,7 +206,7 @@ class SummarizeSessionsTool(MaxTool):
             success=True,
             failed_session_count=len(result.failed_sessions),
         )
-        return content, artifact
+        return result.content, artifact
 
     def _stream_progress(self, progress_message: str) -> None:
         """Push summarization progress as reasoning messages"""
