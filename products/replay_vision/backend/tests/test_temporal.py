@@ -1,13 +1,14 @@
 import time
 import uuid
 import datetime as dt
+import threading
 from typing import Any
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.conf import settings
-from django.db import IntegrityError
+from django.db import IntegrityError, connections
 from django.utils import timezone
 
 import psycopg.errors
@@ -541,6 +542,40 @@ class TestCreateObservationActivity:
         assert result.was_created is expect_created
         exists = ReplayObservation.objects.filter(scanner=scanner, session_id="sess-scanner-limit").exists()
         assert exists is expect_created
+
+    def test_concurrent_admissions_cannot_exceed_scanner_credit_limit(self) -> None:
+        # Two applies for different sessions race with a cap that fits exactly one observation. Without the
+        # per-scanner lock both read a used=0 budget, both pass, and both reserve a PENDING row (overshoot).
+        credits = observation_credits_for_model(ScannerModel.GEMINI_3_6_FLASH.value)
+        scanner = _make_scanner(monthly_credit_limit=credits)
+        barrier = threading.Barrier(2)
+        created: dict[str, bool] = {}
+
+        def admit(session_id: str) -> None:
+            barrier.wait()
+            try:
+                created[session_id] = create_observation_activity(
+                    CreateObservationInputs(
+                        scanner_id=scanner.id,
+                        team_id=scanner.team_id,
+                        session_id=session_id,
+                        triggered_by=ObservationTrigger.SCHEDULE,
+                        triggered_by_user_id=None,
+                        workflow_id=f"wf-{session_id}",
+                    )
+                ).was_created
+            finally:
+                # Dropping the worker's own connection avoids stranding its lock transaction past teardown.
+                connections.close_all()
+
+        threads = [threading.Thread(target=admit, args=(s,)) for s in ("race-a", "race-b")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert sorted(created.values()) == [False, True]
+        assert ReplayObservation.objects.filter(scanner=scanner, status=ObservationStatus.PENDING).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
