@@ -403,7 +403,6 @@ async def test_assign_events_to_patterns_enrichment_outcomes(
     auser: User,
     ateam: Team,
 ):
-    """Test that assign_events_to_patterns_activity keeps partially-enriched runs and fails only when every pattern loses its events"""
     # Prepare input data
     session_ids = [f"{mock_session_id}-1", f"{mock_session_id}-2"]
     single_session_inputs = [

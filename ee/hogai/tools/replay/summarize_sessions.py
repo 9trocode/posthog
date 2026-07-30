@@ -124,9 +124,9 @@ class SummarizeSessionsTool(MaxTool):
         if not llm_provided_session_ids:
             return "No sessions were found matching the specified criteria.", None
         # Confirm that the sessions provided by the LLM (through filters or explicitly) are true sessions with events (to avoid DB query failures)
-        session_ids = await database_sync_to_async(self._validate_specific_session_ids, thread_sensitive=False)(
-            llm_provided_session_ids
-        )
+        session_ids, missing_session_ids = await database_sync_to_async(
+            self._validate_specific_session_ids, thread_sensitive=False
+        )(llm_provided_session_ids)
         # LLM provided session ids, but no actual sessions with events were found
         if not session_ids:
             llm_provided_input = (
@@ -161,6 +161,8 @@ class SummarizeSessionsTool(MaxTool):
                 session_ids=session_ids,
                 summary_title=summary_title,
                 session_ids_source=llm_provided_session_ids_source,
+                # Recordings that were already missing at validation time still get reported as skipped
+                pre_dropped_session_ids=missing_session_ids,
             )
             content: str | None = None
             artifact: dict | None = None
@@ -282,11 +284,12 @@ class SummarizeSessionsTool(MaxTool):
         """Get the session ID of the user who triggered the summarization."""
         return self._get_session_id(self._config)
 
-    async def _summarize_sessions_individually(self, session_ids: list[str]) -> str:
-        """Summarize sessions individually with progress updates."""
+    async def _summarize_sessions_individually(self, session_ids: list[str]) -> tuple[str, list[FailedSessionInfo]]:
+        """Summarize sessions individually with progress updates. Returns (summaries_str, failed_sessions)."""
         total = len(session_ids)
         completed = 0
         trigger_session_id = self._get_trigger_session_id()
+        failed_sessions: list[FailedSessionInfo] = []
 
         async def _summarize(session_id: str) -> dict[str, Any] | None:
             nonlocal completed
@@ -310,6 +313,13 @@ class SummarizeSessionsTool(MaxTool):
                     exc_info=True,
                     signals_type="session-summaries",
                 )
+                failed_sessions.append(
+                    FailedSessionInfo(
+                        session_id=session_id,
+                        category="summarization_failed",
+                        reason="Failed to generate a summary for this session",
+                    )
+                )
                 return None
 
         # Run all tasks concurrently, with periodic heartbeats to keep the parent activity alive
@@ -326,7 +336,18 @@ class SummarizeSessionsTool(MaxTool):
             stringified_summaries.append(stringifier.stringify_session())
         # Combine all stringified summaries into a single string
         summaries_str = "\n\n".join(stringified_summaries)
-        return summaries_str
+        return summaries_str, failed_sessions
+
+    @staticmethod
+    def _missing_recordings_as_failed(session_ids: list[str]) -> list[FailedSessionInfo]:
+        return [
+            FailedSessionInfo(
+                session_id=session_id,
+                category="skipped",
+                reason="Recording not found (it may have expired or been deleted)",
+            )
+            for session_id in session_ids
+        ]
 
     @staticmethod
     def _stringify_group_summary(summary: EnrichedSessionGroupSummaryPatternsList) -> str:
@@ -431,10 +452,15 @@ class SummarizeSessionsTool(MaxTool):
                 raise ValueError(msg)
 
     async def _summarize_sessions(
-        self, session_ids: list[str], summary_title: str | None, *, session_ids_source: Literal["filters", "explicit"]
+        self,
+        session_ids: list[str],
+        summary_title: str | None,
+        *,
+        session_ids_source: Literal["filters", "explicit"],
+        pre_dropped_session_ids: list[str] | None = None,
     ) -> tuple[str, str | None, list[FailedSessionInfo]]:
-        """Returns (summary_str, summary_id, failed_sessions). summary_id and failed_sessions are
-        only populated for the group path; the individual path logs per-session errors inline."""
+        """Returns (summary_str, summary_id, failed_sessions). summary_id is only populated for the group path."""
+        dropped_sessions = self._missing_recordings_as_failed(pre_dropped_session_ids or [])
         # Fetch per-session metadata for the progress widget
         metadata = await database_sync_to_async(self._get_session_metadata, thread_sensitive=False)(session_ids)
         # Emit sessions_discovered for the frontend progress widget
@@ -456,42 +482,44 @@ class SummarizeSessionsTool(MaxTool):
         )
         # Process sessions based on count
         if len(session_ids) <= GROUP_SUMMARIES_MIN_SESSIONS:
-            summaries_content = await self._summarize_sessions_individually(session_ids=session_ids)
-            return summaries_content, None, []
+            summaries_content, run_failed_sessions = await self._summarize_sessions_individually(
+                session_ids=session_ids
+            )
+            failed_sessions = dropped_sessions + run_failed_sessions
+            note = self._format_failed_sessions_note(
+                failed_sessions, total_requested=len(session_ids) + len(dropped_sessions)
+            )
+            return note + summaries_content, None, failed_sessions
         # The group flow needs timestamps, and a recording can drop out between validation reads (still
         # ingesting, deleted, or a lagging replica), so report it as failed instead of erroring the whole batch
-        found_session_ids, dropped_session_ids, min_timestamp, max_timestamp = await database_sync_to_async(
-            find_sessions_timestamps_dropping_missing, thread_sensitive=False
-        )(session_ids=session_ids, team=self._team)
-        dropped_sessions = [
-            FailedSessionInfo(
-                session_id=dropped_session_id,
-                category="skipped",
-                reason="Recording not found (it may have expired or been deleted)",
-            )
-            for dropped_session_id in dropped_session_ids
-        ]
+        sessions = await database_sync_to_async(find_sessions_timestamps_dropping_missing, thread_sensitive=False)(
+            session_ids=session_ids, team=self._team
+        )
+        dropped_sessions += self._missing_recordings_as_failed(sessions.missing_session_ids)
+        total_requested = len(sessions.found_session_ids) + len(dropped_sessions)
         # Report dropped sessions so the progress widget takes them off the list, as the workflow never sees them
-        total_requested = len(found_session_ids) + len(dropped_session_ids)
-        for dropped_session_id in dropped_session_ids:
+        for dropped_session_id in sessions.missing_session_ids:
             self._dispatch_session_progress(dropped_session_id, "skipped", 0, total_requested)
         # Too few recordings left for pattern extraction, so summarize what's left one by one instead
-        if len(found_session_ids) <= GROUP_SUMMARIES_MIN_SESSIONS:
-            summaries_content = await self._summarize_sessions_individually(session_ids=found_session_ids)
-            note = self._format_failed_sessions_note(dropped_sessions, total_requested=total_requested)
-            return note + summaries_content, None, dropped_sessions
+        if len(sessions.found_session_ids) <= GROUP_SUMMARIES_MIN_SESSIONS:
+            summaries_content, run_failed_sessions = await self._summarize_sessions_individually(
+                session_ids=sessions.found_session_ids
+            )
+            failed_sessions = dropped_sessions + run_failed_sessions
+            note = self._format_failed_sessions_note(failed_sessions, total_requested=total_requested)
+            return note + summaries_content, None, failed_sessions
         # For large groups, process in detail, searching for patterns
         summaries_content, session_group_summary_id, failed_sessions = await self._summarize_sessions_as_group(
-            session_ids=found_session_ids,
+            session_ids=sessions.found_session_ids,
             summary_title=summary_title,
             dropped_sessions=dropped_sessions,
-            min_timestamp=min_timestamp,
-            max_timestamp=max_timestamp,
+            min_timestamp=sessions.min_timestamp,
+            max_timestamp=sessions.max_timestamp,
         )
         return summaries_content, session_group_summary_id, failed_sessions
 
-    def _validate_specific_session_ids(self, session_ids: list[str]) -> list[str] | None:
-        """Validate that specific session IDs exist in the database."""
+    def _validate_specific_session_ids(self, session_ids: list[str]) -> tuple[list[str], list[str]]:
+        """Partition the requested session IDs into (found, missing), deduped and in the original order."""
         from posthog.session_recordings.queries.session_replay_events import SessionReplayEvents
 
         replay_events = SessionReplayEvents()
@@ -499,7 +527,8 @@ class SummarizeSessionsTool(MaxTool):
             session_ids=session_ids,
             team=self._team,
         ).session_ids
-        if not sessions_found:
-            return None
-        # Preserve the original order, filtering out invalid sessions
-        return [sid for sid in session_ids if sid in sessions_found]
+        # Dedupe while preserving order: duplicate IDs would otherwise spawn duplicate summarization tasks
+        deduped_session_ids = list(dict.fromkeys(session_ids))
+        found = [sid for sid in deduped_session_ids if sid in sessions_found]
+        missing = [sid for sid in deduped_session_ids if sid not in sessions_found]
+        return found, missing
