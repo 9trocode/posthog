@@ -387,7 +387,7 @@ class ReplayScannerPromptSuggestionViewSet(
             "`session_limit` controls how many rated sessions are re-run (thumbs-down prioritized, up to "
             "`evaluation_session_cap`). Each successful re-run charges credits like a normal observation of "
             "the same model. The request is refused with 402 when the planned credits exceed what is left of "
-            "the monthly limit, either the org's or this scanner's own. Monitor and classifier scanners get a "
+            "what is left for the current billing period, either the org's limit or this scanner's own. Monitor and classifier scanners get a "
             "kept/fixed/regressed classification, while scorer and summarizer scanners show the raw before "
             "and after output. Requires session recording edit access."
         ),
