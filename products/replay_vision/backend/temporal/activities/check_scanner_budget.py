@@ -10,6 +10,9 @@ from products.replay_vision.backend.temporal.sweep_types import CheckScannerBudg
 def _notify_limit_reached(scanner: ReplayScanner) -> None:
     """Best-effort realtime notification; a failure here must never affect the sweep's pause decision."""
     try:
+        from posthog.models import User  # noqa: PLC0415
+        from posthog.rbac.user_access_control import UserAccessControl  # noqa: PLC0415
+
         from products.notifications.backend.facade.api import (  # noqa: PLC0415 — keeps the heavy dep off the import path
             NotificationData,
             NotificationType,
@@ -17,6 +20,28 @@ def _notify_limit_reached(scanner: ReplayScanner) -> None:
             TargetType,
             create_notification,
         )
+        from products.notifications.backend.resolvers import RecipientsResolver  # noqa: PLC0415
+
+        class ScannerViewersResolver(RecipientsResolver):
+            """Keeps only recipients allowed to view this specific scanner.
+
+            Scanners carry per-object access controls, but the notification pipeline's built-in
+            filter is resource-type wide, so without this a member denied access to this scanner
+            would still learn its name and limit state.
+            """
+
+            def resolve(self, target_type: TargetType, target_id: str, team_id: int | None) -> list[int]:
+                user_ids = super().resolve(target_type, target_id, team_id)
+                users = list(User.objects.filter(id__in=user_ids))
+                if not users or not UserAccessControl(users[0], scanner.team).access_controls_supported:
+                    return user_ids
+                return [
+                    user.id
+                    for user in users
+                    if UserAccessControl(user, scanner.team).check_access_level_for_object(
+                        scanner, required_level="viewer"
+                    )
+                ]
 
         create_notification(
             NotificationData(
@@ -32,6 +57,9 @@ def _notify_limit_reached(scanner: ReplayScanner) -> None:
                 ),
                 target_type=TargetType.TEAM,
                 target_id=str(scanner.team_id),
+                resource_type="replay_scanner",
+                resource_id=str(scanner.id),
+                resolver=ScannerViewersResolver(),
                 source_url=f"/replay-vision/{scanner.id}",
             )
         )

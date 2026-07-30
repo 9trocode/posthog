@@ -334,7 +334,7 @@ def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_notify
     # notifying there could tell a user their scanner stopped when it's about to resume on its own.
     limit = 20 * _OBSERVATION_CREDITS
     scanner = _make_scanner(credit_limit=limit)
-    _seed_scanner_spend(scanner, observations=10)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=10)
     _seed_in_flight_observations(scanner, count=10)
 
     with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
@@ -348,7 +348,7 @@ def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_notify
 def test_check_scanner_budget_activity_notifies_once_per_period_on_settled_exhaustion() -> None:
     limit = 20 * _OBSERVATION_CREDITS
     scanner = _make_scanner(credit_limit=limit)
-    _seed_scanner_spend(scanner, observations=20)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
 
     with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
         first = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
@@ -366,7 +366,7 @@ def test_check_scanner_budget_activity_notifies_once_per_period_on_settled_exhau
 def test_check_scanner_budget_activity_notifies_again_after_period_rolls_over() -> None:
     limit = 20 * _OBSERVATION_CREDITS
     scanner = _make_scanner(credit_limit=limit)
-    _seed_scanner_spend(scanner, observations=20)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
     prior_period = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
     ReplayScanner.objects.filter(pk=scanner.pk).update(limit_notified_period_start=prior_period)
 
@@ -378,6 +378,47 @@ def test_check_scanner_budget_activity_notifies_again_after_period_rolls_over() 
     scanner.refresh_from_db()
     assert scanner.limit_notified_period_start is not None
     assert scanner.limit_notified_period_start > prior_period
+
+
+@pytest.mark.django_db(transaction=True)
+def test_limit_notification_excludes_users_denied_on_the_scanner() -> None:
+    # The notification pipeline's built-in access filter is resource-type wide, so the resolver
+    # attached to the notification must drop members denied access to this specific scanner.
+    from posthog.constants import AvailableFeature
+    from posthog.models import OrganizationMembership, User
+
+    from products.notifications.backend.facade.enums import TargetType
+
+    from ee.models.rbac.access_control import AccessControl
+
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(credit_limit=limit)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
+    organization = scanner.team.organization
+    organization.available_product_features = [
+        {"key": AvailableFeature.ACCESS_CONTROL, "name": AvailableFeature.ACCESS_CONTROL}
+    ]
+    organization.save()
+    allowed = User.objects.create_and_join(organization, "allowed@posthog.com", "testtest")
+    denied = User.objects.create_and_join(organization, "denied@posthog.com", "testtest")
+    AccessControl.objects.create(
+        team=scanner.team,
+        resource="replay_scanner",
+        resource_id=str(scanner.id),
+        access_level="none",
+        organization_member=OrganizationMembership.objects.get(user=denied, organization=organization),
+    )
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    mock_notify.assert_called_once()
+    data = mock_notify.call_args[0][0]
+    assert data.resource_type == "replay_scanner"
+    assert data.resource_id == str(scanner.id)
+    recipients = data.resolver.resolve(TargetType.TEAM, str(scanner.team_id), scanner.team_id)
+    assert allowed.id in recipients
+    assert denied.id not in recipients
 
 
 # SweepScannerWorkflow (mocked-Temporal)
