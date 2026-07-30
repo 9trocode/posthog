@@ -210,6 +210,26 @@ class TestInformationSchemaDataQuality(ClickhouseTestMixin, APIBaseTest):
 
         assert rows == []
 
+    def test_checks_hide_a_definition_that_reads_a_denied_reference(self) -> None:
+        # A custom_sql check on the allowed "customers" that reads the denied "orders" exposes its
+        # last_status (a pass/fail oracle over orders) and compiled config, so the definition row must
+        # not surface -- matching the REST check list, which gates on referenced subjects too.
+        self._check(
+            subject_name="customers",
+            subject_uuid=uuid4(),
+            check_type=CheckType.CUSTOM_SQL,
+            column_name="",
+            config={"query": "SELECT 1 FROM orders"},
+            last_status=CheckRunStatus.FAILED,
+        )
+
+        rows = self._query(
+            "SELECT subject_name FROM system.information_schema.data_quality_checks",
+            context=self._context(denied_tables={"orders"}),
+        )
+
+        assert ("customers",) not in rows
+
     def test_the_tables_are_absent_when_the_catalog_flag_is_off(self) -> None:
         with patch("products.data_quality.backend.facade.flags.is_data_quality_checks_enabled", return_value=False):
             listing = self._query(

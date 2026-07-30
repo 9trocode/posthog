@@ -19,11 +19,12 @@ from posthog.models.scoping import team_scope
 from posthog.models.team import Team
 from posthog.models.user import User
 
-from ..facade.enums import CheckRunStatus, CheckSeverity, CheckType, SubjectStatus, SuiteRunTrigger
+from ..facade.enums import CheckRunStatus, CheckSeverity, SubjectStatus, SuiteRunTrigger
 from ..models import DataQualityCheck, DataQualityCheckRun, DataQualitySuiteRun
 from .compiler import compile_check, related_subject_ref
 from .contracts import CompiledCheck, Evaluation
 from .notifications import notify_check_started_failing
+from .subject_access import check_type_reads_beyond_subject
 from .subjects import resolve_subject
 
 QUERY_TYPE = "data_quality_check"
@@ -82,21 +83,21 @@ class _Authorization:
 def _authorize(check: DataQualityCheck, suite_run: DataQualitySuiteRun) -> _Authorization | None:
     """How a run's query must execute so HogQL enforces the right warehouse access control.
 
-    A ``custom_sql`` check runs arbitrary HogQL that isn't constrained to its declared subject, so a
-    user who was denied a warehouse table or view could otherwise wrap it in a check and read a
-    failing-row count over it. The defense is to run the query as a user whose warehouse ACL HogQL
-    will apply, so a denied object errors the check instead of leaking.
+    A check that reads beyond its declared subject -- ``custom_sql`` runs arbitrary HogQL,
+    ``relationships`` also reads its target subject -- can otherwise be used to read a failing-row
+    count over a table the caller was denied. The defense is to run the query as a user whose
+    warehouse ACL HogQL will apply, so a denied object errors the check instead of leaking.
 
     - Manual runs execute as their initiator.
-    - Scheduled and materialization runs have no initiator. A generic check compiles to a query over
-      only its declared subject, so the service bypass exposes nothing the check's own definition
-      doesn't already name. A ``custom_sql`` check has no such guarantee, so it executes as the
-      check's author; with no author there is nobody to authorize against, and returning ``None``
-      errors the run rather than bypassing the ACL over arbitrary SQL.
+    - Scheduled and materialization runs have no initiator. A check constrained to only its declared
+      subject exposes nothing the definition doesn't already name, so the service bypass is safe. A
+      check that reads a further subject has no such guarantee, so it executes as the check's author;
+      with no author there is nobody to authorize against, and returning ``None`` errors the run
+      rather than bypassing the ACL over a subject the author may since have lost access to.
     """
     if suite_run.trigger == SuiteRunTrigger.MANUAL:
         return _Authorization(run_as=suite_run.created_by, bypass=suite_run.created_by is None)
-    if check.check_type != CheckType.CUSTOM_SQL:
+    if not check_type_reads_beyond_subject(check.check_type):
         return _Authorization(run_as=None, bypass=True)
     if check.created_by is None:
         return None
@@ -116,7 +117,7 @@ def _execute(check: DataQualityCheck, suite_run: DataQualitySuiteRun, team: Team
     if authorization is None:
         return CheckOutcome(
             status=CheckRunStatus.ERRORED,
-            error="A scheduled custom_sql check needs an author to authorize its warehouse access.",
+            error="A scheduled check that reads another subject needs an author to authorize its warehouse access.",
         )
 
     related = related_subject_ref(check.check_type, check.config)

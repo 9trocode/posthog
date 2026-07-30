@@ -29,6 +29,7 @@ from ..logic.subject_access import (
     denied_subject_names,
     is_subject_denied,
     referenced_subject_names,
+    referencing_check_types,
 )
 from ..logic.subjects import resolve_subject
 from .models import DataQualityCheck, DataQualityCheckRun, DataQualitySuiteRun
@@ -59,6 +60,7 @@ __all__ = [
     "get_spec",
     "is_subject_denied",
     "referenced_subject_names",
+    "referencing_check_types",
     "related_subject_ref",
     "resolve_subject",
     "roll_up_health",

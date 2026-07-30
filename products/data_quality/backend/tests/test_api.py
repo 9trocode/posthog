@@ -495,6 +495,40 @@ class TestDataQualityCheckAPI(APIBaseTest):
 
         assert call(self, check).status_code == status.HTTP_403_FORBIDDEN
 
+    @parameterized.expand(
+        [
+            ("custom_sql", CheckType.CUSTOM_SQL, "", {"query": "SELECT 1 FROM orders"}),
+            ("relationships", CheckType.RELATIONSHIPS, "customer_id", None),
+        ]
+    )
+    def test_a_check_reading_a_denied_reference_drops_out_of_list_and_detail(
+        self, _name, check_type, column_name, config
+    ) -> None:
+        # The declared subject ("customers") is allowed, but the check reads the denied "orders" -- its
+        # last_status is a pass/fail oracle over orders, so list and the by-id detail must hide it, the
+        # same referenced-subject gate the run/runs actions apply.
+        allowed = DataWarehouseSavedQuery.objects.create(
+            team=self.team, name="customers", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
+        )
+        if config is None:
+            config = {"to_subject_type": SubjectType.VIEW, "to_subject_uuid": str(self.view.id), "to_column": "id"}
+        check = DataQualityCheck.objects.for_team(self.team.id).create(
+            team=self.team,
+            subject_type=SubjectType.VIEW,
+            subject_uuid=allowed.id,
+            subject_name="customers",
+            check_type=check_type,
+            column_name=column_name,
+            config=config,
+            fingerprint=uuid4().hex,
+        )
+        self._deny_the_view()
+
+        listed = self.client.get(f"{self.url}/")
+
+        assert str(check.id) not in {row["id"] for row in listed.json()["results"]}
+        assert self.client.get(f"{self.url}/{check.id}/").status_code == status.HTTP_404_NOT_FOUND
+
     def test_denied_single_subject_suite_runs_drop_out_of_list_and_detail(self) -> None:
         # A single-subject suite carries that subject_uuid alongside its passed/failed counts, a
         # per-subject outcome the member must not read for a denied table, so list and detail hide it.

@@ -1051,12 +1051,15 @@ def _data_quality_checks(context: "HogQLContext", allowed: Optional[frozenset[st
     """Load the team's data quality check definitions as information_schema rows (fail-soft).
 
     Hides checks whose subject table or view the caller is denied: the row carries the compiled
-    ``config`` and the denormalized subject name, so leaking it leaks the shape of a table the member
-    cannot read. Mirrors the metric loader's ``_references_denied_table`` pass.
+    ``config``, the denormalized subject name, and ``last_status`` -- leaking it leaks the shape of a
+    table the member cannot read, and a pass/fail oracle over it. Also hides checks on an allowed
+    subject that *read* a denied one (a relationships target, a custom_sql table), since ``last_status``
+    is an oracle over that referenced subject too. Mirrors the metric loader's denied-table pass.
     """
     team_id = context.team_id
     if team_id is None or not _can_read_data_quality(context):
         return []
+    from products.data_quality.backend.facade.api import check_reads_denied_subject  # noqa: PLC0415
     from products.data_quality.backend.facade.models import DataQualityCheck  # noqa: PLC0415
 
     try:
@@ -1085,6 +1088,7 @@ def _data_quality_checks(context: "HogQLContext", allowed: Optional[frozenset[st
             ]
             for check in queryset
             if not _references_denied_table([check.subject_name], denied)
+            and not check_reads_denied_subject(team_id, check.check_type, check.config, denied)
         ]
     except Exception:
         logger.exception("information_schema: failed to load data quality checks", team_id=team_id)

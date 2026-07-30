@@ -57,6 +57,14 @@ def check_type_reads_beyond_subject(check_type: str) -> bool:
     return check_type in _REFERENCING_CHECK_TYPES
 
 
+def referencing_check_types() -> frozenset[str]:
+    """The check types that read beyond their declared subject (``relationships``, ``custom_sql``).
+
+    A cheap pre-filter so a denied-reference scan only parses the config of checks that can carry one,
+    rather than every check on the team."""
+    return _REFERENCING_CHECK_TYPES
+
+
 def check_reads_denied_subject(team_id: int, check_type: str, config: dict[str, Any], denied: set[str]) -> bool:
     """Whether a check reads any subject *besides its declared one* that the caller is denied.
 

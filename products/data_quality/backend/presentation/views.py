@@ -150,6 +150,16 @@ class DataQualityCheckViewSet(_DataQualityGateMixin, TeamAndOrgViewSetMixin, vie
             }
             if blocked:
                 queryset = queryset.exclude(subject_name__in=blocked)
+            # A relationships/custom_sql check on an allowed subject still reads a denied one, and the
+            # row's last_status is a pass/fail oracle over it. Hide those too -- only the referencing
+            # types can carry one, so this parses the config of that small subset, not every check.
+            blocked_ids = {
+                check.id
+                for check in queryset.filter(check_type__in=api.referencing_check_types())
+                if api.check_reads_denied_subject(self.team_id, check.check_type, check.config, denied)
+            }
+            if blocked_ids:
+                queryset = queryset.exclude(id__in=blocked_ids)
         return queryset.order_by("-created_at")
 
     @extend_schema(
