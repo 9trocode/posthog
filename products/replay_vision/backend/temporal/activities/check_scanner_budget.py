@@ -25,7 +25,7 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
     """
     scanner = ReplayScanner.objects.filter(pk=inputs.scanner_id, team_id=inputs.team_id).select_related("team").first()
     if scanner is None:
-        # The reconciler removes schedules for deleted scanners; a racing tick just stops here.
+        # The reconciler removes schedules for deleted scanners. A racing tick just stops here.
         return CheckScannerBudgetOutput(capped=False)
     if scanner.credit_limit is None:
         return CheckScannerBudgetOutput(capped=False)

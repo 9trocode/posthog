@@ -102,7 +102,7 @@ def _seed_scanner_spend(scanner: ReplayScanner, *, observations: int) -> None:
 
 
 def _seed_in_flight_observations(scanner: ReplayScanner, *, count: int) -> None:
-    # Pending rows reserve credits live from their snapshot model; they settle no receipt until success.
+    # Pending rows reserve credits live from their snapshot model. They settle no receipt until success.
     snapshot = snapshot_for(scanner)
     ReplayObservation.objects.bulk_create(
         ReplayObservation(
@@ -344,7 +344,7 @@ def test_check_scanner_budget_activity_caps_and_advances_the_watermark(
 
 @pytest.mark.django_db(transaction=True)
 def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_advance_the_watermark() -> None:
-    # Settled spend alone leaves room for another observation; only adding in-flight reservations
+    # Settled spend alone leaves room for another observation. Only adding in-flight reservations
     # pushes it over. That's a transient spike (a failed observation would release it without ever
     # settling), so the scanner must skip this tick without burning its permanent watermark advance.
     limit = 20 * _OBSERVATION_CREDITS
