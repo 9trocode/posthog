@@ -241,6 +241,14 @@ class BatchConsumerAdapter(Protocol):
         the run's terminal state."""
         ...
 
+    def is_expected_user_error(self, err: Exception) -> bool:
+        """Whether the failure is an expected upstream/customer condition rather than a bug in
+        our pipeline (e.g. a source column whose type changed and no longer fits the stored
+        type — only a reset and full re-sync resolves it). The run still fails with the error's
+        actionable message, but the engine keeps these out of error tracking. Orthogonal to
+        ``is_retryable_error``: an error can be both non-retryable and expected."""
+        ...
+
     async def after_batch_processed(
         self,
         conn: psycopg.AsyncConnection[Any],
@@ -352,6 +360,18 @@ class BatchConsumer:
         except TimeoutError:
             pass
 
+    async def _handle_poll_timeout(self, poll_start: float) -> None:
+        # error, not exception: the timeout is the designed recovery
+        # path and its traceback carries no diagnostic value.
+        logger.error(  # noqa: TRY400
+            self._event("poll_timed_out"),
+            timeout_seconds=self._config.poll_timeout_seconds,
+            consecutive_failures=self._consecutive_poll_failures + 1,
+        )
+        self._note_poll_failure("timeout", duration=time.monotonic() - poll_start)
+        await self._drop_conn("_poll_conn")
+        await self._wait_or_shutdown(self._poll_retry_delay())
+
     async def run(self) -> None:
         self._install_signal_handlers()
 
@@ -391,23 +411,26 @@ class BatchConsumer:
                     continue
 
                 poll_start = time.monotonic()
+                poll_timeout_ctx = asyncio.timeout(self._config.poll_timeout_seconds)
                 try:
                     conn = await self._ensure_poll_conn()
-                    async with asyncio.timeout(self._config.poll_timeout_seconds):
+                    async with poll_timeout_ctx:
                         batches = await self._fetch_batches(conn, available=available)
                 except TimeoutError:
-                    # error, not exception: the timeout is the designed recovery
-                    # path and its traceback carries no diagnostic value.
-                    logger.error(  # noqa: TRY400
-                        self._event("poll_timed_out"),
-                        timeout_seconds=self._config.poll_timeout_seconds,
-                        consecutive_failures=self._consecutive_poll_failures + 1,
-                    )
-                    self._note_poll_failure("timeout", duration=time.monotonic() - poll_start)
-                    await self._drop_conn("_poll_conn")
-                    await self._wait_or_shutdown(self._poll_retry_delay())
+                    await self._handle_poll_timeout(poll_start)
                     continue
                 except psycopg.OperationalError as e:
+                    if poll_timeout_ctx.expired():
+                        # asyncio.timeout() cancels the in-flight query on expiry, but
+                        # psycopg's async wait loop can catch that cancellation and
+                        # re-raise it as a generic OperationalError ("consuming input
+                        # failed: server closed the connection unexpectedly") instead
+                        # of letting a bare TimeoutError propagate. Timeout.expired()
+                        # reflects whether this context's own deadline fired regardless
+                        # of the exception type, so this is still the designed timeout
+                        # path above, not a real queue-DB outage.
+                        await self._handle_poll_timeout(poll_start)
+                        continue
                     logger.exception(self._event("poll_failed_queue_db_unreachable"))
                     capture_exception(e)
                     self._note_poll_failure("db_unreachable", duration=time.monotonic() - poll_start)
@@ -619,7 +642,12 @@ class BatchConsumer:
         return await self._ensure_poll_conn()
 
     async def _verify_ownership(self, lock_conn: psycopg.AsyncConnection[Any] | None, batch: PendingBatch) -> None:
-        """Raise OwnershipLostError if this consumer no longer holds the group lease."""
+        """Raise OwnershipLostError if this consumer no longer holds the group lease.
+
+        A pure fail-closed verify: it never extends the lease. Used post-process
+        and pre-commit, where an expired lease must stop the write rather than
+        revive it. The batch-*entry* check is ``_renew_ownership`` instead.
+        """
         if lock_conn is None:
             return
         try:
@@ -629,6 +657,38 @@ class BatchConsumer:
         except Exception as e:
             raise OwnershipLostError("lease verification query failed") from e
         if not owns:
+            raise OwnershipLostError(f"group lease lost for ({batch.team_id}, {batch.schema_id})")
+
+    async def _renew_ownership(self, lock_conn: psycopg.AsyncConnection[Any] | None, batch: PendingBatch) -> None:
+        """Renew the group lease at batch entry, doubling as the ownership check.
+
+        Without this, a group of many batches each shorter than the heartbeat's
+        first tick (grace/3) renews only once — at group dispatch — because the
+        per-batch heartbeat is cancelled before it ever fires. The lease then
+        expires at cumulative TTL mid-group and the group is abandoned
+        (OwnershipLostError) even though this pod is healthily draining it;
+        the abandoned backlog then churns between pods at ~50% duty cycle.
+        Renewing on entry keeps the lease alive for as long as we keep
+        processing. ``renew_lease`` extends a lease that is still live *and*
+        still ours, so it never resurrects one that lapsed (the recovery sweep
+        may already have re-queued the group) and never steals one another pod
+        reclaimed — both raise. Must run before the executing-status write; the
+        post-process and pre-commit checks stay pure fail-closed verifies
+        (``_verify_ownership``).
+        """
+        if lock_conn is None:
+            return
+        try:
+            renewed = await self._adapter.renew_lease(
+                lock_conn,
+                team_id=batch.team_id,
+                schema_id=batch.schema_id,
+                owner_token=self._owner_token,
+                lease_ttl_seconds=self._lease_ttl_seconds,
+            )
+        except Exception as e:
+            raise OwnershipLostError("lease renewal query failed") from e
+        if not renewed:
             raise OwnershipLostError(f"group lease lost for ({batch.team_id}, {batch.schema_id})")
 
     async def _batch_heartbeat(
@@ -745,7 +805,11 @@ class BatchConsumer:
         )
         self._inflight_started[batch.id] = time.monotonic()
         try:
-            await self._verify_ownership(lock_conn, batch)
+            # Renew-or-abandon at entry (not a pure verify): re-ups the lease on
+            # every batch so a long run of short batches can't expire it at
+            # cumulative TTL and get abandoned mid-group. The pre-commit check in
+            # _process_single_inner stays a fail-closed verify.
+            await self._renew_ownership(lock_conn, batch)
             return await self._process_single_inner(batch, attempt, team_id, schema_id, lock_conn)
         finally:
             self._inflight_started.pop(batch.id, None)
@@ -882,14 +946,25 @@ class BatchConsumer:
         if not self._adapter.is_retryable_error(err):
             # Deterministic failures do not benefit from retrying. Preserve their
             # messages, except for explicitly classified permanent apply errors.
-            logger.exception(
-                self._event("batch_failed_non_retryable"),
-                batch_id=batch.id,
-                run_uuid=batch.run_uuid,
-                attempt=attempt,
-            )
-            capture_exception(err)
             reason = f"permanent apply error: {err}" if isinstance(err, PermanentBatchApplyError) else str(err)
+            if self._adapter.is_expected_user_error(err):
+                # Expected upstream/customer condition — the run fails with an actionable
+                # message; there is nothing for us to fix, so keep it out of error tracking.
+                logger.warning(
+                    self._event("batch_failed_expected_user_error"),
+                    batch_id=batch.id,
+                    run_uuid=batch.run_uuid,
+                    attempt=attempt,
+                    error=str(err),
+                )
+            else:
+                logger.exception(
+                    self._event("batch_failed_non_retryable"),
+                    batch_id=batch.id,
+                    run_uuid=batch.run_uuid,
+                    attempt=attempt,
+                )
+                capture_exception(err)
             await self._fail_run(batch, reason=reason, conn=lock_conn)
         elif attempt >= self._config.max_attempts:
             reason = f"max retries exceeded: {err}"
