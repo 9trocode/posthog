@@ -167,6 +167,7 @@ export interface RoleLookupResponseApi {
  * * `google-analytics` - Google Analytics
  * * `google-cloud-service-account` - Google Cloud Service Account
  * * `google-cloud-storage` - Google Cloud Storage
+ * * `google-drive` - Google Drive
  * * `google-pubsub` - Google Pubsub
  * * `google-search-console` - Google Search Console
  * * `google-sheets` - Google Sheets
@@ -213,6 +214,7 @@ export const IntegrationKindEnumApi = {
     GoogleAnalytics: 'google-analytics',
     GoogleCloudServiceAccount: 'google-cloud-service-account',
     GoogleCloudStorage: 'google-cloud-storage',
+    GoogleDrive: 'google-drive',
     GooglePubsub: 'google-pubsub',
     GoogleSearchConsole: 'google-search-console',
     GoogleSheets: 'google-sheets',
@@ -450,6 +452,7 @@ export interface IntegrationAccessRequestApi {
      * * `google-analytics` - Google Analytics
      * * `google-cloud-service-account` - Google Cloud Service Account
      * * `google-cloud-storage` - Google Cloud Storage
+     * * `google-drive` - Google Drive
      * * `google-pubsub` - Google Pubsub
      * * `google-search-console` - Google Search Console
      * * `google-sheets` - Google Sheets
@@ -541,6 +544,7 @@ export type IntegrationsListParams = {
      * * `google-analytics` - Google Analytics
      * * `google-cloud-service-account` - Google Cloud Service Account
      * * `google-cloud-storage` - Google Cloud Storage
+     * * `google-drive` - Google Drive
      * * `google-pubsub` - Google Pubsub
      * * `google-search-console` - Google Search Console
      * * `google-sheets` - Google Sheets
@@ -598,6 +602,7 @@ export const IntegrationsListKind = {
     GoogleAnalytics: 'google-analytics',
     GoogleCloudServiceAccount: 'google-cloud-service-account',
     GoogleCloudStorage: 'google-cloud-storage',
+    GoogleDrive: 'google-drive',
     GooglePubsub: 'google-pubsub',
     GoogleSearchConsole: 'google-search-console',
     GoogleSheets: 'google-sheets',
