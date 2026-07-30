@@ -7,7 +7,6 @@ import requests
 from dateutil import parser as dateutil_parser
 from requests import Request, Response
 
-from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.clover.settings import (
     CLOVER_ENDPOINTS,
     CLOVER_REGION_HOSTS,
@@ -26,6 +25,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.common.res
     Endpoint,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import SourceResponse
 
 # Merchant ids are Clover's own base-32 alphanumeric identifiers. Enforced before the id is
 # interpolated into a request path so a crafted value can't traverse out of /v3/merchants/.
