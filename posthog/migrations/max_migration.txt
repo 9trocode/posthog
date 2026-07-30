@@ -1,1 +1,1 @@
-1265_add_xero_integration_kind
+1277_add_xero_integration_kind
