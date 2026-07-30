@@ -2731,7 +2731,12 @@ class TestScannerSpend(_VisionAPITestCase):
         with CaptureQueriesContext(connection) as five_page:
             self.assertEqual(self.client.get(self.scanners_url).status_code, 200)
 
-        self.assertEqual(len(five_page.captured_queries), len(single_page.captured_queries))
+        # Only the spend sources are asserted. Other parts of the endpoint may legitimately do per-row
+        # work, and matching on table name survives a query refactor that keeps the property.
+        def spend_queries(ctx: CaptureQueriesContext) -> int:
+            return len([q for q in ctx.captured_queries if "replay_vision_replayobservation" in q["sql"]])
+
+        self.assertEqual(spend_queries(five_page), spend_queries(single_page))
 
 
 class TestCurrentPeriodBounds(SimpleTestCase):

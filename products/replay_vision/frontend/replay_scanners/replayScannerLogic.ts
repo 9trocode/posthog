@@ -561,6 +561,7 @@ export interface replayScannerLogicMeta {
         availableTags: (observationStatsApi: ObservationStatsApi | null) => string[]
         observationStats: (observationStatsApi: ObservationStatsApi | null) => ObservationStatusStats
         sidePanelContext: (scanner: ReplayScanner, isNew: boolean) => SidePanelSceneContext | null
+        creditLimitState: (scanner: ReplayScanner, scannerEstimate: EstimateResponseApi | null) => CreditLimitState
     }
 }
 
