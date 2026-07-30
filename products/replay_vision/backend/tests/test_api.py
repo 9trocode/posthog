@@ -38,7 +38,10 @@ from products.replay_vision.backend.temporal.constants import (
     APPLY_SCANNER_WORKFLOW_NAME,
     build_apply_scanner_workflow_id,
 )
-from products.replay_vision.backend.tests.helpers import snapshot_for as _snapshot_for
+from products.replay_vision.backend.tests.helpers import (
+    seed_scanner_spend,
+    snapshot_for as _snapshot_for,
+)
 from products.signals.backend.models import SignalSourceConfig
 
 
@@ -1942,27 +1945,6 @@ class TestBulkObserveAction(_VisionAPITestCase):
         self.assertEqual(events, ["replay_vision_bulk_scan_started", "replay_vision_quota_exhausted"])
         self.assertEqual(report.call_args.args[2]["trigger"], "bulk")
 
-    def _seed_scanner_spend(self, scanner: ReplayScanner, credits: int) -> None:
-        # A receipt-less observation contributes nothing to compute_scanner_budget, which reads
-        # the ledger, so the spend must come from a real ReplayObservationUsage row.
-        observation = ReplayObservation.objects.create(
-            scanner=scanner,
-            session_id=f"seed-{uuid7()}",
-            scanner_snapshot=_snapshot_for(scanner),
-            triggered_by=ObservationTrigger.SCHEDULE,
-            status=ObservationStatus.SUCCEEDED,
-            completed_at=timezone.now(),
-        )
-        ReplayObservationUsage.objects.create(
-            observation_id=observation.id,
-            organization_id=self.team.organization_id,
-            team_id=self.team.id,
-            scanner_id=scanner.id,
-            observation_created_at=observation.created_at,
-            model=scanner.model,
-            credits=credits,
-        )
-
     def test_bulk_observe_reports_the_scanner_limit_as_the_skip_reason(
         self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
     ) -> None:
@@ -1971,7 +1953,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_sync_connect.return_value = MagicMock()
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
-        self._seed_scanner_spend(self.scanner, cost)
+        seed_scanner_spend(self.scanner, cost)
         ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost)
 
         resp = self.client.post(
@@ -2003,7 +1985,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_sync_connect.return_value = MagicMock()
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
-        self._seed_scanner_spend(self.scanner, cost)
+        seed_scanner_spend(self.scanner, cost)
         ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost * scanner_limit_multiplier)
 
         with patch("products.replay_vision.backend.quota.MONTHLY_CREDIT_QUOTA", cost * org_quota_multiplier):
@@ -2022,7 +2004,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_sync_connect.return_value = MagicMock()
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
-        self._seed_scanner_spend(self.scanner, cost)
+        seed_scanner_spend(self.scanner, cost)
         ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost)
 
         with patch("products.replay_vision.backend.api.scanners.report_user_action") as report:
