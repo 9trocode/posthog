@@ -4449,6 +4449,7 @@ export const IntegrationKindApi = {
     GoogleAnalytics: 'google-analytics',
     GoogleSearchConsole: 'google-search-console',
     GoogleSheets: 'google-sheets',
+    DisplayVideo360: 'display-video-360',
     LinkedinAds: 'linkedin-ads',
     Snapchat: 'snapchat',
     Stripe: 'stripe',
