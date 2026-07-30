@@ -1153,7 +1153,11 @@ def _data_quality_health(context: "HogQLContext", allowed: Optional[frozenset[st
     team_id = context.team_id
     if team_id is None or not _can_read_data_quality(context):
         return []
-    from products.data_quality.backend.facade.api import CheckStatusRow, roll_up_health  # noqa: PLC0415
+    from products.data_quality.backend.facade.api import (  # noqa: PLC0415
+        CheckStatusRow,
+        check_reads_denied_subject,
+        roll_up_health,
+    )
     from products.data_quality.backend.facade.models import DataQualityCheck  # noqa: PLC0415
 
     try:
@@ -1163,7 +1167,12 @@ def _data_quality_health(context: "HogQLContext", allowed: Optional[frozenset[st
             checks_qs = checks_qs.filter(subject_name__in=allowed)
         by_subject: dict[tuple[str, str], list[Any]] = defaultdict(list)
         for check in checks_qs:
+            # Hide checks whose declared subject the caller is denied, and checks on an allowed subject
+            # that read a denied one (relationships target, custom_sql table) -- the rollup counts are a
+            # pass/fail oracle over those rows either way. Same gate the REST health endpoint applies.
             if _references_denied_table([check.subject_name], denied):
+                continue
+            if check_reads_denied_subject(team_id, check.check_type, check.config, denied):
                 continue
             by_subject[(check.subject_type, str(check.subject_uuid))].append(check)
 

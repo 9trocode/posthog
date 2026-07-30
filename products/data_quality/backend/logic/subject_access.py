@@ -57,6 +57,16 @@ def check_type_reads_beyond_subject(check_type: str) -> bool:
     return check_type in _REFERENCING_CHECK_TYPES
 
 
+def check_reads_denied_subject(team_id: int, check_type: str, config: dict[str, Any], denied: set[str]) -> bool:
+    """Whether a check reads any subject *besides its declared one* that the caller is denied.
+
+    The single test the health rollup and suite-summary guards share, so the REST endpoint and the
+    ``information_schema`` tables stay in lock-step about which referencing checks a member may see."""
+    if not denied:
+        return False
+    return any(is_subject_denied(name, denied) for name in referenced_subject_names(team_id, check_type, config))
+
+
 def referenced_subject_names(team_id: int, check_type: str, config: dict[str, Any]) -> list[str]:
     """Every warehouse name a check reads *besides* its declared subject.
 

@@ -170,6 +170,26 @@ class TestInformationSchemaDataQuality(ClickhouseTestMixin, APIBaseTest):
         assert ("orders",) not in rows
         assert ("customers",) in rows
 
+    def test_health_hides_a_subject_whose_only_check_reads_a_denied_reference(self) -> None:
+        # A custom_sql check on the allowed "customers" that reads the denied "orders" is a pass/fail
+        # oracle over orders, so its rollup must not surface -- matching the REST health endpoint.
+        check = self._check(
+            subject_name="customers",
+            subject_uuid=uuid4(),
+            check_type=CheckType.CUSTOM_SQL,
+            column_name="",
+            config={"query": "SELECT 1 FROM orders"},
+            last_status=CheckRunStatus.FAILED,
+        )
+        self._run_for(check)
+
+        rows = self._query(
+            "SELECT subject_name FROM system.information_schema.data_quality_health",
+            context=self._context(denied_tables={"orders"}),
+        )
+
+        assert ("customers",) not in rows
+
     def test_the_tables_are_absent_when_the_catalog_flag_is_off(self) -> None:
         with patch("products.data_quality.backend.facade.flags.is_data_quality_checks_enabled", return_value=False):
             listing = self._query(

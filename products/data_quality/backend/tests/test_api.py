@@ -599,6 +599,68 @@ class TestDataQualityCheckAPI(APIBaseTest):
         assert str(suite.id) not in {row["id"] for row in listed.json()["results"]}
         assert self.client.get(f"{base}/{suite.id}/").status_code == status.HTTP_404_NOT_FOUND
 
+    def test_single_subject_suite_stays_hidden_after_its_referencing_check_is_soft_deleted(self) -> None:
+        # The referencing check's past run already moved the suite's aggregate counts, so soft-deleting
+        # it must not reopen the leak -- the guard sees soft-deleted checks too.
+        allowed = DataWarehouseSavedQuery.objects.create(
+            team=self.team, name="customers", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
+        )
+        check = DataQualityCheck.objects.for_team(self.team.id).create(
+            team=self.team,
+            subject_type=SubjectType.VIEW,
+            subject_uuid=allowed.id,
+            subject_name="customers",
+            check_type=CheckType.CUSTOM_SQL,
+            config={"query": "SELECT 1 FROM orders"},
+            fingerprint=uuid4().hex,
+        )
+        suite = DataQualitySuiteRun.objects.for_team(self.team.id).create(
+            team=self.team, trigger="manual", subject_type=SubjectType.VIEW, subject_uuid=allowed.id
+        )
+        DataQualityCheck.objects.for_team(self.team.id).filter(pk=check.pk).update(deleted=True)
+        self._deny_the_view()
+
+        base = f"/api/projects/{self.team.id}/data_quality/check_suite_runs"
+        listed = self.client.get(f"{base}/")
+
+        assert str(suite.id) not in {row["id"] for row in listed.json()["results"]}
+        assert self.client.get(f"{base}/{suite.id}/").status_code == status.HTTP_404_NOT_FOUND
+
+    @parameterized.expand(
+        [
+            ("custom_sql", CheckType.CUSTOM_SQL, "", {"query": "SELECT 1 FROM orders"}),
+            ("relationships", CheckType.RELATIONSHIPS, "customer_id", None),
+        ]
+    )
+    def test_health_excludes_checks_that_read_a_denied_referenced_subject(self, _name, check_type, column_name, config):
+        # Health for the allowed "customers" must not reflect a check that reads the denied "orders":
+        # its last_status is a pass/fail oracle over orders, the same gate the suite paths apply.
+        allowed = DataWarehouseSavedQuery.objects.create(
+            team=self.team, name="customers", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
+        )
+        if config is None:
+            config = {"to_subject_type": SubjectType.VIEW, "to_subject_uuid": str(self.view.id), "to_column": "id"}
+        DataQualityCheck.objects.for_team(self.team.id).create(
+            team=self.team,
+            subject_type=SubjectType.VIEW,
+            subject_uuid=allowed.id,
+            subject_name="customers",
+            check_type=check_type,
+            column_name=column_name,
+            config=config,
+            last_status=CheckRunStatus.FAILED,
+            fingerprint=uuid4().hex,
+        )
+        self._deny_the_view()
+
+        response = self.client.get(f"{self.url}/health/?subject_type={SubjectType.VIEW}&subject_uuid={allowed.id}")
+
+        body = response.json()
+        assert response.status_code == status.HTTP_200_OK
+        assert body["checks_total"] == 0
+        assert body["checks_failing"] == 0
+        assert body["health"] == "unknown"
+
     @parameterized.expand(
         [
             ("create", lambda self, check: self.client.post(f"{self.url}/", self._payload(column_name="total"))),

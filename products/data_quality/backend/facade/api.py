@@ -24,6 +24,7 @@ from ..logic.registry import UnknownCheckTypeError, all_specs, get_spec
 from ..logic.serialization import compute_fingerprint, from_config_entry, to_config_entry
 from ..logic.spec import CheckConfig, CheckTypeSpec
 from ..logic.subject_access import (
+    check_reads_denied_subject,
     check_type_reads_beyond_subject,
     denied_subject_names,
     is_subject_denied,
@@ -47,6 +48,7 @@ __all__ = [
     "SubjectUnresolvableError",
     "UnknownCheckTypeError",
     "all_specs",
+    "check_reads_denied_subject",
     "check_type_reads_beyond_subject",
     "checks_for_subject",
     "compile_check",

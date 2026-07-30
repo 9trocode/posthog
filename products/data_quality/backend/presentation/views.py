@@ -268,15 +268,32 @@ class DataQualityCheckViewSet(_DataQualityGateMixin, TeamAndOrgViewSetMixin, vie
         self._require_subject_access(subject_type, subject_uuid)
 
         checks = api.checks_for_subject(self.team_id, subject_type, subject_uuid).filter(enabled=True)
-        failing = checks.filter(last_status=CheckRunStatus.FAILED)
+        if denied := self._denied_subject_names():
+            # The declared subject is allowed, but a relationships/custom_sql check on it reads a
+            # further subject the member is denied. Its pass/fail status is then an oracle over that
+            # denied table, so drop it from the rollup -- the same gate the suite-report paths apply.
+            visible = [
+                check
+                for check in checks
+                if not api.check_reads_denied_subject(self.team_id, check.check_type, check.config, denied)
+            ]
+            health = api.roll_up_health(
+                api.CheckStatusRow(severity=check.severity, last_status=check.last_status) for check in visible
+            )
+            checks_total = len(visible)
+            checks_failing = sum(1 for check in visible if check.last_status == CheckRunStatus.FAILED)
+        else:
+            health = api.subject_health(self.team_id, subject_type, subject_uuid)
+            checks_total = checks.count()
+            checks_failing = checks.filter(last_status=CheckRunStatus.FAILED).count()
         return Response(
             SubjectHealthSerializer(
                 {
                     "subject_type": subject_type,
                     "subject_uuid": subject_uuid,
-                    "health": api.subject_health(self.team_id, subject_type, subject_uuid),
-                    "checks_total": checks.count(),
-                    "checks_failing": failing.count(),
+                    "health": health,
+                    "checks_total": checks_total,
+                    "checks_failing": checks_failing,
                 }
             ).data
         )
@@ -381,13 +398,11 @@ class DataQualitySuiteRunViewSet(
         return blocked
 
     def _subject_has_denied_reference(self, subject_type: str, subject_uuid: str, denied: set[str]) -> bool:
-        # All non-deleted checks, not just enabled ones: a now-disabled check may still have moved the
-        # counts of an earlier suite run, and its config still names the denied subject it read.
-        for check in api.checks_for_subject(self.team_id, subject_type, subject_uuid):
-            if any(
-                api.is_subject_denied(name, denied)
-                for name in api.referenced_subject_names(self.team_id, check.check_type, check.config)
-            ):
+        # Every check, including soft-deleted and disabled ones: a check that no longer runs may still
+        # have moved the counts of an earlier suite run, and its config still names the denied subject
+        # it read. Skipping soft-deleted checks would reopen the leak once the definition is removed.
+        for check in api.checks_for_subject(self.team_id, subject_type, subject_uuid, include_deleted=True):
+            if api.check_reads_denied_subject(self.team_id, check.check_type, check.config, denied):
                 return True
         return False
 
