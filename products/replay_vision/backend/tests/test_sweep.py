@@ -71,11 +71,8 @@ def _make_scanner(**overrides) -> ReplayScanner:
 
 
 def _seed_scanner_spend(scanner: ReplayScanner, *, observations: int) -> None:
-    """Settle `observations` worth of credits against `scanner` for the current billing period.
-
-    The immutable receipt ledger is what the budget reads; the succeeded observation rows mirror
-    production and stay out of the in-flight reservation, so nothing is counted twice.
-    """
+    # Succeeded rows plus their receipts settle credits without touching the in-flight reservation,
+    # so nothing is counted twice.
     snapshot = snapshot_for(scanner)
     rows = [
         ReplayObservation(
@@ -101,6 +98,22 @@ def _seed_scanner_spend(scanner: ReplayScanner, *, observations: int) -> None:
             credits=_OBSERVATION_CREDITS,
         )
         for row in rows
+    )
+
+
+def _seed_in_flight_observations(scanner: ReplayScanner, *, count: int) -> None:
+    # Pending rows reserve credits live from their snapshot model; they settle no receipt until success.
+    snapshot = snapshot_for(scanner)
+    ReplayObservation.objects.bulk_create(
+        ReplayObservation(
+            scanner=scanner,
+            team=scanner.team,
+            session_id=f"in-flight-{i}",
+            status=ObservationStatus.PENDING,
+            scanner_snapshot=snapshot,
+            triggered_by=ObservationTrigger.SCHEDULE,
+        )
+        for i in range(count)
     )
 
 
@@ -327,6 +340,26 @@ def test_check_scanner_budget_activity_caps_and_advances_the_watermark(
     else:
         assert scanner.last_swept_at == stale
         assert scanner.last_seen_session_id == "sess-old"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_advance_the_watermark() -> None:
+    # Settled spend alone leaves room for another observation; only adding in-flight reservations
+    # pushes it over. That's a transient spike (a failed observation would release it without ever
+    # settling), so the scanner must skip this tick without burning its permanent watermark advance.
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(monthly_credit_limit=limit)
+    stale = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+    ReplayScanner.objects.filter(pk=scanner.pk).update(last_swept_at=stale, last_seen_session_id="sess-old")
+    _seed_scanner_spend(scanner, observations=10)
+    _seed_in_flight_observations(scanner, count=10)
+
+    output = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    scanner.refresh_from_db()
+    assert output.capped is True
+    assert scanner.last_swept_at == stale
+    assert scanner.last_seen_session_id == "sess-old"
 
 
 # SweepScannerWorkflow (mocked-Temporal)

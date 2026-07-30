@@ -1932,18 +1932,30 @@ class TestBulkObserveAction(_VisionAPITestCase):
         self.assertEqual(body["started"], 0)
         self.assertEqual({r["scan_outcome"] for r in body["results"]}, {"skipped_scanner_limit"})
 
+    @parameterized.expand(
+        [
+            # Tied limits: the scanner limit names itself, since it's the one the user can raise.
+            ("tied", 1, 1, "skipped_scanner_limit"),
+            # Org limit strictly tighter than the scanner's own: the org quota is the binding reason.
+            ("org_strictly_tighter", 2, 1, "skipped_quota"),
+        ]
+    )
     def test_bulk_observe_scanner_limit_tie_with_org_limit_wins_the_label(
-        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+        self,
+        mock_sync_connect: MagicMock,
+        mock_async_to_sync: MagicMock,
+        _name: str,
+        scanner_limit_multiplier: int,
+        org_quota_multiplier: int,
+        expected_outcome: str,
     ) -> None:
-        # When the scanner and org limits admit exactly the same number of scans, the scanner limit
-        # must name itself: it's the one the user can raise themselves.
         mock_sync_connect.return_value = MagicMock()
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
         self._seed_scanner_spend(self.scanner, cost)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost * scanner_limit_multiplier)
 
-        with patch("products.replay_vision.backend.quota.MONTHLY_CREDIT_QUOTA", cost):
+        with patch("products.replay_vision.backend.quota.MONTHLY_CREDIT_QUOTA", cost * org_quota_multiplier):
             resp = self.client.post(
                 self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1", "s-2"]}, format="json"
             )
@@ -1951,7 +1963,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         self.assertEqual(resp.status_code, 202, resp.json())
         body = resp.json()
         self.assertEqual(body["started"], 0)
-        self.assertEqual({r["scan_outcome"] for r in body["results"]}, {"skipped_scanner_limit"})
+        self.assertEqual({r["scan_outcome"] for r in body["results"]}, {expected_outcome})
 
     def test_bulk_observe_scanner_limit_does_not_report_org_quota_exhaustion(
         self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock

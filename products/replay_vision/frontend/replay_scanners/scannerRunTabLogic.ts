@@ -221,7 +221,10 @@ export const scannerRunTabLogic = kea<scannerRunTabLogicType>([
                     // The backend scans what fits and reports the rest — surface the split so the user
                     // knows a partial run happened rather than assuming everything started.
                     const limited = results.filter(
-                        (r) => r.scan_outcome === 'skipped_limit' || r.scan_outcome === 'skipped_quota'
+                        (r) =>
+                            r.scan_outcome === 'skipped_limit' ||
+                            r.scan_outcome === 'skipped_quota' ||
+                            r.scan_outcome === 'skipped_scanner_limit'
                     ).length
                     const failed = results.filter((r) => r.scan_outcome === 'failed').length
                     const extras = [
@@ -235,7 +238,9 @@ export const scannerRunTabLogic = kea<scannerRunTabLogicType>([
                             `Started ${started} scan${started === 1 ? '' : 's'}${extras ? ` — ${extras}` : ''}`
                         )
                     } else if (limited > 0) {
-                        lemonToast.warning("No scans started — you've hit the in-flight or monthly credit limit.")
+                        lemonToast.warning(
+                            "No scans started. You've hit the in-flight limit, the monthly credit limit, or this scanner's own credit limit. Raise the relevant limit and try again."
+                        )
                     } else {
                         lemonToast.error('No scans started. Please try again.')
                     }

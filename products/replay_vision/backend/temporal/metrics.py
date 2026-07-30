@@ -65,7 +65,8 @@ REPLAY_VISION_CREDITS_CONSUMED = Counter(
 
 REPLAY_VISION_SWEEP_OUTCOMES = Counter(
     "replay_vision_sweep_outcomes_total",
-    "Sweep tick outcomes: throttled at an in-flight cap, no candidates, or candidates found",
+    "Sweep tick outcomes: throttled at an in-flight cap, capped by the scanner's own credit limit, "
+    "no candidates, or candidates found",
     ["outcome"],
 )
 

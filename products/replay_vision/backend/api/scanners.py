@@ -1307,8 +1307,7 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
         org_limit = in_flight_limit if snapshot.remaining is None else (snapshot.remaining // cost if cost else 0)
         scanner_limit = in_flight_limit if scanner_remaining is None else (scanner_remaining // cost if cost else 0)
         # Report whichever limit is strictly tighter, so the user knows which one to raise.
-        tightest = min(in_flight_limit, org_limit, scanner_limit)
-        if scanner_limit == tightest and scanner_limit < in_flight_limit and scanner_limit <= org_limit:
+        if scanner_limit < in_flight_limit and scanner_limit <= org_limit:
             return scanner_limit, "skipped_scanner_limit", team_in_flight, scanner_in_flight
         if org_limit < in_flight_limit:
             return org_limit, "skipped_quota", team_in_flight, scanner_in_flight
