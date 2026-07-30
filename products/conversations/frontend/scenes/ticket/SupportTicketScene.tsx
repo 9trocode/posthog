@@ -2,7 +2,7 @@ import { useActions, useValues } from 'kea'
 import { combineUrl, router } from 'kea-router'
 import { useRef } from 'react'
 
-import { IconChevronDown } from '@posthog/icons'
+import { IconChevronDown, IconCopy } from '@posthog/icons'
 import { LemonButton, LemonCard, LemonSelect, LemonTag, Link, Spinner } from '@posthog/lemon-ui'
 
 import { AccessControlAction } from 'lib/components/AccessControlAction'
@@ -12,6 +12,7 @@ import { TZLabel } from 'lib/components/TZLabel'
 import { dayjs } from 'lib/dayjs'
 import { LemonCalendarSelectInput } from 'lib/lemon-ui/LemonCalendar/LemonCalendarSelect'
 import { getAccessControlDisabledReason } from 'lib/utils/accessControlUtils'
+import { copyToClipboard } from 'lib/utils/copyToClipboard'
 import { newInternalTab } from 'lib/utils/newInternalTab'
 import { PersonDisplay } from 'scenes/persons/PersonDisplay'
 import { SceneExport } from 'scenes/sceneTypes'
@@ -26,6 +27,7 @@ import { AccessControlLevel, AccessControlResourceType, Breadcrumb } from '~/typ
 
 import { AssigneeIconDisplay, AssigneeLabelDisplay, AssigneeSelect } from '../../components/Assignee'
 import { ChannelsTag, getChannelThreadUrl } from '../../components/Channels/ChannelsTag'
+import { chatTranscriptMarkdown } from '../../components/Chat/chatTranscript'
 import { ChatView } from '../../components/Chat/ChatView'
 import { IdentityBadge } from '../../components/IdentityBadge/IdentityBadge'
 import { SlaDisplay } from '../../components/SlaDisplay'
@@ -213,6 +215,21 @@ export function SupportTicketScene({ ticketId }: { ticketId: string }): JSX.Elem
                 description=""
                 resourceType={{ type: 'conversation' }}
                 forceBackTo={ticketListBackTo(searchParams)}
+                actions={
+                    <LemonButton
+                        type="secondary"
+                        size="small"
+                        icon={<IconCopy />}
+                        tooltip="Copy the entire conversation as Markdown"
+                        data-attr="copy-chat-transcript"
+                        disabledReason={chatMessages.length === 0 ? 'No messages to copy' : undefined}
+                        onClick={() =>
+                            void copyToClipboard(chatTranscriptMarkdown(ticket, chatMessages), 'chat transcript')
+                        }
+                    >
+                        Copy chat
+                    </LemonButton>
+                }
             />
 
             <div className="flex flex-col lg:flex-row items-start lg:min-h-0 lg:flex-1">
