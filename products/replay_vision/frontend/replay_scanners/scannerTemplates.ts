@@ -145,6 +145,10 @@ export function newScanner(templateKey?: string | null): ReplayScanner {
         user_access_level: null,
         credits_this_month: 0,
         observations_this_month: 0,
+        monthly_credit_limit: null,
+        // An unsaved scanner has no spend yet, so it can't have hit a limit it doesn't have.
+        credits_used_against_limit: 0,
+        limit_reached: false,
     } as const
 
     const template = findScannerTemplate(templateKey ?? undefined)

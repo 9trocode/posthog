@@ -653,6 +653,11 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                         scanner.sampling_rate > 0 && scanner.sampling_rate <= 1
                             ? undefined
                             : 'Sampling rate must be between 0% and 100%',
+                    monthly_credit_limit:
+                        scanner.monthly_credit_limit == null ||
+                        (Number.isInteger(scanner.monthly_credit_limit) && scanner.monthly_credit_limit >= 1)
+                            ? undefined
+                            : 'Credit limit must be a whole number of at least 1',
                     scanner_config: Object.keys(configErrors).length > 0 ? configErrors : undefined,
                 }
             },
