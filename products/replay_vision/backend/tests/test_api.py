@@ -422,12 +422,12 @@ class TestReplayScannerViewSet(_VisionAPITestCase):
         scanner = self._create_scanner()
         url = f"{self.scanners_url}{scanner.id}/"
 
-        resp = self.client.patch(url, data={"monthly_credit_limit": 500}, format="json")
+        resp = self.client.patch(url, data={"credit_limit": 500}, format="json")
         self.assertEqual(resp.status_code, 200, resp.json())
         scanner.refresh_from_db()
-        self.assertEqual(scanner.monthly_credit_limit, 500)
+        self.assertEqual(scanner.credit_limit, 500)
 
-        resp = self.client.patch(url, data={"monthly_credit_limit": 0}, format="json")
+        resp = self.client.patch(url, data={"credit_limit": 0}, format="json")
         self.assertEqual(resp.status_code, 400, resp.json())
 
     def test_create_accepts_valid_query(self) -> None:
@@ -1785,7 +1785,7 @@ class TestObserveAction(_VisionAPITestCase):
     def test_observe_is_refused_when_the_scanner_limit_is_reached(
         self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
     ) -> None:
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=1)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=1)
 
         resp = self.client.post(self.observe_url(str(self.scanner.id)), data={"session_id": "sess-42"}, format="json")
 
@@ -1798,7 +1798,7 @@ class TestObserveAction(_VisionAPITestCase):
     ) -> None:
         # A self-imposed per-scanner cap must never fire the org-exhaustion event: that metric means
         # "the org ran out of credits", not "this scanner hit the limit its owner chose".
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=1)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=1)
 
         with patch("products.replay_vision.backend.api.scanners.report_user_action") as report:
             resp = self.client.post(
@@ -1936,7 +1936,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
         self._seed_scanner_spend(self.scanner, cost)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost)
 
         resp = self.client.post(
             self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1", "s-2"]}, format="json"
@@ -1968,7 +1968,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
         self._seed_scanner_spend(self.scanner, cost)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost * scanner_limit_multiplier)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost * scanner_limit_multiplier)
 
         with patch("products.replay_vision.backend.quota.MONTHLY_CREDIT_QUOTA", cost * org_quota_multiplier):
             resp = self.client.post(
@@ -1987,7 +1987,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
         self._seed_scanner_spend(self.scanner, cost)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost)
 
         with patch("products.replay_vision.backend.api.scanners.report_user_action") as report:
             resp = self.client.post(self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1"]}, format="json")
@@ -2576,18 +2576,6 @@ class TestScannerSpend(_VisionAPITestCase):
         )
         if created_at is not None:
             ReplayObservation.objects.filter(pk=observation.pk).update(created_at=created_at)
-            observation.refresh_from_db()
-        # Mirror production: credits_this_month reads the receipt ledger, not the observation row.
-        model = observation.scanner_snapshot.get("model", "")
-        ReplayObservationUsage.objects.create(
-            observation_id=observation.id,
-            organization_id=observation.team.organization_id,
-            team_id=observation.team_id,
-            scanner_id=observation.scanner_id,
-            observation_created_at=observation.created_at,
-            model=model,
-            credits=observation_credits_for_model(model),
-        )
         return observation
 
     def _credits_by_name(self, response_json: dict) -> dict[str, int]:
@@ -2628,9 +2616,29 @@ class TestScannerSpend(_VisionAPITestCase):
         self.assertEqual(displayed, sorted(displayed, reverse=True))
         self.assertEqual([row["name"] for row in rows[:2]], ["high", "low"])
 
+    def test_receipts_without_a_scanner_do_not_zero_the_displayed_credits(self) -> None:
+        # Receipts are never backfilled with a scanner_id, so the displayed column and its sort read
+        # observation rows. Pointing either at the ledger silently zeroes both for a whole period.
+        spender = self._create_scanner(name="spender")
+        observation = self._succeeded_observation(spender, "unattributed")
+        ReplayObservationUsage.objects.create(
+            observation_id=observation.id,
+            organization_id=self.team.organization_id,
+            team_id=self.team.pk,
+            scanner_id=None,
+            observation_created_at=observation.created_at,
+            model=spender.model,
+            credits=observation_credits_for_model(spender.model),
+        )
+
+        resp = self.client.get(f"{self.scanners_url}?order_by=-credits_this_month")
+        self.assertEqual(resp.status_code, 200, resp.json())
+        self.assertEqual(self._credits_by_name(resp.json())["spender"], observation_credits_for_model(spender.model))
+
     def test_limit_reached_is_reported_per_scanner(self) -> None:
         scanner = self._create_scanner()
-        ReplayScanner.objects.filter(pk=scanner.pk).update(monthly_credit_limit=10)
+        cost = observation_credits_for_model(scanner.model)
+        ReplayScanner.objects.filter(pk=scanner.pk).update(credit_limit=cost)
 
         resp = self.client.get(f"{self.scanners_url}{scanner.id}/")
         self.assertEqual(resp.status_code, 200, resp.json())
@@ -2641,7 +2649,20 @@ class TestScannerSpend(_VisionAPITestCase):
         resp = self.client.get(f"{self.scanners_url}{scanner.id}/")
         self.assertEqual(resp.status_code, 200, resp.json())
         self.assertIs(resp.json()["limit_reached"], True)
-        self.assertEqual(resp.json()["credits_used_against_limit"], observation_credits_for_model(scanner.model))
+        self.assertEqual(resp.json()["credits_used_against_limit"], cost)
+
+    def test_limit_below_one_observation_reports_reached_before_any_spend(self) -> None:
+        # `limit_reached` answers "can this scanner run again", not "has it spent its limit". A cap
+        # smaller than one observation blocks the scanner immediately, and the UI must say so.
+        scanner = self._create_scanner()
+        ReplayScanner.objects.filter(pk=scanner.pk).update(
+            credit_limit=observation_credits_for_model(scanner.model) - 1
+        )
+
+        resp = self.client.get(f"{self.scanners_url}{scanner.id}/")
+        self.assertEqual(resp.status_code, 200, resp.json())
+        self.assertIs(resp.json()["limit_reached"], True)
+        self.assertEqual(resp.json()["credits_used_against_limit"], 0)
 
     def test_list_endpoint_computes_scanner_budgets_in_a_single_query(self) -> None:
         scanners = [self._create_scanner(name=f"scanner-{i}") for i in range(5)]
@@ -2654,10 +2675,10 @@ class TestScannerSpend(_VisionAPITestCase):
 
         queries = [q["sql"] for q in ctx.captured_queries]
         # `compute_scanner_budgets`' limit lookup is a dedicated query keyed on the scanner id list,
-        # distinct from the list endpoint's own row fetch (which also selects monthly_credit_limit).
-        limit_lookup_queries = [q for q in queries if "monthly_credit_limit" in q and " IN (" in q]
+        # distinct from the list endpoint's own row fetch (which also selects credit_limit).
+        limit_lookup_queries = [q for q in queries if "credit_limit" in q and " IN (" in q]
         usage_sum_queries = [q for q in queries if "replayobservationusage" in q.lower() and "SUM" in q.upper()]
-        # One query reads every scanner's monthly_credit_limit, one sums settled usage for the page —
+        # One query reads every scanner's credit_limit, one sums settled usage for the page —
         # neither should scale with the number of scanners on the page.
         self.assertEqual(len(limit_lookup_queries), 1)
         self.assertEqual(len(usage_sum_queries), 1)
@@ -2703,8 +2724,8 @@ class TestScannerCreditLimitValidation(SimpleTestCase):
             ("negative_is_rejected", -1, False),
         ]
     )
-    def test_monthly_credit_limit_bounds(self, _name: str, limit: int | None, expected_valid: bool) -> None:
-        serializer = ReplayScannerSerializer(data={"monthly_credit_limit": limit}, partial=True)
+    def test_credit_limit_bounds(self, _name: str, limit: int | None, expected_valid: bool) -> None:
+        serializer = ReplayScannerSerializer(data={"credit_limit": limit}, partial=True)
         self.assertIs(serializer.is_valid(), expected_valid)
         if not expected_valid:
-            self.assertIn("monthly_credit_limit", serializer.errors)
+            self.assertIn("credit_limit", serializer.errors)

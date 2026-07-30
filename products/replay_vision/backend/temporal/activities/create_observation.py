@@ -91,8 +91,8 @@ def _create_observation(inputs: CreateObservationInputs) -> CreateObservationOut
         )
 
     # Skip the aggregate entirely for the uncapped common case, as check_scanner_budget_activity does.
-    scanner_budget = compute_scanner_budget(scanner) if scanner.monthly_credit_limit is not None else None
-    if scanner_budget is not None and scanner_budget.would_exceed(observation_credits_for_model(scanner.model)):
+    scanner_budget = compute_scanner_budget(scanner) if scanner.credit_limit is not None else None
+    if scanner_budget is not None and scanner_budget.blocked:
         record_quota_exhausted_skip(scanner.scanner_type, "scanner")
         activity.logger.info(
             "Skipping observation: scanner credit limit reached",

@@ -72,7 +72,7 @@ export function ReplayScannerSceneComponent(): JSX.Element {
                 name={scanner.name || 'Untitled scanner'}
                 nameSuffix={
                     scanner.limit_reached ? (
-                        <Tooltip title="This scanner stopped scanning until its monthly credit limit resets. Sessions skipped while capped are not scanned later.">
+                        <Tooltip title="This scanner stopped scanning until its credit limit resets at the start of the next billing period. Sessions skipped while capped are not scanned later.">
                             <LemonTag type="danger">Limit reached</LemonTag>
                         </Tooltip>
                     ) : undefined

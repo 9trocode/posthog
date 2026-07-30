@@ -653,13 +653,13 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                         scanner.sampling_rate > 0 && scanner.sampling_rate <= 1
                             ? undefined
                             : 'Sampling rate must be between 0% and 100%',
-                    monthly_credit_limit:
+                    credit_limit:
                         // NaN means the limit toggle is on but the field is still empty (see ScannerCreditLimit) -
                         // block the save instead of silently falling back to unlimited.
-                        Number.isNaN(scanner.monthly_credit_limit)
-                            ? 'Enter a monthly credit limit, or turn the limit off'
-                            : scanner.monthly_credit_limit == null ||
-                                (Number.isInteger(scanner.monthly_credit_limit) && scanner.monthly_credit_limit >= 1)
+                        Number.isNaN(scanner.credit_limit)
+                            ? 'Enter a credit limit, or turn the limit off'
+                            : scanner.credit_limit == null ||
+                                (Number.isInteger(scanner.credit_limit) && scanner.credit_limit >= 1)
                               ? undefined
                               : 'Credit limit must be a whole number of at least 1',
                     scanner_config: Object.keys(configErrors).length > 0 ? configErrors : undefined,

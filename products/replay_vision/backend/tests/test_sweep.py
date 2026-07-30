@@ -102,7 +102,7 @@ def _seed_scanner_spend(scanner: ReplayScanner, *, observations: int) -> None:
 
 
 def _seed_in_flight_observations(scanner: ReplayScanner, *, count: int) -> None:
-    # Pending rows reserve credits live from their snapshot model; they settle no receipt until success.
+    # Pending rows reserve credits live from their snapshot model. They settle no receipt until success.
     snapshot = snapshot_for(scanner)
     ReplayObservation.objects.bulk_create(
         ReplayObservation(
@@ -324,7 +324,7 @@ class TestAdvanceScannerWatermarkActivity:
 def test_check_scanner_budget_activity_caps_and_advances_the_watermark(
     limit: int | None, spent_observations: int, expect_capped: bool
 ) -> None:
-    scanner = _make_scanner(monthly_credit_limit=limit)
+    scanner = _make_scanner(credit_limit=limit)
     stale = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
     ReplayScanner.objects.filter(pk=scanner.pk).update(last_swept_at=stale, last_seen_session_id="sess-old")
     _seed_scanner_spend(scanner, observations=spent_observations)
@@ -344,11 +344,11 @@ def test_check_scanner_budget_activity_caps_and_advances_the_watermark(
 
 @pytest.mark.django_db(transaction=True)
 def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_advance_the_watermark() -> None:
-    # Settled spend alone leaves room for another observation; only adding in-flight reservations
+    # Settled spend alone leaves room for another observation. Only adding in-flight reservations
     # pushes it over. That's a transient spike (a failed observation would release it without ever
     # settling), so the scanner must skip this tick without burning its permanent watermark advance.
     limit = 20 * _OBSERVATION_CREDITS
-    scanner = _make_scanner(monthly_credit_limit=limit)
+    scanner = _make_scanner(credit_limit=limit)
     stale = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
     ReplayScanner.objects.filter(pk=scanner.pk).update(last_swept_at=stale, last_seen_session_id="sess-old")
     _seed_scanner_spend(scanner, observations=10)
@@ -367,7 +367,7 @@ def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_notify
     # A transient in-flight-only cap may clear itself within minutes as reservations release;
     # notifying there could tell a user their scanner stopped when it's about to resume on its own.
     limit = 20 * _OBSERVATION_CREDITS
-    scanner = _make_scanner(monthly_credit_limit=limit)
+    scanner = _make_scanner(credit_limit=limit)
     _seed_scanner_spend(scanner, observations=10)
     _seed_in_flight_observations(scanner, count=10)
 
@@ -381,7 +381,7 @@ def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_notify
 @pytest.mark.django_db(transaction=True)
 def test_check_scanner_budget_activity_notifies_once_per_period_on_settled_exhaustion() -> None:
     limit = 20 * _OBSERVATION_CREDITS
-    scanner = _make_scanner(monthly_credit_limit=limit)
+    scanner = _make_scanner(credit_limit=limit)
     _seed_scanner_spend(scanner, observations=20)
 
     with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
@@ -399,7 +399,7 @@ def test_check_scanner_budget_activity_notifies_once_per_period_on_settled_exhau
 @pytest.mark.django_db(transaction=True)
 def test_check_scanner_budget_activity_notifies_again_after_period_rolls_over() -> None:
     limit = 20 * _OBSERVATION_CREDITS
-    scanner = _make_scanner(monthly_credit_limit=limit)
+    scanner = _make_scanner(credit_limit=limit)
     _seed_scanner_spend(scanner, observations=20)
     prior_period = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
     ReplayScanner.objects.filter(pk=scanner.pk).update(limit_notified_period_start=prior_period)

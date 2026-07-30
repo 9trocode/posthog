@@ -258,7 +258,7 @@ export const scannerOverviewLogic = kea<scannerOverviewLogicType>([
         creditLimitStats: [
             (s) => [s.scanner],
             (scanner: ReplayScanner): CreditLimitStats | null => {
-                const limit = scanner.monthly_credit_limit
+                const limit = scanner.credit_limit
                 if (limit == null) {
                     return null
                 }

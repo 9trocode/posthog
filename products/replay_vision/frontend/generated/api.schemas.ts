@@ -801,11 +801,11 @@ export interface ReplayScannerApi {
      * * `comprehensive` - Comprehensive */
     sampling_mode?: SamplingModeEnumApi
     /**
-     * Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets; it stays enabled and does not scan the sessions it skipped.
+     * Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets. It stays enabled and does not scan the sessions it skipped.
      * @minimum 1
      * @nullable
      */
-    monthly_credit_limit?: number | null
+    credit_limit?: number | null
     /** LLM provider. v1 is Google-only.
      *
      * * `google` - Google */
@@ -838,9 +838,9 @@ export interface ReplayScannerApi {
     readonly credits_this_month: number
     /** Succeeded observations this scanner produced in the current billing period. */
     readonly observations_this_month: number
-    /** Credits counted against `monthly_credit_limit` for the current billing period: succeeded observations plus in-flight ones reserved from their frozen snapshot model. Deliberately not the same as `credits_this_month` (settled only) — this is what the limit gate itself measures, so it must include work still in progress rather than only what has already posted. */
+    /** Credits counted against `credit_limit` for the current billing period: settled receipts plus in-flight observations and running prompt tests, priced from their frozen snapshot model. This is what the limit gate measures, so it includes work still in progress. It is not the same as `credits_this_month`, which counts only succeeded observations. */
     readonly credits_used_against_limit: number
-    /** Whether `credits_used_against_limit` has reached `monthly_credit_limit`. Always false when no limit is set. Computed from the same in-flight-inclusive figure as `credits_used_against_limit` so a scanner with its whole budget reserved (not yet settled) still reports itself as capped. */
+    /** Whether this scanner has stopped because of its own credit limit. True when `credit_limit` is set and the budget left cannot cover one more observation, which is the same test the scanner's enforcement gates apply. Always false when no limit is set. */
     readonly limit_reached: boolean
     /** Watermark for the scanner's last scheduled fire. Mirrors Temporal schedule state for recovery. */
     readonly last_swept_at: string
@@ -905,11 +905,11 @@ export interface PatchedReplayScannerApi {
      * * `comprehensive` - Comprehensive */
     sampling_mode?: SamplingModeEnumApi
     /**
-     * Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets; it stays enabled and does not scan the sessions it skipped.
+     * Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets. It stays enabled and does not scan the sessions it skipped.
      * @minimum 1
      * @nullable
      */
-    monthly_credit_limit?: number | null
+    credit_limit?: number | null
     /** LLM provider. v1 is Google-only.
      *
      * * `google` - Google */
@@ -942,9 +942,9 @@ export interface PatchedReplayScannerApi {
     readonly credits_this_month?: number
     /** Succeeded observations this scanner produced in the current billing period. */
     readonly observations_this_month?: number
-    /** Credits counted against `monthly_credit_limit` for the current billing period: succeeded observations plus in-flight ones reserved from their frozen snapshot model. Deliberately not the same as `credits_this_month` (settled only) — this is what the limit gate itself measures, so it must include work still in progress rather than only what has already posted. */
+    /** Credits counted against `credit_limit` for the current billing period: settled receipts plus in-flight observations and running prompt tests, priced from their frozen snapshot model. This is what the limit gate measures, so it includes work still in progress. It is not the same as `credits_this_month`, which counts only succeeded observations. */
     readonly credits_used_against_limit?: number
-    /** Whether `credits_used_against_limit` has reached `monthly_credit_limit`. Always false when no limit is set. Computed from the same in-flight-inclusive figure as `credits_used_against_limit` so a scanner with its whole budget reserved (not yet settled) still reports itself as capped. */
+    /** Whether this scanner has stopped because of its own credit limit. True when `credit_limit` is set and the budget left cannot cover one more observation, which is the same test the scanner's enforcement gates apply. Always false when no limit is set. */
     readonly limit_reached?: boolean
     /** Watermark for the scanner's last scheduled fire. Mirrors Temporal schedule state for recovery. */
     readonly last_swept_at?: string

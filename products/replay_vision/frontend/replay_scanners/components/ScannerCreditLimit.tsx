@@ -19,9 +19,10 @@ const SEED_HEADROOM_MULTIPLIER = 2
 export function ScannerCreditLimit({ scannerId }: Props): JSX.Element {
     const { scannerEstimate } = useValues(replayScannerLogic({ id: scannerId }))
     const estimatedMonthly = scannerEstimate?.estimated_credits_per_month ?? null
+    const creditsPerObservation = scannerEstimate?.credits_per_observation ?? null
 
     return (
-        <LemonField name="monthly_credit_limit">
+        <LemonField name="credit_limit">
             {({ value, onChange }) => {
                 // NaN represents "toggled on, field left empty" - distinct from null (toggle off/unlimited)
                 // so an untouched field can't silently save as unlimited.
@@ -30,6 +31,10 @@ export function ScannerCreditLimit({ scannerId }: Props): JSX.Element {
                 const limitOn = currentLimit != null || isEmptyButEnabled
                 const isBelowEstimate =
                     currentLimit != null && estimatedMonthly != null && currentLimit < estimatedMonthly
+                // A cap under one scan's cost never lets a single scan through, so the scanner is
+                // stopped from the moment it is saved. Worth its own warning, not just "below estimate".
+                const cannotAffordOneScan =
+                    currentLimit != null && creditsPerObservation != null && currentLimit < creditsPerObservation
                 const toggleOn = (): void => {
                     // Seed from the real estimate when we have one; otherwise leave the field empty rather
                     // than invent a number the user has to notice and override.
@@ -43,9 +48,10 @@ export function ScannerCreditLimit({ scannerId }: Props): JSX.Element {
                     <LemonCard hoverEffect={false} className="p-3 space-y-3">
                         <div className="flex items-start justify-between gap-2">
                             <div className="space-y-1">
-                                <LemonLabel>Monthly credit limit</LemonLabel>
+                                <LemonLabel>Credit limit</LemonLabel>
                                 <div className="text-xs text-muted">
-                                    Set a monthly cap so this scanner never spends past a fixed amount.
+                                    Cap what this scanner spends in a billing period, on top of your organization's
+                                    limit.
                                 </div>
                             </div>
                             <LemonSwitch
@@ -72,17 +78,25 @@ export function ScannerCreditLimit({ scannerId }: Props): JSX.Element {
                                         />
                                     </div>
                                     <span className="text-sm text-muted">
-                                        {currentLimit != null && `≈ ${creditsToUsd(currentLimit)}/month`}
+                                        {currentLimit != null && `≈ ${creditsToUsd(currentLimit)} per period`}
                                         {currentLimit != null && estimatedMonthly != null && ' · '}
                                         {estimatedMonthly != null &&
                                             `Estimated usage: ${creditsToUsd(estimatedMonthly)}/month`}
                                     </span>
                                 </div>
-                                {isBelowEstimate && (
+                                {cannotAffordOneScan ? (
                                     <div className="text-xs text-warning">
-                                        This is below the estimated {creditsToUsd(estimatedMonthly ?? 0)}/month, so the
-                                        scanner is likely to hit its limit before the period resets.
+                                        One scan by this scanner costs {creditsPerObservation} credits, so this limit
+                                        stops it before it scans anything. Raise it to at least {creditsPerObservation}{' '}
+                                        credits.
                                     </div>
+                                ) : (
+                                    isBelowEstimate && (
+                                        <div className="text-xs text-warning">
+                                            This is below the estimated {creditsToUsd(estimatedMonthly ?? 0)}/month, so
+                                            the scanner is likely to hit its limit before the period resets.
+                                        </div>
+                                    )
                                 )}
                                 <div className="text-xs text-muted">
                                     When this scanner reaches its limit, it stops scanning until the next billing

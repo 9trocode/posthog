@@ -1,8 +1,7 @@
 from temporalio import activity
 
-from products.replay_vision.backend.billing import observation_credits_for_model
 from products.replay_vision.backend.models.replay_scanner import ReplayScanner, initial_watermark
-from products.replay_vision.backend.quota import CreditBudget, compute_scanner_budgets, current_period_bounds
+from products.replay_vision.backend.quota import compute_scanner_budget, current_period_bounds
 from products.replay_vision.backend.temporal.decorators import track_activity
 from products.replay_vision.backend.temporal.metrics import record_sweep_outcome
 from products.replay_vision.backend.temporal.sweep_types import CheckScannerBudgetInputs, CheckScannerBudgetOutput
@@ -26,7 +25,7 @@ def _notify_limit_reached(scanner: ReplayScanner) -> None:
                 # user configured, so it must not surface as a pipeline failure.
                 notification_type=NotificationType.USAGE_SPIKE,
                 priority=Priority.NORMAL,
-                title=f'"{scanner.name}" reached its monthly credit limit',
+                title=f'"{scanner.name}" reached its credit limit',
                 body=(
                     "It stopped scanning until its billing period resets. "
                     "Sessions skipped while capped are not scanned later."
@@ -62,17 +61,15 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
     """
     scanner = ReplayScanner.objects.filter(pk=inputs.scanner_id, team_id=inputs.team_id).select_related("team").first()
     if scanner is None:
-        # The reconciler removes schedules for deleted scanners; a racing tick just stops here.
+        # The reconciler removes schedules for deleted scanners. A racing tick just stops here.
         return CheckScannerBudgetOutput(capped=False)
-    if scanner.monthly_credit_limit is None:
+    if scanner.credit_limit is None:
         return CheckScannerBudgetOutput(capped=False)
-    spend = compute_scanner_budgets(scanner.team.organization_id, [scanner.id])[scanner.id]
-    cost = observation_credits_for_model(scanner.model)
-    if not spend.budget.would_exceed(cost):
+    budget = compute_scanner_budget(scanner)
+    if not budget.blocked:
         return CheckScannerBudgetOutput(capped=False)
     record_sweep_outcome("scanner_capped")
-    settled_only = CreditBudget(credit_limit=spend.budget.credit_limit, credits_used=spend.credits)
-    if not settled_only.would_exceed(cost):
+    if not budget.blocked_by_settled_spend:
         # Only the in-flight portion pushes this over: capped for now, but don't advance the
         # watermark, since those reservations may release without ever settling.
         activity.logger.info(
@@ -80,8 +77,8 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
             extra={
                 "scanner_id": str(inputs.scanner_id),
                 "team_id": inputs.team_id,
-                "credit_limit": spend.budget.credit_limit,
-                "credits_used": spend.budget.credits_used,
+                "credit_limit": budget.credit_limit,
+                "credits_used": budget.credits_used,
             },
         )
         return CheckScannerBudgetOutput(capped=True)
@@ -103,8 +100,8 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
         extra={
             "scanner_id": str(inputs.scanner_id),
             "team_id": inputs.team_id,
-            "credit_limit": spend.budget.credit_limit,
-            "credits_used": spend.budget.credits_used,
+            "credit_limit": budget.credit_limit,
+            "credits_used": budget.credits_used,
         },
     )
     # Sent after the update commits: an email or realtime push can't be un-sent, so it must never

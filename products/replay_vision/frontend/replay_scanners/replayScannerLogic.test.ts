@@ -262,18 +262,18 @@ describe('replayScannerLogic', () => {
             },
             {
                 name: 'flags a zero credit limit, which would silently stop the scanner forever',
-                setup: () => logic.actions.setScannerValues({ monthly_credit_limit: 0 }),
-                expectedErrors: { monthly_credit_limit: expect.any(String) },
+                setup: () => logic.actions.setScannerValues({ credit_limit: 0 }),
+                expectedErrors: { credit_limit: expect.any(String) },
             },
             {
                 name: 'flags a negative credit limit',
-                setup: () => logic.actions.setScannerValues({ monthly_credit_limit: -10 }),
-                expectedErrors: { monthly_credit_limit: expect.any(String) },
+                setup: () => logic.actions.setScannerValues({ credit_limit: -10 }),
+                expectedErrors: { credit_limit: expect.any(String) },
             },
             {
                 name: 'flags the limit toggled on but left empty, so it cannot silently save as unlimited',
-                setup: () => logic.actions.setScannerValues({ monthly_credit_limit: NaN }),
-                expectedErrors: { monthly_credit_limit: expect.any(String) },
+                setup: () => logic.actions.setScannerValues({ credit_limit: NaN }),
+                expectedErrors: { credit_limit: expect.any(String) },
             },
             {
                 name: 'flags scorer scale when min >= max',
@@ -377,9 +377,9 @@ describe('replayScannerLogic', () => {
         })
 
         it.each([null, 1, 500])('accepts a credit limit of %p, including the unlimited default', async (limit) => {
-            logic.actions.setScannerValues({ monthly_credit_limit: limit })
+            logic.actions.setScannerValues({ credit_limit: limit })
             await expectLogic(logic).toMatchValues({
-                scannerValidationErrors: expect.objectContaining({ monthly_credit_limit: undefined }),
+                scannerValidationErrors: expect.objectContaining({ credit_limit: undefined }),
             })
         })
     })

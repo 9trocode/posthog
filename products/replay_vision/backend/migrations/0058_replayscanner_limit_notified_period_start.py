@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("replay_vision", "0056_scanner_usage_scanner_id_index"),
+        ("replay_vision", "0057_validate_replay_scanner_credit_limit_positive"),
     ]
 
     operations = [
@@ -14,7 +14,7 @@ class Migration(migrations.Migration):
             name="limit_notified_period_start",
             field=models.DateTimeField(
                 blank=True,
-                help_text="Billing period start this scanner was last reported as having reached its credit limit; keeps the notification to one per period.",
+                help_text="Billing period start this scanner was last reported as having reached its credit limit. Keeps the notification to one per period.",
                 null=True,
             ),
         ),
