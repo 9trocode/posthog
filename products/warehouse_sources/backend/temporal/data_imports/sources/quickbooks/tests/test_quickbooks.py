@@ -6,8 +6,8 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from unittest import mock
 
-from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.quickbooks.quickbooks import (
     PAGE_SIZE,
     QUICKBOOKS_MINOR_VERSION,
