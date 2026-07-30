@@ -2826,8 +2826,10 @@ class TestScannerCreditLimitValidation(SimpleTestCase):
             ("null_is_allowed", None, True),
             ("one_is_allowed", 1, True),
             ("large_is_allowed", 1_000_000, True),
+            ("int4_max_is_allowed", 2_147_483_647, True),
             ("zero_is_rejected", 0, False),
             ("negative_is_rejected", -1, False),
+            ("over_int4_is_rejected", 2_147_483_648, False),
         ]
     )
     def test_credit_limit_bounds(self, _name: str, limit: int | None, expected_valid: bool) -> None:

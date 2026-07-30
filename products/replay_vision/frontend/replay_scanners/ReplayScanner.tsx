@@ -31,6 +31,7 @@ import { ScannerRunTab } from './components/ScannerRunTab'
 import { VisionActionsTab } from './components/VisionActionsTab'
 import { replayScannerLogic } from './replayScannerLogic'
 import { ReplayScannerTab, replayScannerSceneLogic } from './replayScannerSceneLogic'
+import { LIMIT_REACHED_TOOLTIP } from './scannerCopy'
 
 export const scene: SceneExport = {
     component: ReplayScannerSceneComponent,
@@ -72,7 +73,7 @@ export function ReplayScannerSceneComponent(): JSX.Element {
                 name={scanner.name || 'Untitled scanner'}
                 nameSuffix={
                     scanner.limit_reached ? (
-                        <Tooltip title="This scanner stopped scanning until its credit limit resets at the start of the next billing period. Sessions skipped while capped are not scanned later.">
+                        <Tooltip title={LIMIT_REACHED_TOOLTIP}>
                             <LemonTag type="danger">Limit reached</LemonTag>
                         </Tooltip>
                     ) : undefined

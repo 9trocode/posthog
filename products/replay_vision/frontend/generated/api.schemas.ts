@@ -803,6 +803,7 @@ export interface ReplayScannerApi {
     /**
      * Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets. It stays enabled and does not scan the sessions it skipped.
      * @minimum 1
+     * @maximum 2147483647
      * @nullable
      */
     credit_limit?: number | null
@@ -907,6 +908,7 @@ export interface PatchedReplayScannerApi {
     /**
      * Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets. It stays enabled and does not scan the sessions it skipped.
      * @minimum 1
+     * @maximum 2147483647
      * @nullable
      */
     credit_limit?: number | null
