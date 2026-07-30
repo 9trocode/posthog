@@ -22,7 +22,9 @@ def _notify_limit_reached(scanner: ReplayScanner) -> None:
         create_notification(
             NotificationData(
                 team_id=scanner.team_id,
-                notification_type=NotificationType.PIPELINE_FAILURE,
+                # A budget cap is a usage event, not breakage: the scanner is doing exactly what the
+                # user configured, so it must not surface as a pipeline failure.
+                notification_type=NotificationType.USAGE_SPIKE,
                 priority=Priority.NORMAL,
                 title=f'"{scanner.name}" reached its monthly credit limit',
                 body=(
