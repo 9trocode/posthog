@@ -500,9 +500,9 @@ async def test_empty_batch_skips_dispatch_and_advance() -> None:
     await _run_sweep(mocks)
 
     assert [fn for fn, _ in mocks.activity_calls] == [
+        check_scanner_budget_activity,
         evaluate_due_vision_actions_activity,
         refresh_prompt_suggestion_activity,
-        check_scanner_budget_activity,
         count_in_flight_by_team_activity,
         find_scanner_candidates_activity,
     ]
@@ -623,9 +623,9 @@ async def test_inflight_cap_gates_the_sweep(
     if expected_candidate_limit is None:
         # Throttled: vision-action eval still runs (it rides every sweep), but no find, no apply dispatch.
         assert [fn for fn, _ in mocks.activity_calls] == [
+            check_scanner_budget_activity,
             evaluate_due_vision_actions_activity,
             refresh_prompt_suggestion_activity,
-            check_scanner_budget_activity,
             count_in_flight_by_team_activity,
         ]
         assert mocks.child_calls == []
@@ -712,8 +712,9 @@ async def test_sweep_dispatches_a_child_per_due_vision_action() -> None:
 
     started = {call["id"] for call in mocks.child_calls}
     assert started == {build_process_vision_action_workflow_id(d.vision_action_id) for d in due}
-    # Dispatch happens before the session scan, so the children start even with no candidates.
-    assert evaluate_due_vision_actions_activity == mocks.activity_calls[0][0]
+    # Dispatch happens right after the budget gate, before the session scan, so the children
+    # start even with no candidates.
+    assert evaluate_due_vision_actions_activity == mocks.activity_calls[1][0]
 
 
 @pytest.mark.asyncio
