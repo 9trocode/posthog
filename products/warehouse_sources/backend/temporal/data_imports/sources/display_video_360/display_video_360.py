@@ -21,13 +21,13 @@ from structlog.types import FilteringBoundLogger
 
 from posthog.models.integration import Integration
 
-from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.http import (
     make_tracked_adapter,
     make_tracked_session,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.http.url_utils import scrub_url
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.display_video_360.settings import (
     BID_MANAGER_API_VERSION,
     DISPLAY_VIDEO_360_ENDPOINTS,
