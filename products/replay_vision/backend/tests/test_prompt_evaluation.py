@@ -650,7 +650,7 @@ class TestPromptEvaluationApi(_VisionAPITestCase):
         session_credits = observation_credits_for_model(self.scanner.model)
         # Spend leaves exactly one re-run's worth of credits, but the default plans three.
         self._seed_scanner_spend(2 * session_credits)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=3 * session_credits)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=3 * session_credits)
         connect_patch, client = self._mock_temporal()
         with connect_patch:
             resp = self.client.post(self._url(suggestion.id))
@@ -665,7 +665,7 @@ class TestPromptEvaluationApi(_VisionAPITestCase):
         # message even though the scanner limit would also refuse this test.
         self._create_rated()
         suggestion = self._create_pending_suggestion()
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=1)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=1)
         quota = MagicMock(remaining=0, credit_limit=100, period_end=timezone.now())
         connect_patch, client = self._mock_temporal()
         with (

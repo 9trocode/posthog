@@ -524,7 +524,7 @@ class TestCreateObservationActivity:
     def test_scanner_credit_limit_gates_observation_creation(
         self, limit: int | None, already_spent_credits: int, expect_created: bool
     ) -> None:
-        scanner = _make_scanner(monthly_credit_limit=limit)
+        scanner = _make_scanner(credit_limit=limit)
         self._seed_spent_credits(scanner, already_spent_credits)
 
         result = create_observation_activity(
