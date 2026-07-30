@@ -53,6 +53,7 @@ from products.replay_vision.backend.temporal.constants import (
     build_evaluate_prompt_suggestion_workflow_id,
 )
 from products.replay_vision.backend.temporal.evaluation_types import EvaluatePromptSuggestionInputs
+from products.replay_vision.backend.temporal.metrics import record_scanner_limit_reached
 
 logger = structlog.get_logger(__name__)
 
@@ -432,15 +433,19 @@ class ReplayScannerPromptSuggestionViewSet(
                 )
             )
         # A test re-runs the scanner, so it draws from the scanner's own limit too, on top of the org's.
-        scanner_budget = compute_scanner_budget(scanner)
-        if scanner_budget.would_exceed(planned_credits):
-            raise QuotaLimitExceeded(
-                detail=(
-                    f"This test would use {planned_credits:,} credits but this scanner has "
-                    f"{scanner_budget.remaining or 0:,} left of its {scanner_budget.credit_limit or 0:,} credit "
-                    f"limit for this period. Lower the test session count or raise the scanner's limit."
+        # Skip the aggregate entirely for the uncapped common case, as check_scanner_quota does.
+        if scanner.credit_limit is not None:
+            scanner_budget = compute_scanner_budget(scanner)
+            if scanner_budget.would_exceed(planned_credits):
+                record_scanner_limit_reached("evaluation")
+                raise QuotaLimitExceeded(
+                    detail=(
+                        f"This test would use {planned_credits:,} credits but this scanner has "
+                        f"{scanner_budget.remaining or 0:,} left of its {scanner_budget.credit_limit or 0:,} credit "
+                        f"limit for this period. Lower the test session count or raise the scanner's limit."
+                    ),
+                    code="scanner_credit_limit_exceeded",
                 )
-            )
 
         # Stamp running first so the UI never sees a gap and the planned spend counts against quota
         # right away. The select activity replaces this stub with the real total and fingerprint.

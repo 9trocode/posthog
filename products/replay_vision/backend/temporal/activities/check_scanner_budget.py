@@ -32,10 +32,11 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
     budget = compute_scanner_budget(scanner)
     if not budget.blocked:
         return CheckScannerBudgetOutput(capped=False)
-    record_sweep_outcome("scanner_capped")
     if not budget.blocked_by_settled_spend:
         # Only the in-flight portion pushes this over: capped for now, but don't advance the
-        # watermark, since those reservations may release without ever settling.
+        # watermark, since those reservations may release without ever settling. Counted apart from
+        # the settled outcome because this split decides whether a window is skipped for good.
+        record_sweep_outcome("scanner_capped_in_flight")
         activity.logger.info(
             "Sweep skipped: scanner credit limit reached by in-flight reservations only",
             extra={
@@ -46,6 +47,7 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
             },
         )
         return CheckScannerBudgetOutput(capped=True)
+    record_sweep_outcome("scanner_capped_settled")
     # `.update` bypasses the model's version-tracking save(), matching how the watermark is advanced.
     ReplayScanner.objects.filter(pk=scanner.pk).update(
         last_swept_at=initial_watermark(),
