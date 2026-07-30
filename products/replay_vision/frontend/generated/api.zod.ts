@@ -443,6 +443,13 @@ export const VisionScannersCreateBody = /* @__PURE__ */ zod
             .describe(
                 'Quality pre-filter applied before random sampling. focused = top sessions only, balanced = drops the lowest-quality, comprehensive = no filter (default).\n\n\* `focused` - Focused\n\* `balanced` - Balanced\n\* `comprehensive` - Comprehensive'
             ),
+        monthly_credit_limit: zod
+            .number()
+            .min(1)
+            .nullish()
+            .describe(
+                "Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets; it stays enabled and does not scan the sessions it skipped."
+            ),
         provider: zod
             .enum(['google'])
             .describe('\* `google` - Google')
@@ -528,6 +535,13 @@ export const VisionScannersPartialUpdateBody = /* @__PURE__ */ zod
             .optional()
             .describe(
                 'Quality pre-filter applied before random sampling. focused = top sessions only, balanced = drops the lowest-quality, comprehensive = no filter (default).\n\n\* `focused` - Focused\n\* `balanced` - Balanced\n\* `comprehensive` - Comprehensive'
+            ),
+        monthly_credit_limit: zod
+            .number()
+            .min(1)
+            .nullish()
+            .describe(
+                "Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets; it stays enabled and does not scan the sessions it skipped."
             ),
         provider: zod
             .enum(['google'])

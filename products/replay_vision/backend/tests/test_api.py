@@ -4,7 +4,9 @@ from typing import Any
 from posthog.test.base import APIBaseTest, ClickhouseTestMixin
 from unittest.mock import MagicMock, patch
 
+from django.db import connection
 from django.test import SimpleTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from parameterized import parameterized
@@ -2625,6 +2627,40 @@ class TestScannerSpend(_VisionAPITestCase):
         displayed = [row["credits_this_month"] for row in rows]
         self.assertEqual(displayed, sorted(displayed, reverse=True))
         self.assertEqual([row["name"] for row in rows[:2]], ["high", "low"])
+
+    def test_limit_reached_is_reported_per_scanner(self) -> None:
+        scanner = self._create_scanner()
+        ReplayScanner.objects.filter(pk=scanner.pk).update(monthly_credit_limit=10)
+
+        resp = self.client.get(f"{self.scanners_url}{scanner.id}/")
+        self.assertEqual(resp.status_code, 200, resp.json())
+        self.assertIs(resp.json()["limit_reached"], False)
+
+        self._succeeded_observation(scanner, "over-limit", created_at=None)
+
+        resp = self.client.get(f"{self.scanners_url}{scanner.id}/")
+        self.assertEqual(resp.status_code, 200, resp.json())
+        self.assertIs(resp.json()["limit_reached"], True)
+        self.assertEqual(resp.json()["credits_used_against_limit"], observation_credits_for_model(scanner.model))
+
+    def test_list_endpoint_computes_scanner_budgets_in_a_single_query(self) -> None:
+        scanners = [self._create_scanner(name=f"scanner-{i}") for i in range(5)]
+        for scanner in scanners:
+            self._succeeded_observation(scanner, f"seed-{scanner.id}")
+
+        with CaptureQueriesContext(connection) as ctx:
+            resp = self.client.get(self.scanners_url)
+        self.assertEqual(resp.status_code, 200, resp.json())
+
+        queries = [q["sql"] for q in ctx.captured_queries]
+        # `compute_scanner_budgets`' limit lookup is a dedicated query keyed on the scanner id list,
+        # distinct from the list endpoint's own row fetch (which also selects monthly_credit_limit).
+        limit_lookup_queries = [q for q in queries if "monthly_credit_limit" in q and " IN (" in q]
+        usage_sum_queries = [q for q in queries if "replayobservationusage" in q.lower() and "SUM" in q.upper()]
+        # One query reads every scanner's monthly_credit_limit, one sums settled usage for the page —
+        # neither should scale with the number of scanners on the page.
+        self.assertEqual(len(limit_lookup_queries), 1)
+        self.assertEqual(len(usage_sum_queries), 1)
 
 
 class TestCurrentPeriodBounds(SimpleTestCase):

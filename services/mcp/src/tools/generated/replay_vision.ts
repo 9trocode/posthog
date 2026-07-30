@@ -297,6 +297,9 @@ const visionScannersCreate = (): ToolBase<typeof VisionScannersCreateSchema, Sch
         if (params.sampling_mode !== undefined) {
             body['sampling_mode'] = params.sampling_mode
         }
+        if (params.monthly_credit_limit !== undefined) {
+            body['monthly_credit_limit'] = params.monthly_credit_limit
+        }
         if (params.provider !== undefined) {
             body['provider'] = params.provider
         }
@@ -672,6 +675,9 @@ const visionScannersUpdate = (): ToolBase<typeof VisionScannersUpdateSchema, Sch
         }
         if (params.sampling_mode !== undefined) {
             body['sampling_mode'] = params.sampling_mode
+        }
+        if (params.monthly_credit_limit !== undefined) {
+            body['monthly_credit_limit'] = params.monthly_credit_limit
         }
         if (params.provider !== undefined) {
             body['provider'] = params.provider

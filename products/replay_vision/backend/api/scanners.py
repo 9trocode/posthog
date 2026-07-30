@@ -321,6 +321,21 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
     observations_this_month = serializers.SerializerMethodField(
         help_text="Succeeded observations this scanner produced in the current billing period.",
     )
+    credits_used_against_limit = serializers.SerializerMethodField(
+        help_text=(
+            "Credits counted against `monthly_credit_limit` for the current billing period: succeeded "
+            "observations plus in-flight ones reserved from their frozen snapshot model. Deliberately not "
+            "the same as `credits_this_month` (settled only) — this is what the limit gate itself measures, "
+            "so it must include work still in progress rather than only what has already posted."
+        ),
+    )
+    limit_reached = serializers.SerializerMethodField(
+        help_text=(
+            "Whether `credits_used_against_limit` has reached `monthly_credit_limit`. Always false when no "
+            "limit is set. Computed from the same in-flight-inclusive figure as `credits_used_against_limit` "
+            "so a scanner with its whole budget reserved (not yet settled) still reports itself as capped."
+        ),
+    )
     last_swept_at = serializers.DateTimeField(
         read_only=True,
         help_text="Watermark for the scanner's last scheduled fire. Mirrors Temporal schedule state for recovery.",
@@ -370,6 +385,8 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
             "estimated_monthly_credits",
             "credits_this_month",
             "observations_this_month",
+            "credits_used_against_limit",
+            "limit_reached",
             "last_swept_at",
             "created_at",
             "created_by",
@@ -385,6 +402,8 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
             "estimated_monthly_credits",
             "credits_this_month",
             "observations_this_month",
+            "credits_used_against_limit",
+            "limit_reached",
             "last_swept_at",
             "created_at",
             "created_by",
@@ -423,6 +442,14 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
     @extend_schema_field(serializers.IntegerField())
     def get_observations_this_month(self, scanner: ReplayScanner) -> int:
         return self._scanner_spend(scanner).observations
+
+    @extend_schema_field(serializers.IntegerField())
+    def get_credits_used_against_limit(self, scanner: ReplayScanner) -> int:
+        return self._scanner_spend(scanner).budget.credits_used
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_limit_reached(self, scanner: ReplayScanner) -> bool:
+        return self._scanner_spend(scanner).budget.exhausted
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         # Surface the (team_id, name) uniqueness as a 400 instead of letting the DB raise 500.
