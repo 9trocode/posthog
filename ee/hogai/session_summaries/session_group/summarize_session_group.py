@@ -134,8 +134,9 @@ def find_sessions_timestamps_dropping_missing(
     only when no session in the batch has a recording."""
     replay_events = SessionReplayEvents()
     result = replay_events.sessions_found_with_timestamps(session_ids, team)
-    found = [sid for sid in session_ids if sid in result.session_ids]
-    missing = [sid for sid in session_ids if sid not in result.session_ids]
+    # Dedupe while preserving order: duplicate IDs would otherwise spawn duplicate summarization tasks
+    found = list(dict.fromkeys(sid for sid in session_ids if sid in result.session_ids))
+    missing = list(dict.fromkeys(sid for sid in session_ids if sid not in result.session_ids))
     if not found or result.min_timestamp is None or result.max_timestamp is None:
         msg = (
             "Session recordings not found for the following IDs (the recording may not have been captured, "
