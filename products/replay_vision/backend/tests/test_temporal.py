@@ -547,7 +547,7 @@ class TestCreateObservationActivity:
         # Two applies for different sessions race with a cap that fits exactly one observation. Without the
         # per-scanner lock both read a used=0 budget, both pass, and both reserve a PENDING row (overshoot).
         credits = observation_credits_for_model(ScannerModel.GEMINI_3_6_FLASH.value)
-        scanner = _make_scanner(monthly_credit_limit=credits)
+        scanner = _make_scanner(credit_limit=credits)
         barrier = threading.Barrier(2)
         created: dict[str, bool] = {}
 
