@@ -472,22 +472,27 @@ class TestDataQualityCheckAPI(APIBaseTest):
 
     @parameterized.expand(
         [
-            ("run", lambda self, check: self.client.post(f"{self.url}/{check.id}/run/")),
+            # run and runs resolve the check through get_object(), which hides a check reading a denied
+            # referenced subject entirely (404) -- the same way a check on a denied declared subject
+            # disappears. run_for_subject takes the subject in the request rather than the check id, so
+            # it is refused by the referenced-subject gate (403). Either way access is denied.
+            ("run", lambda self, check: self.client.post(f"{self.url}/{check.id}/run/"), status.HTTP_404_NOT_FOUND),
             (
                 "run_for_subject",
                 lambda self, check: self.client.post(
                     f"{self.url}/run_for_subject/",
                     {"subject_type": check.subject_type, "subject_uuid": str(check.subject_uuid)},
                 ),
+                status.HTTP_403_FORBIDDEN,
             ),
-            ("runs", lambda self, check: self.client.get(f"{self.url}/{check.id}/runs/")),
+            ("runs", lambda self, check: self.client.get(f"{self.url}/{check.id}/runs/"), status.HTTP_404_NOT_FOUND),
         ]
     )
-    def test_a_denied_referenced_subject_blocks_triggering_and_reading_history(self, _name, call) -> None:
+    def test_a_denied_referenced_subject_blocks_triggering_and_reading_history(self, _name, call, expected) -> None:
         # The declared subject stays allowed, so the check is visible -- but its custom_sql reads the
         # denied "orders". Triggering it (run, run_for_subject) and reading its run history (runs, which
-        # exposes counts from scheduled executions) gate on every subject it references, not just the
-        # one named in the request.
+        # exposes counts from scheduled executions) must not succeed, whether by hiding the check or by
+        # refusing the request -- both gate on every subject it references, not just the declared one.
         allowed = DataWarehouseSavedQuery.objects.create(
             team=self.team, name="customers", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
         )
@@ -502,7 +507,7 @@ class TestDataQualityCheckAPI(APIBaseTest):
         )
         self._deny_the_view()
 
-        assert call(self, check).status_code == status.HTTP_403_FORBIDDEN
+        assert call(self, check).status_code == expected
 
     @parameterized.expand(
         [
