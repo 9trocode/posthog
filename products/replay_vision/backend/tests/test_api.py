@@ -15,6 +15,7 @@ from posthog.models.utils import generate_random_token_personal, hash_key_value,
 from posthog.redis import get_client
 from posthog.session_recordings.queries.test.session_replay_sql import produce_replay_summary
 
+from products.replay_vision.backend.api.scanners import ReplayScannerSerializer
 from products.replay_vision.backend.api.trigger import WorkflowStartOutcome, start_apply_scanner_workflow
 from products.replay_vision.backend.billing import observation_credits_for_model
 from products.replay_vision.backend.digest import SCANNER_DIGEST_RRULE
@@ -414,6 +415,18 @@ class TestReplayScannerViewSet(_VisionAPITestCase):
             format="json",
         )
         self.assertEqual(resp.status_code, 200, resp.json())
+
+    def test_patching_the_credit_limit_persists_and_rejects_zero(self) -> None:
+        scanner = self._create_scanner()
+        url = f"{self.scanners_url}{scanner.id}/"
+
+        resp = self.client.patch(url, data={"monthly_credit_limit": 500}, format="json")
+        self.assertEqual(resp.status_code, 200, resp.json())
+        scanner.refresh_from_db()
+        self.assertEqual(scanner.monthly_credit_limit, 500)
+
+        resp = self.client.patch(url, data={"monthly_credit_limit": 0}, format="json")
+        self.assertEqual(resp.status_code, 400, resp.json())
 
     def test_create_accepts_valid_query(self) -> None:
         resp = self.client.post(
@@ -2642,3 +2655,20 @@ class TestCurrentPeriodBounds(SimpleTestCase):
     def test_period_selection(self, _name: str, usage: dict | None, expected: tuple[datetime, datetime]) -> None:
         organization = Organization(usage=usage) if usage is not None else None
         self.assertEqual(_current_period_bounds(organization, self.NOW), BillingPeriod(*expected))
+
+
+class TestScannerCreditLimitValidation(SimpleTestCase):
+    @parameterized.expand(
+        [
+            ("null_is_allowed", None, True),
+            ("one_is_allowed", 1, True),
+            ("large_is_allowed", 1_000_000, True),
+            ("zero_is_rejected", 0, False),
+            ("negative_is_rejected", -1, False),
+        ]
+    )
+    def test_monthly_credit_limit_bounds(self, _name: str, limit: int | None, expected_valid: bool) -> None:
+        serializer = ReplayScannerSerializer(data={"monthly_credit_limit": limit}, partial=True)
+        self.assertIs(serializer.is_valid(), expected_valid)
+        if not expected_valid:
+            self.assertIn("monthly_credit_limit", serializer.errors)

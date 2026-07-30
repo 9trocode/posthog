@@ -269,6 +269,16 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
         required=False,
         help_text="Quality pre-filter applied before random sampling. focused = top sessions only, balanced = drops the lowest-quality, comprehensive = no filter (default).",
     )
+    monthly_credit_limit = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        help_text=(
+            "Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level "
+            "cap. When reached, this scanner stops scanning until the period resets; it stays enabled and "
+            "does not scan the sessions it skipped."
+        ),
+    )
     provider = serializers.ChoiceField(
         choices=ScannerProvider.choices,
         required=False,
@@ -349,6 +359,7 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
             "query",
             "sampling_rate",
             "sampling_mode",
+            "monthly_credit_limit",
             "provider",
             "model",
             "enabled",
