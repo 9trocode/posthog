@@ -1,7 +1,124 @@
+from datetime import UTC, datetime
+from typing import Any
+
+from posthog.test.base import BaseTest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from langchain_core.runnables import RunnableConfig
+
+from posthog.temporal.session_replay.session_summary_group.types import SessionSummaryStreamUpdate
+
 from ee.hogai.session_summaries.session_group.patterns import EnrichedSessionGroupSummaryPatternsList
 from ee.hogai.tools.replay.summarize_sessions import SummarizeSessionsTool
+from ee.hogai.utils.types import AssistantState
+from ee.hogai.utils.types.base import NodePath
+
+MIN_TS = datetime(2026, 7, 29, 8, 0, 0, tzinfo=UTC)
+MAX_TS = datetime(2026, 7, 29, 9, 0, 0, tzinfo=UTC)
+REQUESTED_SESSION_IDS = [f"s-{index}" for index in range(7)]
 
 
-def test_stringify_group_summary_returns_explicit_message_for_empty_report() -> None:
-    result = SummarizeSessionsTool._stringify_group_summary(EnrichedSessionGroupSummaryPatternsList(patterns=[]))
-    assert result == "No recurring patterns or issues were found across the analyzed sessions."
+class _NoopHeartbeater:
+    async def __aenter__(self) -> "_NoopHeartbeater":
+        return self
+
+    async def __aexit__(self, *_args: Any) -> bool:
+        return False
+
+
+class TestSummarizeSessionsTool(BaseTest):
+    async def _create_tool(self) -> SummarizeSessionsTool:
+        config: RunnableConfig = RunnableConfig()
+        return await SummarizeSessionsTool.create_tool_class(
+            team=self.team,
+            user=self.user,
+            state=AssistantState(messages=[]),
+            config=config,
+            node_path=(NodePath(name="test_node", tool_call_id="test_tool_call_id", message_id="test"),),
+        )
+
+    @staticmethod
+    def _metadata(session_ids: list[str]) -> dict[str, dict]:
+        return {
+            session_id: {
+                "first_url": "",
+                "active_duration_s": 0,
+                "distinct_id": "",
+                "start_time": None,
+                "snapshot_source": "web",
+            }
+            for session_id in session_ids
+        }
+
+    async def test_group_summary_skips_the_missing_recording_and_reports_it(self) -> None:
+        found_session_ids, dropped_session_ids = REQUESTED_SESSION_IDS[:6], REQUESTED_SESSION_IDS[6:]
+        tool = await self._create_tool()
+        workflow_kwargs: dict[str, Any] = {}
+
+        async def fake_execute_summarize_session_group(**kwargs: Any):
+            workflow_kwargs.update(kwargs)
+            # The workflow persists the sessions dropped before the run, so they come back with the final result
+            yield (
+                SessionSummaryStreamUpdate.FINAL_RESULT,
+                (
+                    EnrichedSessionGroupSummaryPatternsList(patterns=[]),
+                    "summary-id",
+                    list(kwargs["pre_run_failed_sessions"]),
+                ),
+            )
+
+        with (
+            patch.object(
+                SummarizeSessionsTool, "_get_session_metadata", return_value=self._metadata(REQUESTED_SESSION_IDS)
+            ),
+            patch(
+                "ee.hogai.tools.replay.summarize_sessions.find_sessions_timestamps_dropping_missing",
+                return_value=(found_session_ids, dropped_session_ids, MIN_TS, MAX_TS),
+            ),
+            patch("ee.hogai.tools.replay.summarize_sessions.Heartbeater", _NoopHeartbeater),
+            patch(
+                "ee.hogai.tools.replay.summarize_sessions.execute_summarize_session_group",
+                fake_execute_summarize_session_group,
+            ),
+        ):
+            content, summary_id, failed_sessions = await tool._summarize_sessions(
+                session_ids=REQUESTED_SESSION_IDS, summary_title="Test", session_ids_source="explicit"
+            )
+
+        assert workflow_kwargs["session_ids"] == found_session_ids
+        assert summary_id == "summary-id"
+        assert [(fs.session_id, fs.category) for fs in failed_sessions] == [("s-6", "skipped")]
+        assert "only 6 of 7 sessions were included" in content
+
+    async def test_group_summary_falls_back_to_individual_when_too_few_recordings_are_left(self) -> None:
+        found_session_ids, dropped_session_ids = REQUESTED_SESSION_IDS[:5], REQUESTED_SESSION_IDS[5:]
+        tool = await self._create_tool()
+        mock_summarize_session = AsyncMock(return_value={})
+        mock_summarize_session_group = MagicMock()
+
+        with (
+            patch.object(
+                SummarizeSessionsTool, "_get_session_metadata", return_value=self._metadata(REQUESTED_SESSION_IDS)
+            ),
+            patch(
+                "ee.hogai.tools.replay.summarize_sessions.find_sessions_timestamps_dropping_missing",
+                return_value=(found_session_ids, dropped_session_ids, MIN_TS, MAX_TS),
+            ),
+            patch("ee.hogai.tools.replay.summarize_sessions.Heartbeater", _NoopHeartbeater),
+            patch(
+                "ee.hogai.tools.replay.summarize_sessions.execute_summarize_session_group",
+                mock_summarize_session_group,
+            ),
+            patch("ee.hogai.tools.replay.summarize_sessions.execute_summarize_session", mock_summarize_session),
+            patch("ee.hogai.tools.replay.summarize_sessions.SingleSessionSummaryStringifier") as mock_stringifier,
+        ):
+            mock_stringifier.return_value.stringify_session.return_value = "Session summary"
+            content, summary_id, failed_sessions = await tool._summarize_sessions(
+                session_ids=REQUESTED_SESSION_IDS, summary_title="Test", session_ids_source="explicit"
+            )
+
+        mock_summarize_session_group.assert_not_called()
+        assert sorted(call.kwargs["session_id"] for call in mock_summarize_session.await_args_list) == found_session_ids
+        assert summary_id is None
+        assert [(fs.session_id, fs.category) for fs in failed_sessions] == [("s-5", "skipped"), ("s-6", "skipped")]
+        assert "only 5 of 7 sessions were included" in content

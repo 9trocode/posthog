@@ -1,5 +1,6 @@
 import json
 import asyncio
+from datetime import datetime
 from textwrap import dedent
 from typing import Any, Literal, cast
 
@@ -361,30 +362,19 @@ class SummarizeSessionsTool(MaxTool):
         self,
         session_ids: list[str],
         summary_title: str | None,
+        *,
+        dropped_sessions: list[FailedSessionInfo],
+        min_timestamp: datetime,
+        max_timestamp: datetime,
     ) -> tuple[str, str, list[FailedSessionInfo]]:
         """Summarize sessions as a group. Returns (summary_str, summary_id, failed_sessions)."""
         from ee.hogai.session_summaries.utils import logging_session_ids
 
-        # A recording can drop out between validation reads (still ingesting, deleted, or a lagging
-        # replica), so report it as failed instead of erroring the whole batch
-        found_session_ids, dropped_session_ids, min_timestamp, max_timestamp = await database_sync_to_async(
-            find_sessions_timestamps_dropping_missing, thread_sensitive=False
-        )(session_ids=session_ids, team=self._team)
-        dropped_sessions = [
-            FailedSessionInfo(
-                session_id=dropped_session_id,
-                category="skipped",
-                reason="Recording not found (it may have expired or been deleted)",
-            )
-            for dropped_session_id in dropped_session_ids
-        ]
-        # Mark dropped sessions in the progress widget, as the workflow won't report on them
-        for dropped_session_id in dropped_session_ids:
-            self._dispatch_session_progress(dropped_session_id, "skipped", 0, len(session_ids))
+        total_requested = len(session_ids) + len(dropped_sessions)
         trigger_session_id = self._get_trigger_session_id()
         async with Heartbeater():
             async for update_type, data in execute_summarize_session_group(
-                session_ids=found_session_ids,
+                session_ids=session_ids,
                 user=self._user,
                 team=self._team,
                 min_timestamp=min_timestamp,
@@ -392,6 +382,8 @@ class SummarizeSessionsTool(MaxTool):
                 summary_title=summary_title,
                 extra_summary_context=None,
                 trigger_session_id=trigger_session_id,
+                # Forwarded so the saved summary reports them too, not just the chat response
+                pre_run_failed_sessions=dropped_sessions,
             ):
                 # Max "reasoning" text update message
                 if update_type == SessionSummaryStreamUpdate.UI_STATUS:
@@ -426,9 +418,9 @@ class SummarizeSessionsTool(MaxTool):
                         logger.error(msg, signals_type="session-summaries")
                         raise ValueError(msg)
                     summary_str = self._stringify_group_summary(summary)
-                    all_failed_sessions = dropped_sessions + failed_sessions
-                    note = self._format_failed_sessions_note(all_failed_sessions, total_requested=len(session_ids))
-                    return note + summary_str, session_group_summary_id, all_failed_sessions
+                    # The workflow persists the dropped sessions too, so they come back in `failed_sessions`
+                    note = self._format_failed_sessions_note(failed_sessions, total_requested=total_requested)
+                    return note + summary_str, session_group_summary_id, failed_sessions
                 else:
                     msg = f"Unexpected update type ({update_type}) in session group summarization (session_ids: {logging_session_ids(session_ids)})."  # type: ignore[unreachable]
                     logger.error(msg, signals_type="session-summaries")
@@ -466,10 +458,35 @@ class SummarizeSessionsTool(MaxTool):
         if len(session_ids) <= GROUP_SUMMARIES_MIN_SESSIONS:
             summaries_content = await self._summarize_sessions_individually(session_ids=session_ids)
             return summaries_content, None, []
+        # The group flow needs timestamps, and a recording can drop out between validation reads (still
+        # ingesting, deleted, or a lagging replica), so report it as failed instead of erroring the whole batch
+        found_session_ids, dropped_session_ids, min_timestamp, max_timestamp = await database_sync_to_async(
+            find_sessions_timestamps_dropping_missing, thread_sensitive=False
+        )(session_ids=session_ids, team=self._team)
+        dropped_sessions = [
+            FailedSessionInfo(
+                session_id=dropped_session_id,
+                category="skipped",
+                reason="Recording not found (it may have expired or been deleted)",
+            )
+            for dropped_session_id in dropped_session_ids
+        ]
+        # Report dropped sessions so the progress widget takes them off the list, as the workflow never sees them
+        total_requested = len(found_session_ids) + len(dropped_session_ids)
+        for dropped_session_id in dropped_session_ids:
+            self._dispatch_session_progress(dropped_session_id, "skipped", 0, total_requested)
+        # Too few recordings left for pattern extraction, so summarize what's left one by one instead
+        if len(found_session_ids) <= GROUP_SUMMARIES_MIN_SESSIONS:
+            summaries_content = await self._summarize_sessions_individually(session_ids=found_session_ids)
+            note = self._format_failed_sessions_note(dropped_sessions, total_requested=total_requested)
+            return note + summaries_content, None, dropped_sessions
         # For large groups, process in detail, searching for patterns
         summaries_content, session_group_summary_id, failed_sessions = await self._summarize_sessions_as_group(
-            session_ids=session_ids,
+            session_ids=found_session_ids,
             summary_title=summary_title,
+            dropped_sessions=dropped_sessions,
+            min_timestamp=min_timestamp,
+            max_timestamp=max_timestamp,
         )
         return summaries_content, session_group_summary_id, failed_sessions
 
