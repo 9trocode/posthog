@@ -78,40 +78,50 @@ def _create_observation(inputs: CreateObservationInputs) -> CreateObservationOut
                 f"User {inputs.triggered_by_user_id} is not a member of scanner {inputs.scanner_id}'s organization"
             )
 
-    if compute_quota_snapshot(scanner.team.organization_id).would_exceed(observation_credits_for_model(scanner.model)):
-        record_quota_exhausted_skip(scanner.scanner_type, "org")
-        activity.logger.info(
-            "Skipping observation: monthly quota exhausted",
-            extra={"scanner_id": str(inputs.scanner_id), "team_id": inputs.team_id, "session_id": inputs.session_id},
-        )
-        return CreateObservationOutput(
-            observation_id=None,
-            was_created=False,
-            scanner_type=scanner.scanner_type,
-        )
-
-    # Skip the aggregate entirely for the uncapped common case, as check_scanner_budget_activity does.
-    scanner_budget = compute_scanner_budget(scanner) if scanner.monthly_credit_limit is not None else None
-    if scanner_budget is not None and scanner_budget.would_exceed(observation_credits_for_model(scanner.model)):
-        record_quota_exhausted_skip(scanner.scanner_type, "scanner")
-        activity.logger.info(
-            "Skipping observation: scanner credit limit reached",
-            extra={
-                "scanner_id": str(inputs.scanner_id),
-                "team_id": inputs.team_id,
-                "session_id": inputs.session_id,
-                "credit_limit": scanner_budget.credit_limit,
-                "credits_used": scanner_budget.credits_used,
-            },
-        )
-        return CreateObservationOutput(
-            observation_id=None,
-            was_created=False,
-            scanner_type=scanner.scanner_type,
-        )
-
+    credits = observation_credits_for_model(scanner.model)
     try:
         with transaction.atomic():
+            # Lock the scanner row so admissions serialize per scanner: without it, concurrent applies for
+            # different sessions all read the same pre-insert budget, all pass, and each reserve a PENDING row,
+            # overshooting the org quota and the scanner cap. Recompute both under the lock, then reserve.
+            ReplayScanner.objects.select_for_update().filter(pk=scanner.pk).only("pk").first()
+
+            if compute_quota_snapshot(scanner.team.organization_id).would_exceed(credits):
+                record_quota_exhausted_skip(scanner.scanner_type, "org")
+                activity.logger.info(
+                    "Skipping observation: monthly quota exhausted",
+                    extra={
+                        "scanner_id": str(inputs.scanner_id),
+                        "team_id": inputs.team_id,
+                        "session_id": inputs.session_id,
+                    },
+                )
+                return CreateObservationOutput(
+                    observation_id=None,
+                    was_created=False,
+                    scanner_type=scanner.scanner_type,
+                )
+
+            # Skip the aggregate entirely for the uncapped common case, as check_scanner_budget_activity does.
+            scanner_budget = compute_scanner_budget(scanner) if scanner.monthly_credit_limit is not None else None
+            if scanner_budget is not None and scanner_budget.would_exceed(credits):
+                record_quota_exhausted_skip(scanner.scanner_type, "scanner")
+                activity.logger.info(
+                    "Skipping observation: scanner credit limit reached",
+                    extra={
+                        "scanner_id": str(inputs.scanner_id),
+                        "team_id": inputs.team_id,
+                        "session_id": inputs.session_id,
+                        "credit_limit": scanner_budget.credit_limit,
+                        "credits_used": scanner_budget.credits_used,
+                    },
+                )
+                return CreateObservationOutput(
+                    observation_id=None,
+                    was_created=False,
+                    scanner_type=scanner.scanner_type,
+                )
+
             observation = ReplayObservation.objects.create(
                 scanner=scanner,
                 team=scanner.team,
