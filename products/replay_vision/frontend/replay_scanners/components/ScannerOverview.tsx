@@ -7,6 +7,7 @@ import { BarChart } from '@posthog/quill-charts'
 import { useChartConfig, useChartTheme } from 'lib/charts/hooks'
 import { LemonProgress } from 'lib/lemon-ui/LemonProgress'
 
+import { creditsToUsd, formatCreditCount } from '../../utils/credits'
 import { replayScannerLogic } from '../replayScannerLogic'
 import { scannerOverviewLogic } from '../scannerOverviewLogic'
 import { ScannerType } from '../types'
@@ -242,6 +243,31 @@ function ClassifierOverview({ scannerId }: { scannerId: string }): JSX.Element |
     )
 }
 
+function CreditLimitOverview({ scannerId }: { scannerId: string }): JSX.Element | null {
+    const { creditLimitStats } = useValues(scannerOverviewLogic({ scannerId }))
+    if (!creditLimitStats) {
+        return null
+    }
+    const { used, limit, usedPct, limitReached } = creditLimitStats
+    return (
+        <OverviewPanel
+            title="Spend against limit"
+            subtitle={limitReached ? <LemonTag type="danger">Limit reached</LemonTag> : `${usedPct}%`}
+            fill
+        >
+            <LemonProgress percent={usedPct} strokeColor={limitReached ? 'var(--danger)' : undefined} />
+            <div className="text-sm tabular-nums">
+                {formatCreditCount(used)} of {formatCreditCount(limit)} (≈ {creditsToUsd(limit)}/month)
+            </div>
+            {limitReached && (
+                <div className="text-xs text-muted">
+                    This scanner has stopped scanning until its monthly limit resets.
+                </div>
+            )}
+        </OverviewPanel>
+    )
+}
+
 function ScorerOverview({ scannerId }: { scannerId: string }): JSX.Element {
     const { scorerSummary, scorerHistogram, hasActiveOverviewFilters, overviewStatsApiLoading } = useValues(
         scannerOverviewLogic({ scannerId })
@@ -284,6 +310,7 @@ function ScorerOverview({ scannerId }: { scannerId: string }): JSX.Element {
 
 export function ScannerOverview({ scannerId }: { scannerId: string }): JSX.Element | null {
     const { scanner } = useValues(replayScannerLogic({ id: scannerId }))
+    const { creditLimitStats } = useValues(scannerOverviewLogic({ scannerId }))
     if (!scanner) {
         return null
     }
@@ -298,7 +325,7 @@ export function ScannerOverview({ scannerId }: { scannerId: string }): JSX.Eleme
             <ScorerOverview scannerId={scannerId} />
         ) : null
     const showChart = scannerType !== 'summarizer'
-    if (!showChart && !typeOverview) {
+    if (!showChart && !typeOverview && !creditLimitStats) {
         return null
     }
 
@@ -341,6 +368,13 @@ export function ScannerOverview({ scannerId }: { scannerId: string }): JSX.Eleme
         <div className="flex flex-col gap-4">
             <ScannerOverviewFilters scannerId={scannerId} />
             {body}
+            {creditLimitStats && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="min-w-0">
+                        <CreditLimitOverview scannerId={scannerId} />
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

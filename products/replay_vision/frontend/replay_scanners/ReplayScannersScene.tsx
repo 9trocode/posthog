@@ -10,9 +10,11 @@ import {
     LemonSwitch,
     LemonTable,
     LemonTabs,
+    LemonTag,
     Link,
     Spinner,
     SpinnerOverlay,
+    Tooltip,
 } from '@posthog/lemon-ui'
 
 import { pngHoggie } from 'lib/brand/hoggies'
@@ -179,6 +181,11 @@ export function ReplayScannersScene(): JSX.Element {
                     <span className={`inline-block min-w-[4.5rem] ${scanner.enabled ? 'text-success' : 'text-muted'}`}>
                         {scanner.enabled ? 'Enabled' : 'Disabled'}
                     </span>
+                    {scanner.limit_reached && (
+                        <Tooltip title="This scanner stopped scanning until its monthly credit limit resets.">
+                            <LemonTag type="danger">Limit reached</LemonTag>
+                        </Tooltip>
+                    )}
                 </div>
             ),
             sorter: true,

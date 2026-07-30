@@ -106,4 +106,35 @@ describe('scannerOverviewLogic', () => {
         expect(logic.values.overviewVerdictFilter).toEqual([])
         expect(logic.values.hasActiveOverviewFilters).toBe(false)
     })
+
+    describe('creditLimitStats', () => {
+        it('is null when the scanner has no limit, so callers render no panel instead of "0% of 0"', async () => {
+            await expectLogic(logic).toFinishAllListeners()
+            expect(logic.values.creditLimitStats).toBeNull()
+        })
+
+        it.each([
+            { used: 200, limit: 1000, expectedPct: 20, expectedReached: false },
+            { used: 1000, limit: 1000, expectedPct: 100, expectedReached: true },
+            { used: 1200, limit: 1000, expectedPct: 100, expectedReached: true },
+        ])(
+            'derives usedPct $expectedPct and limitReached $expectedReached from used=$used, limit=$limit',
+            async ({ used, limit, expectedPct, expectedReached }) => {
+                await expectLogic(logic, () =>
+                    logic.actions.loadScannerSuccess({
+                        ...logic.values.scanner,
+                        monthly_credit_limit: limit,
+                        credits_used_against_limit: used,
+                        limit_reached: expectedReached,
+                    })
+                ).toFinishAllListeners()
+                expect(logic.values.creditLimitStats).toEqual({
+                    limit,
+                    used,
+                    usedPct: expectedPct,
+                    limitReached: expectedReached,
+                })
+            }
+        )
+    })
 })
