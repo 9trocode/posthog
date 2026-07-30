@@ -110,6 +110,7 @@ export interface logsAlertNotificationLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[],
         payload?: any
     ) => {
@@ -161,6 +162,7 @@ export interface logsAlertNotificationLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[]
         payload?: any
     } // integrationsLogic

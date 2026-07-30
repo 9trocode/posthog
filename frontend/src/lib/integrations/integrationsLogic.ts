@@ -84,6 +84,7 @@ export interface integrationsLogicValues {
             | 'tiktok-ads'
             | 'twilio'
             | 'vercel'
+            | 'xero'
         )[]
     ) => IntegrationType[]
     githubRepositories: Record<number, GitHubRepoApi[]>
@@ -159,6 +160,7 @@ export interface integrationsLogicActions {
             | 'tiktok-ads'
             | 'twilio'
             | 'vercel'
+            | 'xero'
         searchParams: any
     }
     linkExistingGithubInstallation: () => any
@@ -255,6 +257,7 @@ export interface integrationsLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[],
         payload?: any
     ) => {
@@ -306,6 +309,7 @@ export interface integrationsLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[]
         payload?: any
     }
@@ -374,6 +378,7 @@ export interface integrationsLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[],
         payload?: {
             callback: ((integration: IntegrationType) => void) | undefined
@@ -429,6 +434,7 @@ export interface integrationsLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[]
         payload?: {
             callback: ((integration: IntegrationType) => void) | undefined
@@ -477,6 +483,7 @@ export interface integrationsLogicActions {
             | 'tiktok-ads'
             | 'twilio'
             | 'vercel'
+            | 'xero'
     }
     openSetupModal: (
         integration?: IntegrationType,
@@ -535,6 +542,7 @@ export interface integrationsLogicActions {
             | 'stripe'
             | 'tiktok-ads'
             | 'twilio'
+            | 'xero'
             | 'vercel',
         payload?: {
             kind: IntegrationKind
@@ -580,6 +588,7 @@ export interface integrationsLogicActions {
             | 'tiktok-ads'
             | 'twilio'
             | 'vercel'
+            | 'xero'
         payload?: {
             kind: IntegrationKind
         }
@@ -636,6 +645,7 @@ export interface integrationsLogicMeta {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
             )[]
         ) => IntegrationType[]
         slackAvailable: (preflight: PreflightStatus | null) => boolean | undefined

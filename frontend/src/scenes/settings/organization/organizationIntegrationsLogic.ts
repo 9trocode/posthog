@@ -53,6 +53,7 @@ export interface organizationIntegrationsLogicValues {
             | 'tiktok-ads'
             | 'twilio'
             | 'vercel'
+            | 'xero'
         )[]
     ) => IntegrationType[]
     organizationIntegrations: IntegrationType[] | null
@@ -122,6 +123,7 @@ export interface organizationIntegrationsLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[],
         payload?: any
     ) => {
@@ -173,6 +175,7 @@ export interface organizationIntegrationsLogicActions {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
         }[]
         payload?: any
     }
@@ -225,6 +228,7 @@ export interface organizationIntegrationsLogicMeta {
                 | 'tiktok-ads'
                 | 'twilio'
                 | 'vercel'
+                | 'xero'
             )[]
         ) => IntegrationType[]
     }
