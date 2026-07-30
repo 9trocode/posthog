@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -126,12 +127,19 @@ def partition_sessions_by_recording_existence(session_ids: list[str], team: Team
     return found, missing
 
 
-def find_sessions_timestamps_dropping_missing(
-    session_ids: list[str], team: Team
-) -> tuple[list[str], list[str], datetime, datetime]:
+@dataclass(frozen=True)
+class FoundSessionsWithTimestamps:
+    """Result of the lenient session lookup: the recordings we kept, the ones we dropped, and the batch timestamps."""
+
+    found_session_ids: list[str]
+    missing_session_ids: list[str]
+    min_timestamp: datetime
+    max_timestamp: datetime
+
+
+def find_sessions_timestamps_dropping_missing(session_ids: list[str], team: Team) -> FoundSessionsWithTimestamps:
     """Lenient variant of ``find_sessions_timestamps``: drops session IDs without a replay row instead of
-    failing the whole batch. Returns (found, missing, min_timestamp, max_timestamp); raises ValidationError
-    only when no session in the batch has a recording."""
+    failing the whole batch. Raises ValidationError only when no session in the batch has a recording."""
     replay_events = SessionReplayEvents()
     result = replay_events.sessions_found_with_timestamps(session_ids, team)
     # Dedupe while preserving order: duplicate IDs would otherwise spawn duplicate summarization tasks
@@ -158,7 +166,12 @@ def find_sessions_timestamps_dropping_missing(
             team_id=team.id,
             signals_type="session-summaries",
         )
-    return found, missing, result.min_timestamp, result.max_timestamp
+    return FoundSessionsWithTimestamps(
+        found_session_ids=found,
+        missing_session_ids=missing,
+        min_timestamp=result.min_timestamp,
+        max_timestamp=result.max_timestamp,
+    )
 
 
 def find_sessions_timestamps(session_ids: list[str], team: Team) -> tuple[datetime, datetime]:

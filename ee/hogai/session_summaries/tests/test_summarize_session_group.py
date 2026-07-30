@@ -31,13 +31,11 @@ def test_find_sessions_timestamps_dropping_missing(
 ) -> None:
     query_result = SessionsWithTimestamps(session_ids=found_in_db, min_timestamp=MIN_TS, max_timestamp=MAX_TS)
     with patch.object(SessionReplayEvents, "sessions_found_with_timestamps", return_value=query_result):
-        found, missing, min_timestamp, max_timestamp = find_sessions_timestamps_dropping_missing(
-            session_ids=requested, team=MagicMock(id=1)
-        )
-    assert found == expected_found
-    assert missing == expected_missing
-    assert min_timestamp == MIN_TS
-    assert max_timestamp == MAX_TS
+        sessions = find_sessions_timestamps_dropping_missing(session_ids=requested, team=MagicMock(id=1))
+    assert sessions.found_session_ids == expected_found
+    assert sessions.missing_session_ids == expected_missing
+    assert sessions.min_timestamp == MIN_TS
+    assert sessions.max_timestamp == MAX_TS
 
 
 @pytest.mark.parametrize(
