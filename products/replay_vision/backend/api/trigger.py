@@ -20,7 +20,6 @@ from posthog.temporal.common.search_attributes import (
     POSTHOG_TEAM_ID_KEY,
 )
 
-from products.replay_vision.backend.billing import observation_credits_for_model
 from products.replay_vision.backend.enqueue_claims import (
     pending_enqueue_claims_for_scanner,
     pending_enqueue_claims_for_team,
@@ -79,11 +78,11 @@ def check_observation_quota(organization_id: UUID, observation_credits: int) -> 
 def check_scanner_quota(scanner: ReplayScanner) -> None:
     """Raise 402 when this scanner's own credit limit leaves no room for another observation."""
     # Skip the aggregate entirely for the uncapped common case, as check_scanner_budget_activity does.
-    if scanner.monthly_credit_limit is None:
+    if scanner.credit_limit is None:
         return
     budget = compute_scanner_budget(scanner)
-    if budget.would_exceed(observation_credits_for_model(scanner.model)):
-        # would_exceed is only ever true when a limit is set, so credit_limit is non-None here.
+    if budget.blocked:
+        # blocked is only ever true when a limit is set, so credit_limit is non-None here.
         assert budget.credit_limit is not None
         raise QuotaLimitExceeded(
             detail=(

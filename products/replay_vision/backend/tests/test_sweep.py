@@ -324,7 +324,7 @@ class TestAdvanceScannerWatermarkActivity:
 def test_check_scanner_budget_activity_caps_and_advances_the_watermark(
     limit: int | None, spent_observations: int, expect_capped: bool
 ) -> None:
-    scanner = _make_scanner(monthly_credit_limit=limit)
+    scanner = _make_scanner(credit_limit=limit)
     stale = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
     ReplayScanner.objects.filter(pk=scanner.pk).update(last_swept_at=stale, last_seen_session_id="sess-old")
     _seed_scanner_spend(scanner, observations=spent_observations)
@@ -348,7 +348,7 @@ def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_advanc
     # pushes it over. That's a transient spike (a failed observation would release it without ever
     # settling), so the scanner must skip this tick without burning its permanent watermark advance.
     limit = 20 * _OBSERVATION_CREDITS
-    scanner = _make_scanner(monthly_credit_limit=limit)
+    scanner = _make_scanner(credit_limit=limit)
     stale = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
     ReplayScanner.objects.filter(pk=scanner.pk).update(last_swept_at=stale, last_seen_session_id="sess-old")
     _seed_scanner_spend(scanner, observations=10)

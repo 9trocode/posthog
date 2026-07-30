@@ -1770,7 +1770,7 @@ class TestObserveAction(_VisionAPITestCase):
     def test_observe_is_refused_when_the_scanner_limit_is_reached(
         self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
     ) -> None:
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=1)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=1)
 
         resp = self.client.post(self.observe_url(str(self.scanner.id)), data={"session_id": "sess-42"}, format="json")
 
@@ -1783,7 +1783,7 @@ class TestObserveAction(_VisionAPITestCase):
     ) -> None:
         # A self-imposed per-scanner cap must never fire the org-exhaustion event: that metric means
         # "the org ran out of credits", not "this scanner hit the limit its owner chose".
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=1)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=1)
 
         with patch("products.replay_vision.backend.api.scanners.report_user_action") as report:
             resp = self.client.post(
@@ -1921,7 +1921,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
         self._seed_scanner_spend(self.scanner, cost)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost)
 
         resp = self.client.post(
             self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1", "s-2"]}, format="json"
@@ -1953,7 +1953,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
         self._seed_scanner_spend(self.scanner, cost)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost * scanner_limit_multiplier)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost * scanner_limit_multiplier)
 
         with patch("products.replay_vision.backend.quota.MONTHLY_CREDIT_QUOTA", cost * org_quota_multiplier):
             resp = self.client.post(
@@ -1972,7 +1972,7 @@ class TestBulkObserveAction(_VisionAPITestCase):
         mock_async_to_sync.return_value = MagicMock()
         cost = observation_credits_for_model(self.scanner.model)
         self._seed_scanner_spend(self.scanner, cost)
-        ReplayScanner.objects.filter(pk=self.scanner.pk).update(monthly_credit_limit=cost)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=cost)
 
         with patch("products.replay_vision.backend.api.scanners.report_user_action") as report:
             resp = self.client.post(self.bulk_url(str(self.scanner.id)), data={"session_ids": ["s-1"]}, format="json")
@@ -2561,18 +2561,6 @@ class TestScannerSpend(_VisionAPITestCase):
         )
         if created_at is not None:
             ReplayObservation.objects.filter(pk=observation.pk).update(created_at=created_at)
-            observation.refresh_from_db()
-        # Mirror production: credits_this_month reads the receipt ledger, not the observation row.
-        model = observation.scanner_snapshot.get("model", "")
-        ReplayObservationUsage.objects.create(
-            observation_id=observation.id,
-            organization_id=observation.team.organization_id,
-            team_id=observation.team_id,
-            scanner_id=observation.scanner_id,
-            observation_created_at=observation.created_at,
-            model=model,
-            credits=observation_credits_for_model(model),
-        )
         return observation
 
     def _credits_by_name(self, response_json: dict) -> dict[str, int]:
@@ -2612,6 +2600,25 @@ class TestScannerSpend(_VisionAPITestCase):
         displayed = [row["credits_this_month"] for row in rows]
         self.assertEqual(displayed, sorted(displayed, reverse=True))
         self.assertEqual([row["name"] for row in rows[:2]], ["high", "low"])
+
+    def test_receipts_without_a_scanner_do_not_zero_the_displayed_credits(self) -> None:
+        # Receipts are never backfilled with a scanner_id, so the displayed column and its sort read
+        # observation rows. Pointing either at the ledger silently zeroes both for a whole period.
+        spender = self._create_scanner(name="spender")
+        observation = self._succeeded_observation(spender, "unattributed")
+        ReplayObservationUsage.objects.create(
+            observation_id=observation.id,
+            organization_id=self.team.organization_id,
+            team_id=self.team.pk,
+            scanner_id=None,
+            observation_created_at=observation.created_at,
+            model=spender.model,
+            credits=observation_credits_for_model(spender.model),
+        )
+
+        resp = self.client.get(f"{self.scanners_url}?order_by=-credits_this_month")
+        self.assertEqual(resp.status_code, 200, resp.json())
+        self.assertEqual(self._credits_by_name(resp.json())["spender"], observation_credits_for_model(spender.model))
 
 
 class TestCurrentPeriodBounds(SimpleTestCase):
