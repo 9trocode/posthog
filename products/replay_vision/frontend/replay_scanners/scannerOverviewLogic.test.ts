@@ -117,6 +117,9 @@ describe('scannerOverviewLogic', () => {
             { used: 200, limit: 1000, expectedPct: 20, expectedReached: false },
             { used: 1000, limit: 1000, expectedPct: 100, expectedReached: true },
             { used: 1200, limit: 1000, expectedPct: 100, expectedReached: true },
+            // The server reports reached as soon as what's left can't cover one more scan, so this
+            // must come from the API and not be re-derived from usedPct.
+            { used: 990, limit: 1000, expectedPct: 99, expectedReached: true },
         ])(
             'derives usedPct $expectedPct and limitReached $expectedReached from used=$used, limit=$limit',
             async ({ used, limit, expectedPct, expectedReached }) => {
