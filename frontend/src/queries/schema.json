@@ -27618,7 +27618,11 @@
                 "postgresql",
                 "aws-s3",
                 "s3-compatible",
-                "snowflake"
+                "snowflake",
+                "clover",
+                "clover-eu",
+                "clover-latam",
+                "clover-sandbox"
             ],
             "type": "string"
         },
