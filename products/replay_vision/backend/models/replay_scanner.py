@@ -133,6 +133,11 @@ class ReplayScanner(UUIDModel):
         validators=[MinValueValidator(1)],
         help_text="Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap.",
     )
+    limit_notified_period_start = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Billing period start this scanner was last reported as having reached its credit limit; keeps the notification to one per period.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey("posthog.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="+")

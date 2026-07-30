@@ -362,6 +362,58 @@ def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_advanc
     assert scanner.last_seen_session_id == "sess-old"
 
 
+@pytest.mark.django_db(transaction=True)
+def test_check_scanner_budget_activity_capped_by_in_flight_alone_does_not_notify() -> None:
+    # A transient in-flight-only cap may clear itself within minutes as reservations release;
+    # notifying there could tell a user their scanner stopped when it's about to resume on its own.
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(monthly_credit_limit=limit)
+    _seed_scanner_spend(scanner, observations=10)
+    _seed_in_flight_observations(scanner, count=10)
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        output = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    assert output.capped is True
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_check_scanner_budget_activity_notifies_once_per_period_on_settled_exhaustion() -> None:
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(monthly_credit_limit=limit)
+    _seed_scanner_spend(scanner, observations=20)
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        first = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+        second = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    # The pause is not conditional on the notification: both calls still report capped.
+    assert first.capped is True
+    assert second.capped is True
+    mock_notify.assert_called_once()
+    scanner.refresh_from_db()
+    assert scanner.limit_notified_period_start is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_check_scanner_budget_activity_notifies_again_after_period_rolls_over() -> None:
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(monthly_credit_limit=limit)
+    _seed_scanner_spend(scanner, observations=20)
+    prior_period = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
+    ReplayScanner.objects.filter(pk=scanner.pk).update(limit_notified_period_start=prior_period)
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        output = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    assert output.capped is True
+    mock_notify.assert_called_once()
+    scanner.refresh_from_db()
+    assert scanner.limit_notified_period_start is not None
+    assert scanner.limit_notified_period_start > prior_period
+
+
 # SweepScannerWorkflow (mocked-Temporal)
 
 
