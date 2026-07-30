@@ -269,7 +269,7 @@ class DataQualityCheckViewSet(_DataQualityGateMixin, TeamAndOrgViewSetMixin, vie
         parameters=[SubjectHealthQuerySerializer],
         responses={200: SubjectHealthSerializer},
     )
-    @action(methods=["GET"], detail=False, pagination_class=None, required_scopes=["data_quality:read"])
+    @action(methods=["GET"], detail=False, pagination_class=None, required_scopes=["data_quality:read", "query:read"])
     def health(self, request: Request, **kwargs) -> Response:
         query = SubjectHealthQuerySerializer(data=request.query_params)
         query.is_valid(raise_exception=True)

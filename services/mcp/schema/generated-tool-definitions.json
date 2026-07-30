@@ -2205,7 +2205,7 @@
         "feature": "data_quality",
         "summary": "Get data quality health for a table or view",
         "title": "Get data quality health for a table or view",
-        "required_scopes": ["data_quality:read"],
+        "required_scopes": ["data_quality:read", "query:read"],
         "annotations": {
             "destructiveHint": false,
             "idempotentHint": true,
