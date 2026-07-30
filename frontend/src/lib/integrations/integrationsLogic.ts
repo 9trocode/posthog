@@ -542,8 +542,8 @@ export interface integrationsLogicActions {
             | 'stripe'
             | 'tiktok-ads'
             | 'twilio'
-            | 'xero'
-            | 'vercel',
+            | 'vercel'
+            | 'xero',
         payload?: {
             kind: IntegrationKind
         }
