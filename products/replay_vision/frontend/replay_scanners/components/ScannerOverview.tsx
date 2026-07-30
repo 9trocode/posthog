@@ -261,7 +261,8 @@ function CreditLimitOverview({ scannerId }: { scannerId: string }): JSX.Element 
             </div>
             {limitReached && (
                 <div className="text-xs text-muted">
-                    This scanner has stopped scanning until its monthly limit resets.
+                    This scanner has stopped scanning until its monthly limit resets. Sessions skipped while capped are
+                    not scanned later.
                 </div>
             )}
         </OverviewPanel>

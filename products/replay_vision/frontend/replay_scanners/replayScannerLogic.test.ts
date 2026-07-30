@@ -271,6 +271,11 @@ describe('replayScannerLogic', () => {
                 expectedErrors: { monthly_credit_limit: expect.any(String) },
             },
             {
+                name: 'flags the limit toggled on but left empty, so it cannot silently save as unlimited',
+                setup: () => logic.actions.setScannerValues({ monthly_credit_limit: NaN }),
+                expectedErrors: { monthly_credit_limit: expect.any(String) },
+            },
+            {
                 name: 'flags scorer scale when min >= max',
                 setup: () => {
                     logic.actions.setScannerType('scorer')

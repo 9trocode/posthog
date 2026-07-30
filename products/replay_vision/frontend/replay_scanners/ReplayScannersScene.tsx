@@ -182,7 +182,7 @@ export function ReplayScannersScene(): JSX.Element {
                         {scanner.enabled ? 'Enabled' : 'Disabled'}
                     </span>
                     {scanner.limit_reached && (
-                        <Tooltip title="This scanner stopped scanning until its monthly credit limit resets.">
+                        <Tooltip title="This scanner stopped scanning until its monthly credit limit resets. Sessions skipped while capped are not scanned later.">
                             <LemonTag type="danger">Limit reached</LemonTag>
                         </Tooltip>
                     )}
