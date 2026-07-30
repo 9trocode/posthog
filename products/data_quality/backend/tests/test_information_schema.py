@@ -190,6 +190,26 @@ class TestInformationSchemaDataQuality(ClickhouseTestMixin, APIBaseTest):
 
         assert ("customers",) not in rows
 
+    def test_check_runs_hide_a_run_whose_check_reads_a_denied_reference(self) -> None:
+        # A custom_sql run on the allowed "customers" that reads the denied "orders" carries a
+        # failed-row count that is an oracle over orders, so it must not surface -- matching the REST
+        # check_runs path, which gates on referenced subjects, not just the declared one.
+        check = self._check(
+            subject_name="customers",
+            subject_uuid=uuid4(),
+            check_type=CheckType.CUSTOM_SQL,
+            column_name="",
+            config={"query": "SELECT 1 FROM orders"},
+        )
+        self._run_for(check)
+
+        rows = self._query(
+            "SELECT subject_name FROM system.information_schema.data_quality_check_runs",
+            context=self._context(denied_tables={"orders"}),
+        )
+
+        assert rows == []
+
     def test_the_tables_are_absent_when_the_catalog_flag_is_off(self) -> None:
         with patch("products.data_quality.backend.facade.flags.is_data_quality_checks_enabled", return_value=False):
             listing = self._query(

@@ -1101,7 +1101,12 @@ def _data_quality_check_runs(context: "HogQLContext", allowed: Optional[frozense
     team_id = context.team_id
     if team_id is None or not _can_read_data_quality(context):
         return []
-    from products.data_quality.backend.facade.models import DataQualityCheckRun  # noqa: PLC0415
+    from products.data_quality.backend.facade.api import (  # noqa: PLC0415
+        all_specs,
+        check_reads_denied_subject,
+        check_type_reads_beyond_subject,
+    )
+    from products.data_quality.backend.facade.models import DataQualityCheck, DataQualityCheckRun  # noqa: PLC0415
 
     try:
         denied = context.database._denied_tables if context.database is not None else set()
@@ -1120,6 +1125,22 @@ def _data_quality_check_runs(context: "HogQLContext", allowed: Optional[frozense
             }
             if blocked:
                 base = base.exclude(subject_name__in=blocked)
+            # A relationships/custom_sql run on an allowed subject still reads a denied one, and its
+            # failed-row count is an oracle over that table. Drop runs whose check references a denied
+            # subject (soft-deleted definitions included -- their runs stay queryable), and fail closed
+            # for hard-deleted definitions of referencing types, whose config can no longer be read.
+            referencing_types = {
+                str(spec.type_name) for spec in all_specs() if check_type_reads_beyond_subject(str(spec.type_name))
+            }
+            blocked_check_ids = {
+                str(check.id)
+                for check in DataQualityCheck.objects.for_team(team_id).filter(check_type__in=referencing_types)
+                if check_reads_denied_subject(team_id, check.check_type, check.config, denied)
+            }
+            if blocked_check_ids:
+                base = base.exclude(quality_check_id__in=blocked_check_ids)
+            if referencing_types:
+                base = base.exclude(quality_check__isnull=True, check_type__in=referencing_types)
         return [
             [
                 str(run.id),
