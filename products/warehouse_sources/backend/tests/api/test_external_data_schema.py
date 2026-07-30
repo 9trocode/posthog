@@ -37,7 +37,6 @@ from products.warehouse_sources.backend.facade.models import (
     update_sync_type_config_keys,
 )
 from products.warehouse_sources.backend.facade.types import ExternalDataSourceType
-from products.warehouse_sources.backend.presentation.views import external_data_schema as external_data_schema_views
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.base import (
     VersionDeprecation,
     WebhookCreationResult,
@@ -2954,7 +2953,7 @@ class TestCancelExternalDataSchema(APIBaseTest):
         "products.warehouse_sources.backend.presentation.views.external_data_schema.cancel_external_data_workflow"
     )
     def test_cancel_v3_succeeds_when_cancel_rpc_fails(self, _case, rpc_status_name, mock_cancel, _mock_finish):
-        from temporalio.service import RPCError, RPCStatusCode
+        from temporalio.service import RPCError
 
         from products.warehouse_sources.backend.facade.models import ExternalDataJob
 
@@ -3003,7 +3002,7 @@ class TestCancelExternalDataSchema(APIBaseTest):
         # A workflow that was terminated (not cancelled) never runs the cleanup that writes the
         # terminal status, so the cancel RPC comes back NOT_FOUND. Without recovery the job and
         # schema would stay stuck on Running forever and the schema could never be synced again.
-        from temporalio.service import RPCError, RPCStatusCode
+        from temporalio.service import RPCError
 
         from products.warehouse_sources.backend.facade.models import ExternalDataJob
 
@@ -3028,7 +3027,7 @@ class TestCancelExternalDataSchema(APIBaseTest):
     def test_cancel_legacy_pipeline_returns_400_on_transient_rpc_error(self, mock_cancel):
         # A transient RPC failure against a possibly-live workflow must not mark the job Failed -
         # the workflow still owns the terminal status, so leave it Running and surface the error.
-        from temporalio.service import RPCError, RPCStatusCode
+        from temporalio.service import RPCError
 
         from products.warehouse_sources.backend.facade.models import ExternalDataJob
 
@@ -3792,34 +3791,16 @@ class TestFanoutParentEnforcement(APIBaseTest):
                 data=data,
             )
 
-    def test_enabling_fanout_child_auto_enables_configured_parent(self):
+    def test_enabling_fanout_child_with_disabled_configured_parent_errors(self):
+        # Silently enabling the parent would silently grow the customer's billed rows synced;
+        # the parent must be enabled by the customer, so this has to refuse instead.
         _, parent, child = self._create_sentry_fanout_pair(parent_sync_type=ExternalDataSchema.SyncType.INCREMENTAL)
 
         response = self._patch_schema(child.id, {"should_sync": True})
 
-        assert response.status_code == 200, response.json()
-        parent.refresh_from_db()
-        assert parent.should_sync is True
-
-    def test_parent_enable_rolls_back_when_the_schedule_update_fails(self):
-        # update_should_sync commits should_sync before its Temporal RPCs. Leaving the parent
-        # "enabled" with no schedule would let the child keep fanning out over a table that
-        # never syncs again, so the flag has to go back.
-        _, parent, child = self._create_sentry_fanout_pair(parent_sync_type=ExternalDataSchema.SyncType.INCREMENTAL)
-        real_update_should_sync = external_data_schema_views.update_should_sync
-
-        def fail_for_parent(schema_id, team_id, should_sync):
-            if str(schema_id) == str(parent.id):
-                raise RPCError("temporal unavailable", RPCStatusCode.UNAVAILABLE, b"")
-            return real_update_should_sync(schema_id=schema_id, team_id=team_id, should_sync=should_sync)
-
-        with mock.patch(
-            "products.warehouse_sources.backend.presentation.views.external_data_schema.update_should_sync",
-            side_effect=fail_for_parent,
-        ):
-            response = self._patch_schema(child.id, {"should_sync": True})
-
-        assert response.status_code == 500
+        assert response.status_code == 400
+        assert "Enable 'issues' first" in response.json()["detail"]
+        assert "count toward your usage" in response.json()["detail"]
         parent.refresh_from_db()
         assert parent.should_sync is False
 

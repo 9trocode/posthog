@@ -1,10 +1,12 @@
 import uuid
+import datetime as dt
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import deltalake
 
+from products.warehouse_sources.backend.models.external_data_job import ExternalDataJob
 from products.warehouse_sources.backend.models.external_data_schema import get_schema_if_exists
 from products.warehouse_sources.backend.temporal.data_imports.naming_convention import NamingConvention
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.core.arrow_utils import (
@@ -14,6 +16,10 @@ from products.warehouse_sources.backend.temporal.data_imports.pipelines.core.del
     build_delta_table_uri,
     delta_storage_options,
 )
+
+# Upper bound on rows held in memory per page. Source configs drive page_size for API paging
+# semantics; a misconfigured or future large value must not turn into a whole-table page.
+MAX_PARENT_PAGE_SIZE = 5000
 
 
 class WarehouseParentTableNotFoundError(Exception):
@@ -41,11 +47,15 @@ def resolve_parent_table_ref(team_id: int, source_id: str, parent_name: str) -> 
     documents. The storage leaf honors a pinned `resolved_s3_folder_name` (legacy-migrated
     rows) before falling back to the normalized schema name, mirroring the writer.
 
-    The version is pinned here, next to the run-time gate that just confirmed no parent job is
-    running, rather than at first read: the read is lazy and can start minutes into the pipeline,
-    by which time a full-refresh parent may be mid-rewrite (overwrite + appends across several
-    commits). Pinning means later parent commits are invisible to this run — the child fans out
-    over one complete snapshot instead of a torn one.
+    The version is pinned here rather than at first read: the read is lazy and can start minutes
+    into the pipeline, by which time a full-refresh parent may be mid-rewrite (overwrite + appends
+    across several commits). Pinning means later parent commits are invisible to this run — the
+    child fans out over one complete snapshot instead of a torn one.
+
+    A parent that is *currently syncing* doesn't block the child: the pin rolls back to the
+    version as of the parent's last completed job (Delta time travel), which is a complete
+    snapshot by definition. Vacuum retention comfortably covers files dereferenced seconds-to-
+    minutes ago by the in-flight rewrite.
     """
     parent_schema = get_schema_if_exists(parent_name, team_id, uuid.UUID(source_id))
     if parent_schema is None:
@@ -58,7 +68,42 @@ def resolve_parent_table_ref(team_id: int, source_id: str, parent_name: str) -> 
         raise WarehouseParentTableNotFoundError(
             f"Parent schema '{parent_name}' has no synced table yet — complete its initial sync first"
         )
-    return ParentTableRef(uri=uri, version=deltalake.DeltaTable(uri, storage_options=storage_options).version())
+    delta_table = deltalake.DeltaTable(uri, storage_options=storage_options)
+
+    as_of = _last_completed_snapshot_timestamp(team_id, parent_schema.id)
+    if as_of is not None:
+        delta_table.load_as_version(as_of)
+    return ParentTableRef(uri=uri, version=delta_table.version())
+
+
+def _last_completed_snapshot_timestamp(team_id: int, parent_schema_id: uuid.UUID) -> dt.datetime | None:
+    """When the parent has a job RUNNING, return its last completed job's finish time; else None.
+
+    None means "read the latest version" — with no writer active, latest == last completed
+    snapshot. The completed-job timestamp deliberately comes from Postgres, not the Delta log:
+    `finished_at` is stamped strictly after the job's final commit, so every commit at or before
+    it belongs to a finished run.
+    """
+    parent_running = ExternalDataJob.objects.filter(
+        team_id=team_id, schema_id=parent_schema_id, status=ExternalDataJob.Status.RUNNING
+    ).exists()
+    if not parent_running:
+        return None
+    last_completed = (
+        ExternalDataJob.objects.filter(
+            team_id=team_id, schema_id=parent_schema_id, status=ExternalDataJob.Status.COMPLETED
+        )
+        .order_by("-finished_at")
+        .values_list("finished_at", flat=True)
+        .first()
+    )
+    if last_completed is None:
+        # initial_sync_complete without any completed job row (e.g. purged history) — nothing
+        # safe to pin to while a rewrite is in flight; fail retryably and let the parent finish.
+        raise WarehouseParentTableNotFoundError(
+            "Parent schema is syncing and has no completed job to snapshot from; retry after it finishes"
+        )
+    return last_completed
 
 
 def iter_parent_pages_from_warehouse(
@@ -88,6 +133,7 @@ def iter_parent_pages_from_warehouse(
     before a sync ever reaches this reader. Do not add whole-table materialization here
     (`to_table`, global sorts, seen-sets) — parents can be arbitrarily large.
     """
+    page_size = max(1, min(page_size, MAX_PARENT_PAGE_SIZE))
     delta_table = deltalake.DeltaTable(table.uri, version=table.version, storage_options=delta_storage_options())
     physical_schema_names = set(pyarrow_schema_from_arrow_exportable(delta_table.schema()).names)
 

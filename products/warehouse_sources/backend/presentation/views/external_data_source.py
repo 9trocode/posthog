@@ -2338,10 +2338,11 @@ class ExternalDataSourceViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixi
         direct_engine_adapter = get_direct_query_engine(new_source_model.direct_engine)
 
         # Fan-out children that read their parent from the warehouse can only sync when the
-        # parent schema syncs too. Mirror the schema-update API: auto-enable a parent whose
-        # payload entry is configured, refuse when it can't be enabled. The feature-flag
-        # evaluation is remote, so it only runs once a dependency edge actually exists.
-        # (`requires` in the database_schema payload lets the wizard pre-select parents.)
+        # parent schema syncs too. Mirror the schema-update API: refuse when the parent isn't
+        # selected — parent syncs bill rows, so enabling one must be the customer's explicit
+        # choice, never a silent side effect. The feature-flag evaluation is remote, so it only
+        # runs once a dependency edge actually exists. (`requires` in the database_schema
+        # payload lets the wizard surface the dependency up front.)
         required_parents_by_child: dict[str, list[str]] = {}
         for schema in payload_schemas:
             if not schema.get("should_sync", False):
@@ -2365,7 +2366,7 @@ class ExternalDataSourceViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixi
                         )
                     )
                     try:
-                        parent_action = resolve_fanout_parent_action(
+                        resolve_fanout_parent_action(
                             child_name,
                             parent_name,
                             parent_state,
@@ -2374,9 +2375,6 @@ class ExternalDataSourceViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixi
                     except FanoutParentDependencyError as e:
                         new_source_model.delete()
                         return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": str(e)})
-                    if parent_action == "enable":
-                        assert parent_entry is not None  # "enable" implies the parent entry exists
-                        parent_entry["should_sync"] = True
 
         # Create all ExternalDataSchema objects and enable syncing for active schemas
         for schema in payload_schemas:

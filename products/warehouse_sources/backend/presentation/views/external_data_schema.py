@@ -45,7 +45,6 @@ from products.warehouse_sources.backend.facade.models import (
     ExternalDataSource,
     sync_frequency_interval_to_sync_frequency,
     sync_frequency_to_sync_frequency_interval,
-    update_should_sync,
     update_sync_type_config_keys,
 )
 from products.warehouse_sources.backend.facade.pipelines import finish_row_tracking
@@ -572,10 +571,11 @@ class ExternalDataSchemaSerializer(serializers.ModelSerializer):
     ) -> None:
         """Hard parent→child dependency for fan-out schemas that read their parent from the warehouse.
 
-        Enabling a child auto-enables its already-configured parents (a parent with no sync type
-        yet can't be silently enabled — the caller is told to set it up). Disabling a parent that
-        an enabled child depends on is refused. The feature-flag evaluation is remote, so it runs
-        only after a cheap config lookup proves a dependency edge exists.
+        Enabling a child requires its parents to already be enabled — never enable a parent as a
+        silent side effect: parent syncs bill rows, so turning one on must be the customer's own
+        action. Disabling a parent that an enabled child depends on is refused. The feature-flag
+        evaluation is remote, so it runs only after a cheap config lookup proves a dependency edge
+        exists.
         """
         if should_sync is None or bool(should_sync) == instance.should_sync:
             return
@@ -610,7 +610,7 @@ class ExternalDataSchemaSerializer(serializers.ModelSerializer):
                 )
             )
             try:
-                action = resolve_fanout_parent_action(
+                resolve_fanout_parent_action(
                     instance.name,
                     parent_name,
                     parent_state,
@@ -618,27 +618,6 @@ class ExternalDataSchemaSerializer(serializers.ModelSerializer):
                 )
             except FanoutParentDependencyError as e:
                 raise ValidationError(str(e))
-            if action == "enable":
-                assert parent is not None  # "enable" implies the parent exists
-
-                # In the bulk path update() runs inside a per-schema transaction; update_should_sync
-                # does Temporal RPCs, so defer it post-commit — no idle-in-transaction network I/O,
-                # and no Temporal schedule surviving a rolled-back request.
-                def _enable_parent(parent_id: str = str(parent.id)) -> None:
-                    try:
-                        update_should_sync(schema_id=parent_id, team_id=instance.team_id, should_sync=True)
-                    except Exception:
-                        # update_should_sync commits should_sync before touching the schedule, so a
-                        # failed RPC would leave the parent "enabled" with no schedule — and the
-                        # child's run-time gate, seeing an enabled and already-initialized parent,
-                        # would keep fanning out over a table that never syncs again. Put the flag
-                        # back so the child fails loudly instead of going quietly stale.
-                        ExternalDataSchema.objects.filter(id=parent_id, team_id=instance.team_id).update(
-                            should_sync=False
-                        )
-                        raise
-
-                self._run_temporal_side_effect(_enable_parent)
 
     def get_status(self, schema: ExternalDataSchema) -> str | None:
         if schema.status == ExternalDataSchema.Status.BILLING_LIMIT_REACHED:

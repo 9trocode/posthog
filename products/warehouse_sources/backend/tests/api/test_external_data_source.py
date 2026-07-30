@@ -13085,8 +13085,8 @@ class TestGithubMultiRepoPatch(APIBaseTest):
 
 class TestFanoutParentCreationEnforcement(APIBaseTest):
     """Source-creation counterpart of TestFanoutParentEnforcement: the payload pre-pass must
-    auto-enable a configured warehouse-fanout parent and refuse un-enableable ones, deleting
-    the half-created source on refusal."""
+    refuse a warehouse-fanout child whose parent isn't selected (enabling a parent bills its
+    rows, so it must be explicit), deleting the half-created source on refusal."""
 
     def _post_sentry_source(self, schemas: list[dict], flag_enabled: bool = True):
         with (
@@ -13112,10 +13112,10 @@ class TestFanoutParentCreationEnforcement(APIBaseTest):
                 },
             )
 
-    def test_create_auto_enables_configured_parent(self):
+    def test_create_accepts_child_when_parent_also_selected(self):
         response = self._post_sentry_source(
             [
-                {"name": "issues", "should_sync": False, "sync_type": "full_refresh"},
+                {"name": "issues", "should_sync": True, "sync_type": "full_refresh"},
                 {"name": "issue_events", "should_sync": True, "sync_type": "full_refresh"},
             ]
         )
@@ -13135,6 +13135,11 @@ class TestFanoutParentCreationEnforcement(APIBaseTest):
                 "unconfigured_parent",
                 {"name": "issues", "should_sync": False},
                 "Set up and enable 'issues' first",
+            ),
+            (
+                "deselected_configured_parent",
+                {"name": "issues", "should_sync": False, "sync_type": "full_refresh"},
+                "Enable 'issues' first",
             ),
             (
                 "append_parent",

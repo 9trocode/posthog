@@ -398,12 +398,6 @@ async def test_parent_gate_blocks_child_until_parent_ready(parent, expected_erro
             await module._ensure_required_parents_synced(_fanout_source(), _fanout_child_schema(), uuid.uuid4(), 1)
 
 
-def _patch_parent_job_running(running: bool):
-    jobs_manager = mock.MagicMock()
-    jobs_manager.filter.return_value.exists.return_value = running
-    return mock.patch.object(module.ExternalDataJob, "objects", jobs_manager)
-
-
 @pytest.mark.asyncio
 async def test_parent_gate_passes_when_parent_synced():
     with (
@@ -412,29 +406,10 @@ async def test_parent_gate_passes_when_parent_synced():
         mock.patch.object(
             module, "get_schema_if_exists", return_value=_parent(should_sync=True, initial_sync_complete=True)
         ),
-        _patch_parent_job_running(False),
     ):
         result = await module._ensure_required_parents_synced(_fanout_source(), _fanout_child_schema(), uuid.uuid4(), 1)
 
     assert result is True
-
-
-@pytest.mark.asyncio
-async def test_parent_gate_retries_while_parent_job_running():
-    # A mid-rewrite parent table is a partial snapshot; the gate must refuse — but retryably
-    # (plain Exception, not NonRetryableException): the parent finishing resolves it.
-    with (
-        mock.patch.object(module, "database_sync_to_async_pool", new=_passthrough),
-        mock.patch.object(module, "is_fanout_warehouse_reuse_enabled", return_value=True),
-        mock.patch.object(
-            module, "get_schema_if_exists", return_value=_parent(should_sync=True, initial_sync_complete=True)
-        ),
-        _patch_parent_job_running(True),
-    ):
-        with pytest.raises(Exception, match="currently syncing") as exc_info:
-            await module._ensure_required_parents_synced(_fanout_source(), _fanout_child_schema(), uuid.uuid4(), 1)
-
-    assert not isinstance(exc_info.value, NonRetryableException)
 
 
 @pytest.mark.asyncio
@@ -454,7 +429,6 @@ async def test_fanout_gate_result_threaded_into_source_inputs():
         mock.patch.object(
             module, "get_schema_if_exists", return_value=_parent(should_sync=True, initial_sync_complete=True)
         ),
-        _patch_parent_job_running(False),
     ):
         await import_data_activity_sync(_inputs_no_reset())
 

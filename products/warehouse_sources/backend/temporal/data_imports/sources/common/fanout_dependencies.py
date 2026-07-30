@@ -23,17 +23,17 @@ def resolve_fanout_parent_action(
     parent: Optional[FanoutParentState],
     *,
     requires_sync_type: bool,
-) -> Literal["ok", "enable"]:
+) -> Literal["ok"]:
     """Decide what to do about one required parent when enabling a fan-out child.
 
-    Returns "ok" (parent already syncing) or "enable" (caller flips the parent on through its
-    own mechanism). Raises FanoutParentDependencyError when the child can't be enabled:
+    Returns "ok" (parent already syncing). Raises FanoutParentDependencyError when the child
+    can't be enabled:
 
     - parent missing from the source,
     - parent on append sync — its table accumulates duplicate rows and the streaming
       warehouse reader has no dedupe, so the child would fan out once per duplicate,
-    - parent not configured — auto-enabling a schema without a sync type would create an
-      invalid state, so the caller must set the parent up first.
+    - parent disabled — enabling it adds its rows to billed usage, so it must be the
+      customer's explicit action, never a silent side effect of enabling the child.
 
     Keeping the rules and wording here is what stops the two call sites from drifting.
     """
@@ -54,4 +54,7 @@ def resolve_fanout_parent_action(
         raise FanoutParentDependencyError(
             f"'{child_name}' syncs using the '{parent_name}' schema's data. Set up and enable '{parent_name}' first."
         )
-    return "enable"
+    raise FanoutParentDependencyError(
+        f"'{child_name}' syncs using the '{parent_name}' schema's data. Enable '{parent_name}' first. "
+        f"Rows synced by '{parent_name}' count toward your usage."
+    )

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,12 +37,13 @@ def _patched_reader(uri: str, version: int | None = None, **kwargs):
         return list(iter_parent_pages_from_warehouse(table=ref, parent_name="issues", **kwargs))
 
 
-def _patched_resolve(uri: str):
-    parent_schema = SimpleNamespace(resolved_s3_folder_name=None, folder_path=lambda: "team_1_sentry_x")
+def _patched_resolve(uri: str, snapshot_timestamp=None):
+    parent_schema = SimpleNamespace(id="parent-id", resolved_s3_folder_name=None, folder_path=lambda: "team_1_sentry_x")
     with (
         patch.object(warehouse_parent, "get_schema_if_exists", return_value=parent_schema),
         patch.object(warehouse_parent, "build_delta_table_uri", return_value=uri),
         patch.object(warehouse_parent, "delta_storage_options", return_value={}),
+        patch.object(warehouse_parent, "_last_completed_snapshot_timestamp", return_value=snapshot_timestamp),
     ):
         return resolve_parent_table_ref(1, "00000000-0000-0000-0000-000000000000", "issues")
 
@@ -50,6 +52,23 @@ def test_resolve_parent_table_ref_raises_when_parent_schema_missing() -> None:
     with patch.object(warehouse_parent, "get_schema_if_exists", return_value=None):
         with pytest.raises(WarehouseParentTableNotFoundError, match="does not exist for source"):
             resolve_parent_table_ref(1, "00000000-0000-0000-0000-000000000000", "issues")
+
+
+def test_reader_floors_page_size_to_one(tmp_path: Path) -> None:
+    uri = _write_parent_table(tmp_path)
+
+    pages = _patched_reader(uri, columns=["id"], page_size=0)
+
+    assert [len(page) for page in pages] == [1, 1, 1]
+
+
+def test_reader_caps_page_size(tmp_path: Path) -> None:
+    uri = _write_parent_table(tmp_path)
+
+    with patch.object(warehouse_parent, "MAX_PARENT_PAGE_SIZE", 2):
+        pages = _patched_reader(uri, columns=["id"], page_size=10_000_000)
+
+    assert [len(page) for page in pages] == [2, 1]
 
 
 def test_reader_pages_and_rekeys_to_api_field_names(tmp_path: Path) -> None:
@@ -72,6 +91,20 @@ def test_reader_pages_and_rekeys_to_api_field_names(tmp_path: Path) -> None:
 def test_resolve_raises_when_parent_has_no_synced_table(tmp_path: Path) -> None:
     with pytest.raises(WarehouseParentTableNotFoundError, match="no synced table"):
         _patched_resolve(str(tmp_path / "does_not_exist"))
+
+
+def test_resolve_pins_to_last_completed_snapshot_while_parent_is_syncing(tmp_path: Path) -> None:
+    uri = _write_parent_table(tmp_path)
+    v0_table = deltalake.DeltaTable(uri)
+    v0 = v0_table.version()
+    v0_timestamp = datetime.fromtimestamp(v0_table.history()[0]["timestamp"] / 1000, tz=UTC)
+
+    # An in-flight full refresh has already committed a partial overwrite on top of v0.
+    deltalake.write_deltalake(uri, pa.table({"id": ["partial"], "last_seen": ["x"], "title": ["y"]}), mode="overwrite")
+
+    pinned = _patched_resolve(uri, snapshot_timestamp=v0_timestamp)
+
+    assert pinned.version == v0
 
 
 def test_reader_stays_on_the_pinned_version_when_the_parent_re_syncs(tmp_path: Path) -> None:
