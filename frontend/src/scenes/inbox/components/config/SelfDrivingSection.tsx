@@ -4,6 +4,7 @@ import { IconRocket } from '@posthog/icons'
 import { LemonSegmentedButton, LemonSkeleton, LemonSwitch } from '@posthog/lemon-ui'
 
 import { signalTeamConfigLogic } from '../../logics/signalTeamConfigLogic'
+import { userAutonomyLogic } from '../../logics/userAutonomyLogic'
 import { PRIORITY_THRESHOLD_OPTIONS, SignalReportPriority } from '../../types'
 
 /** Compact segmented-control label per priority. P4 (the lowest bar) reads as "All". */
@@ -20,19 +21,31 @@ const THRESHOLD_SEGMENTS = PRIORITY_THRESHOLD_OPTIONS.map(({ value }) => ({
     label: THRESHOLD_SEGMENT_LABELS[value],
 }))
 
+/** Sentinel for the personal threshold's "inherit the project default" state (a null override). */
+const MY_THRESHOLD_DEFAULT_VALUE = '__default__'
+/** Personal-threshold segments: the leading "Default" clears the override; the rest mirror the project ones. */
+const MY_THRESHOLD_SEGMENTS = [{ value: MY_THRESHOLD_DEFAULT_VALUE, label: 'Default' }, ...THRESHOLD_SEGMENTS]
+
 /**
- * Team-wide PR-generation control, backed by `autostart_enabled` and `default_autostart_priority`
- * on `signalTeamConfigLogic`. The inline switch is the master opt-out for autonomous inbox PRs;
- * reports keep generating and notifying either way. The threshold is the team default; a teammate's
- * personal threshold takes precedence for reports suggesting them as reviewer.
+ * PR-generation control, backed by `autostart_enabled` and `default_autostart_priority` on
+ * `signalTeamConfigLogic`. The inline switch is the master opt-out for autonomous inbox PRs; reports
+ * keep generating and notifying either way.
+ *
+ * Two thresholds sit below it: the project threshold (`default_autostart_priority`, the team-wide
+ * default) and the current user's personal threshold (`autostart_priority` on `userAutonomyLogic`),
+ * which overrides the project one for reports suggesting them as reviewer. A null personal override
+ * ("Default") inherits the project threshold rather than disabling auto-start.
  *
  * A standalone card rather than a `SetupWidgetCard` because it hosts inline controls (the switch and
- * threshold) that can't live inside that card's single button/link wrapper.
+ * thresholds) that can't live inside that card's single button/link wrapper.
  */
 export function SelfDrivingSection(): JSX.Element {
     const { teamConfig, teamConfigLoading, autostartEnabled, defaultAutostartPriority } =
         useValues(signalTeamConfigLogic)
     const { patchTeamConfig } = useActions(signalTeamConfigLogic)
+    const { autonomyConfig } = useValues(userAutonomyLogic)
+    const { setAutostartPriority } = useActions(userAutonomyLogic)
+    const myThreshold = autonomyConfig?.autostart_priority ?? MY_THRESHOLD_DEFAULT_VALUE
 
     if (teamConfigLoading && teamConfig === null) {
         return <LemonSkeleton className="h-20 w-full rounded" />
@@ -57,16 +70,34 @@ export function SelfDrivingSection(): JSX.Element {
                 </div>
             </div>
 
-            <div className="border-t border-primary bg-surface-secondary px-2.5 py-1.5">
+            <div className="border-t border-primary bg-surface-secondary px-2.5 py-2">
                 {autostartEnabled ? (
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-secondary shrink-0">Threshold</span>
-                        <LemonSegmentedButton
-                            size="xsmall"
-                            value={defaultAutostartPriority}
-                            options={THRESHOLD_SEGMENTS}
-                            onChange={(next) => patchTeamConfig({ default_autostart_priority: next })}
-                        />
+                    <div className="flex flex-col gap-2">
+                        <div className="flex flex-col gap-1">
+                            <span className="text-xs text-secondary">Project threshold</span>
+                            <LemonSegmentedButton
+                                size="xsmall"
+                                value={defaultAutostartPriority}
+                                options={THRESHOLD_SEGMENTS}
+                                onChange={(next) => patchTeamConfig({ default_autostart_priority: next })}
+                            />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                            <span className="text-xs text-secondary">My threshold</span>
+                            <LemonSegmentedButton
+                                size="xsmall"
+                                value={myThreshold}
+                                options={MY_THRESHOLD_SEGMENTS}
+                                onChange={(next) =>
+                                    setAutostartPriority(
+                                        next === MY_THRESHOLD_DEFAULT_VALUE ? null : (next as SignalReportPriority)
+                                    )
+                                }
+                            />
+                            <p className="text-[11px] text-tertiary leading-snug mb-0">
+                                Overrides the project threshold for reports that suggest you as reviewer.
+                            </p>
+                        </div>
                     </div>
                 ) : (
                     <p className="text-xs text-secondary mb-0">Reports still arrive and notify your team.</p>
