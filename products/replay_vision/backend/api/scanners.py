@@ -91,6 +91,7 @@ from products.replay_vision.backend.temporal.constants import (
     MAX_IN_FLIGHT_APPLIES_PER_TEAM,
     MAX_SESSION_ID_LENGTH,
 )
+from products.replay_vision.backend.temporal.metrics import record_scanner_limit_reached
 from products.replay_vision.backend.temporal.scanners import validate_scanner_config
 
 # Date is set by the schedule at trigger time, not by the user — strip on save.
@@ -275,6 +276,9 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
         required=False,
         allow_null=True,
         min_value=1,
+        # int4 bound: a declared IntegerField skips the model's implicit range validation, and DRF
+        # never runs full_clean, so an over-int4 value would otherwise 500 in Postgres instead of 400.
+        max_value=2147483647,
         help_text=(
             "Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level "
             "cap. When reached, this scanner stops scanning until the period resets. It stays enabled and "
@@ -1281,6 +1285,8 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
         # the user knows which limit they hit. Decrementing a local counter as we start models each new
         # in-flight row without re-querying (a started scan consumes exactly one slot).
         max_starts, skip_reason, team_rows, scanner_rows = self._bulk_observe_headroom(scanner)
+        if skip_reason == "skipped_scanner_limit" and max_starts < len(session_ids):
+            record_scanner_limit_reached("bulk")
         results: list[dict[str, str]] = []
         started = 0
         for session_id in session_ids:
@@ -1361,7 +1367,8 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
         )
         snapshot = compute_quota_snapshot(self.team.organization_id)
         cost = observation_credits_for_model(scanner.model)
-        scanner_remaining = compute_scanner_budget(scanner).remaining
+        # Skip the aggregate entirely for the uncapped common case, as check_scanner_quota does.
+        scanner_remaining = compute_scanner_budget(scanner).remaining if scanner.credit_limit is not None else None
         # Uncapped (remaining None) means that limit never binds. Otherwise, how many of THIS model's cost fit.
         org_limit = in_flight_limit if snapshot.remaining is None else (snapshot.remaining // cost if cost else 0)
         scanner_limit = in_flight_limit if scanner_remaining is None else (scanner_remaining // cost if cost else 0)

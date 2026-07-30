@@ -44,6 +44,7 @@ import { creditsToUsd, formatCreditCount } from '../utils/credits'
 import { VisionMetrics } from './components/VisionMetrics'
 import { VisionUsageTab } from './components/VisionUsageTab'
 import { type ScannersSorting, SCANNERS_PAGE_SIZE, replayScannersLogic } from './replayScannersLogic'
+import { LIMIT_REACHED_TOOLTIP } from './scannerCopy'
 import { ENABLED_OPTIONS, EnabledFilter, SCANNER_TYPE_OPTIONS, ScannerType, ReplayScanner } from './types'
 
 const HedgehogXRay = pngHoggie(xRayPng)
@@ -182,7 +183,7 @@ export function ReplayScannersScene(): JSX.Element {
                         {scanner.enabled ? 'Enabled' : 'Disabled'}
                     </span>
                     {scanner.limit_reached && (
-                        <Tooltip title="This scanner stopped scanning until its credit limit resets at the start of the next billing period. Sessions skipped while capped are not scanned later.">
+                        <Tooltip title={LIMIT_REACHED_TOOLTIP}>
                             <LemonTag type="danger">Limit reached</LemonTag>
                         </Tooltip>
                     )}

@@ -7,7 +7,7 @@ import { BarChart } from '@posthog/quill-charts'
 import { useChartConfig, useChartTheme } from 'lib/charts/hooks'
 import { LemonProgress } from 'lib/lemon-ui/LemonProgress'
 
-import { creditsToUsd, formatCreditCount } from '../../utils/credits'
+import { creditsToUsd, formatCreditsRange } from '../../utils/credits'
 import { replayScannerLogic } from '../replayScannerLogic'
 import { scannerOverviewLogic } from '../scannerOverviewLogic'
 import { ScannerType } from '../types'
@@ -327,7 +327,7 @@ function CreditLimitOverview({ scannerId }: { scannerId: string }): JSX.Element 
         >
             <LemonProgress percent={usedPct} strokeColor={limitReached ? 'var(--danger)' : undefined} />
             <div className="text-sm tabular-nums">
-                {formatCreditCount(used)} of {formatCreditCount(limit)} (≈ {creditsToUsd(limit)} per period)
+                {formatCreditsRange(used, limit)} (≈ {creditsToUsd(limit)} per period)
             </div>
             {limitReached && (
                 // The tag can appear below 100%: a scanner stops as soon as what's left can't cover a whole

@@ -398,6 +398,8 @@ export const visionScannersCreateBodyDescriptionMax = 1000
 export const visionScannersCreateBodySamplingRateMin = 0
 export const visionScannersCreateBodySamplingRateMax = 1
 
+export const visionScannersCreateBodyCreditLimitMax = 2147483647
+
 export const VisionScannersCreateBody = /* @__PURE__ */ zod
     .object({
         name: zod
@@ -446,6 +448,7 @@ export const VisionScannersCreateBody = /* @__PURE__ */ zod
         credit_limit: zod
             .number()
             .min(1)
+            .max(visionScannersCreateBodyCreditLimitMax)
             .nullish()
             .describe(
                 "Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets. It stays enabled and does not scan the sessions it skipped."
@@ -487,6 +490,8 @@ export const visionScannersPartialUpdateBodyDescriptionMax = 1000
 
 export const visionScannersPartialUpdateBodySamplingRateMin = 0
 export const visionScannersPartialUpdateBodySamplingRateMax = 1
+
+export const visionScannersPartialUpdateBodyCreditLimitMax = 2147483647
 
 export const VisionScannersPartialUpdateBody = /* @__PURE__ */ zod
     .object({
@@ -539,6 +544,7 @@ export const VisionScannersPartialUpdateBody = /* @__PURE__ */ zod
         credit_limit: zod
             .number()
             .min(1)
+            .max(visionScannersPartialUpdateBodyCreditLimitMax)
             .nullish()
             .describe(
                 "Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level cap. When reached, this scanner stops scanning until the period resets. It stays enabled and does not scan the sessions it skipped."

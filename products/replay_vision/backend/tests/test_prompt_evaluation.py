@@ -42,6 +42,7 @@ from products.replay_vision.backend.temporal.evaluation_types import (
     RecordEvaluationResultInputs,
     SelectEvaluationSessionsInputs,
 )
+from products.replay_vision.backend.tests.helpers import seed_scanner_spend
 from products.replay_vision.backend.tests.test_api import _VisionAPITestCase
 
 
@@ -623,33 +624,13 @@ class TestPromptEvaluationApi(_VisionAPITestCase):
         self.assertEqual(resp.json()["evaluation"]["status"], "running")
         client.start_workflow.assert_awaited_once()
 
-    def _seed_scanner_spend(self, credits: int) -> None:
-        # A receipt-less observation contributes nothing to compute_scanner_budget, which reads
-        # the ledger, so the spend must come from a real ReplayObservationUsage row.
-        observation = ReplayObservation.objects.create(
-            scanner=self.scanner,
-            session_id=f"seed-{self.scanner.id}",
-            triggered_by=ObservationTrigger.SCHEDULE,
-            status=ObservationStatus.SUCCEEDED,
-            completed_at=timezone.now(),
-        )
-        ReplayObservationUsage.objects.create(
-            observation_id=observation.id,
-            organization_id=self.team.organization_id,
-            team_id=self.team.id,
-            scanner_id=self.scanner.id,
-            observation_created_at=observation.created_at,
-            model=self.scanner.model,
-            credits=credits,
-        )
-
     def test_evaluate_is_refused_when_the_scanner_limit_cannot_cover_the_test(self) -> None:
         for i in range(3):
             self._create_rated(f"sess-{i}")
         suggestion = self._create_pending_suggestion()
         session_credits = observation_credits_for_model(self.scanner.model)
         # Spend leaves exactly one re-run's worth of credits, but the default plans three.
-        self._seed_scanner_spend(2 * session_credits)
+        seed_scanner_spend(self.scanner, 2 * session_credits)
         ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=3 * session_credits)
         connect_patch, client = self._mock_temporal()
         with connect_patch:

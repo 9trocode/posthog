@@ -131,7 +131,10 @@ from products.replay_vision.backend.temporal.workflow import (
     _extract_kind_for_type,
     _root_cause_message,
 )
-from products.replay_vision.backend.tests.helpers import snapshot_for as _snapshot_for
+from products.replay_vision.backend.tests.helpers import (
+    seed_scanner_spend,
+    snapshot_for as _snapshot_for,
+)
 from products.signals.backend.contracts import ReplayVisionScannerFindingSignalInput
 from products.signals.backend.models import SignalSourceConfig
 
@@ -486,30 +489,6 @@ class TestCreateObservationActivity:
         )
         assert not ReplayObservation.objects.filter(scanner=scanner, session_id="sess-no-consent").exists()
 
-    @staticmethod
-    def _seed_spent_credits(scanner: ReplayScanner, credits: int) -> None:
-        # Mirrors production: a succeeded observation's spend only counts once it has a usage receipt.
-        if credits <= 0:
-            return
-        observation = ReplayObservation.objects.create(
-            scanner=scanner,
-            team=scanner.team,
-            session_id=f"sess-spent-{ReplayObservation.objects.count()}",
-            status=ObservationStatus.SUCCEEDED,
-            scanner_snapshot=_snapshot_for(scanner),
-            triggered_by=ObservationTrigger.ON_DEMAND,
-            completed_at=timezone.now(),
-        )
-        ReplayObservationUsage.objects.create(
-            observation_id=observation.id,
-            organization_id=scanner.team.organization_id,
-            team_id=scanner.team_id,
-            scanner_id=scanner.id,
-            observation_created_at=observation.created_at,
-            model=scanner.model,
-            credits=credits,
-        )
-
     @parameterized.expand(
         [
             (None, 0, True),
@@ -526,7 +505,7 @@ class TestCreateObservationActivity:
         self, limit: int | None, already_spent_credits: int, expect_created: bool
     ) -> None:
         scanner = _make_scanner(credit_limit=limit)
-        self._seed_spent_credits(scanner, already_spent_credits)
+        seed_scanner_spend(scanner, already_spent_credits)
 
         result = create_observation_activity(
             CreateObservationInputs(
@@ -576,6 +555,39 @@ class TestCreateObservationActivity:
 
         assert sorted(created.values()) == [False, True]
         assert ReplayObservation.objects.filter(scanner=scanner, status=ObservationStatus.PENDING).count() == 1
+
+    def test_concurrent_admissions_for_an_uncapped_scanner_both_succeed(self) -> None:
+        # The admission lock is only taken for capped scanners. Uncapped scanners, which is every
+        # scanner in production today, must keep the unserialized path: both applies insert their row.
+        scanner = _make_scanner(credit_limit=None)
+        barrier = threading.Barrier(2)
+        created: dict[str, bool] = {}
+
+        def admit(session_id: str) -> None:
+            barrier.wait()
+            try:
+                created[session_id] = create_observation_activity(
+                    CreateObservationInputs(
+                        scanner_id=scanner.id,
+                        team_id=scanner.team_id,
+                        session_id=session_id,
+                        triggered_by=ObservationTrigger.SCHEDULE,
+                        triggered_by_user_id=None,
+                        workflow_id=f"wf-{session_id}",
+                    )
+                ).was_created
+            finally:
+                # Dropping the worker's own connection avoids stranding state past teardown.
+                connections.close_all()
+
+        threads = [threading.Thread(target=admit, args=(s,)) for s in ("free-a", "free-b")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert sorted(created.values()) == [True, True]
+        assert ReplayObservation.objects.filter(scanner=scanner, status=ObservationStatus.PENDING).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)

@@ -1,5 +1,15 @@
 from typing import Any
 
+from django.utils import timezone
+
+from posthog.models.utils import uuid7
+
+from products.replay_vision.backend.models.replay_observation import (
+    ObservationStatus,
+    ObservationTrigger,
+    ReplayObservation,
+)
+from products.replay_vision.backend.models.replay_observation_usage import ReplayObservationUsage
 from products.replay_vision.backend.models.replay_scanner import ReplayScanner
 from products.replay_vision.backend.temporal.activities.create_observation import _build_scanner_snapshot
 
@@ -7,3 +17,38 @@ from products.replay_vision.backend.temporal.activities.create_observation impor
 def snapshot_for(scanner: ReplayScanner) -> dict[str, Any]:
     """Build the same `scanner_snapshot` payload that `create_observation_activity` would persist."""
     return _build_scanner_snapshot(scanner)
+
+
+def seed_scanner_spend(scanner: ReplayScanner, credits: int, *, observations: int = 1) -> None:
+    """Settle spend for a scanner: `observations` succeeded rows, each with a `credits` usage receipt.
+
+    A receipt-less observation contributes nothing to `compute_scanner_budget`, which reads the
+    ledger, so seeded spend must come from real `ReplayObservationUsage` rows.
+    """
+    if credits <= 0 or observations <= 0:
+        return
+    snapshot = snapshot_for(scanner)
+    rows = ReplayObservation.objects.bulk_create(
+        ReplayObservation(
+            scanner=scanner,
+            team=scanner.team,
+            session_id=f"seed-spend-{uuid7()}",
+            status=ObservationStatus.SUCCEEDED,
+            completed_at=timezone.now(),
+            scanner_snapshot=snapshot,
+            triggered_by=ObservationTrigger.SCHEDULE,
+        )
+        for _ in range(observations)
+    )
+    ReplayObservationUsage.objects.bulk_create(
+        ReplayObservationUsage(
+            observation_id=row.id,
+            organization_id=scanner.team.organization_id,
+            team_id=scanner.team_id,
+            scanner_id=scanner.id,
+            observation_created_at=row.created_at,
+            model=scanner.model,
+            credits=credits,
+        )
+        for row in rows
+    )

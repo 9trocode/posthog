@@ -384,6 +384,66 @@ describe('replayScannerLogic', () => {
         })
     })
 
+    describe('creditLimitState', () => {
+        const estimate = (perMonth: number | null, perObservation = 15): void => {
+            logic.actions.loadScannerEstimateSuccess({
+                estimated_credits_per_month: perMonth,
+                credits_per_observation: perObservation,
+            } as any)
+        }
+
+        it('decodes null as limit off', async () => {
+            logic.actions.setScannerValues({ credit_limit: null })
+            await expectLogic(logic).toMatchValues({
+                creditLimitState: expect.objectContaining({ limit: null, isOn: false, isEmptyButEnabled: false }),
+            })
+        })
+
+        it('decodes the NaN sentinel as on-but-empty, which blocks the save', async () => {
+            logic.actions.setScannerValues({ credit_limit: NaN })
+            await expectLogic(logic).toMatchValues({
+                creditLimitState: expect.objectContaining({ limit: null, isOn: true, isEmptyButEnabled: true }),
+            })
+        })
+
+        it('seeds the field with double the forecast when one exists', async () => {
+            estimate(100)
+            await expectLogic(logic).toMatchValues({
+                creditLimitState: expect.objectContaining({ seedValue: 200 }),
+            })
+        })
+
+        it('seeds at least one credit for a tiny but non-zero forecast', async () => {
+            estimate(0.3)
+            await expectLogic(logic).toMatchValues({
+                creditLimitState: expect.objectContaining({ seedValue: 1 }),
+            })
+        })
+
+        it.each([
+            ['no estimate', null],
+            ['a zero estimate, which must not seed a 1-credit cap', 0],
+        ])('leaves the field empty with %s', async (_name, perMonth) => {
+            estimate(perMonth as number | null)
+            await expectLogic(logic).toMatchValues({
+                creditLimitState: expect.objectContaining({ seedValue: NaN }),
+            })
+        })
+
+        it('flags a limit below the forecast and one below a single scan', async () => {
+            estimate(100, 15)
+            logic.actions.setScannerValues({ credit_limit: 10 })
+            await expectLogic(logic).toMatchValues({
+                creditLimitState: expect.objectContaining({
+                    limit: 10,
+                    isOn: true,
+                    isBelowEstimate: true,
+                    cannotAffordOneScan: true,
+                }),
+            })
+        })
+    })
+
     describe('buildObservationListParams', () => {
         const monitorScanner = { scanner_type: 'monitor' } as ReplayScanner
         const scorerScanner = { scanner_type: 'scorer' } as ReplayScanner

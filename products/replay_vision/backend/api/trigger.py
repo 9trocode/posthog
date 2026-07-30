@@ -39,6 +39,7 @@ from products.replay_vision.backend.temporal.constants import (
     build_apply_scanner_workflow_id,
     build_process_vision_action_workflow_id,
 )
+from products.replay_vision.backend.temporal.metrics import record_scanner_limit_reached
 from products.replay_vision.backend.temporal.types import ApplyScannerInputs
 
 logger = structlog.get_logger(__name__)
@@ -63,9 +64,9 @@ def check_team_in_flight_capacity(team_id: int) -> None:
 def check_observation_quota(organization_id: UUID, observation_credits: int) -> None:
     """Raise 402 when starting an observation of this credit cost would exceed the org's monthly limit."""
     snapshot = compute_quota_snapshot(organization_id=organization_id)
-    if snapshot.would_exceed(observation_credits):
-        # would_exceed is only ever true when a limit is set, so credit_limit is non-None here.
-        assert snapshot.credit_limit is not None
+    # would_exceed is only ever true when a limit is set; checking it directly narrows the type
+    # without an assert, which vanishes under python -O.
+    if snapshot.credit_limit is not None and snapshot.would_exceed(observation_credits):
         raise QuotaLimitExceeded(
             detail=(
                 f"Starting this observation would exceed your monthly Replay vision limit of "
@@ -81,15 +82,18 @@ def check_scanner_quota(scanner: ReplayScanner) -> None:
     if scanner.credit_limit is None:
         return
     budget = compute_scanner_budget(scanner)
-    if budget.blocked:
-        # blocked is only ever true when a limit is set, so credit_limit is non-None here.
-        assert budget.credit_limit is not None
+    # blocked is only ever true when a limit is set; the direct check narrows without an assert.
+    if budget.credit_limit is not None and budget.blocked:
+        record_scanner_limit_reached("on_demand")
+        # A distinct code so clients can tell this apart from the org-level quota_limit_exceeded
+        # and point at the right control.
         raise QuotaLimitExceeded(
             detail=(
                 f"This scanner has {budget.remaining:,} of its {budget.credit_limit:,} credit limit left "
                 f"for this period, not enough for another observation. Raise the scanner's limit to keep "
                 f"scanning."
-            )
+            ),
+            code="scanner_credit_limit_exceeded",
         )
 
 

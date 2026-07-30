@@ -8,11 +8,11 @@ import { LemonLabel } from 'lib/lemon-ui/LemonLabel'
 import { creditsToUsd } from '../../utils/credits'
 import { replayScannerLogic } from '../replayScannerLogic'
 
-interface Props {
+interface ScannerCreditLimitProps {
     scannerId: string
 }
 
-export function ScannerCreditLimit({ scannerId }: Props): JSX.Element {
+export function ScannerCreditLimit({ scannerId }: ScannerCreditLimitProps): JSX.Element {
     const { creditLimitState } = useValues(replayScannerLogic({ id: scannerId }))
     const {
         limit,

@@ -69,6 +69,26 @@ class SweepScannerWorkflow(PostHogWorkflow):
 
     @wf.run
     async def run(self, inputs: SweepScannerInputs) -> None:
+        # A scanner over its own credit limit does no work this tick: no vision-action dispatch, no
+        # prompt refresh, no candidate read. Best-effort and fail-open, like the neighbouring optional
+        # steps: during a rolling deploy an old worker without this activity registered must not fail
+        # the sweep, and admissions are still gated at the persistence boundary either way. Patched so
+        # sweeps already in flight across the deploy replay their recorded history unchanged.
+        if wf.patched("replay-vision-scanner-credit-limit"):
+            try:
+                budget = await wf.execute_activity(
+                    check_scanner_budget_activity,
+                    CheckScannerBudgetInputs(scanner_id=inputs.scanner_id, team_id=inputs.team_id),
+                    start_to_close_timeout=CHECK_SCANNER_BUDGET_TIMEOUT,
+                    retry_policy=common.RetryPolicy(maximum_attempts=1),
+                )
+                if budget.capped:
+                    return
+            except Exception:
+                wf.logger.warning(
+                    "replay_vision.scanner_budget_check_failed", extra={"scanner_id": str(inputs.scanner_id)}
+                )
+
         # The sweep is also the heartbeat for this scanner's "and then…" vision actions. Run it first
         # and best-effort: a vision-action problem must never block the scanner's core session scan,
         # and it's independent of the in-flight throttle below (which is about apply-scanner load).
@@ -90,18 +110,6 @@ class SweepScannerWorkflow(PostHogWorkflow):
                 wf.logger.warning(
                     "replay_vision.prompt_suggestion_refresh_failed", extra={"scanner_id": str(inputs.scanner_id)}
                 )
-
-        # A scanner over its own credit limit does no work this tick: no candidate read, no dispatch.
-        # Patched so sweeps already in flight across the deploy replay their recorded history unchanged.
-        if wf.patched("replay-vision-scanner-credit-limit"):
-            budget = await wf.execute_activity(
-                check_scanner_budget_activity,
-                CheckScannerBudgetInputs(scanner_id=inputs.scanner_id, team_id=inputs.team_id),
-                start_to_close_timeout=CHECK_SCANNER_BUDGET_TIMEOUT,
-                retry_policy=common.RetryPolicy(maximum_attempts=1),
-            )
-            if budget.capped:
-                return
 
         # Hard concurrency caps: per scanner (one bad config) and per team (many scanners), enforced as the
         # min of the two headrooms. Skip entirely when saturated. Keeps any single tenant from flooding the
