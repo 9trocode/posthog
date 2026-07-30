@@ -137,10 +137,17 @@ def find_sessions_timestamps_dropping_missing(
     # Dedupe while preserving order: duplicate IDs would otherwise spawn duplicate summarization tasks
     found = list(dict.fromkeys(sid for sid in session_ids if sid in result.session_ids))
     missing = list(dict.fromkeys(sid for sid in session_ids if sid not in result.session_ids))
-    if not found or result.min_timestamp is None or result.max_timestamp is None:
+    if not found:
         msg = (
             "Session recordings not found for the following IDs (the recording may not have been captured, "
             f"may have expired, or may belong to a different team): {', '.join(missing)}"
+        )
+        logger.error(msg, team_id=team.id, signals_type="session-summaries")
+        raise exceptions.ValidationError(msg)
+    if result.min_timestamp is None or result.max_timestamp is None:
+        msg = (
+            f"Failed to get min ({result.min_timestamp}) or max ({result.max_timestamp}) "
+            f"timestamps for sessions: {', '.join(found)}"
         )
         logger.error(msg, team_id=team.id, signals_type="session-summaries")
         raise exceptions.ValidationError(msg)
