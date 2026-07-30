@@ -5558,6 +5558,7 @@ export namespace Schemas {
       CustomerioTrack: 'customerio-track',
       Apns: 'apns',
       Postgresql: 'postgresql',
+      Quickbooks: 'quickbooks',
       AwsS3: 'aws-s3',
       S3Compatible: 's3-compatible',
       Snowflake: 'snowflake',
