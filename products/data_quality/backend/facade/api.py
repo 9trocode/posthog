@@ -23,7 +23,12 @@ from ..logic.health import CheckStatusRow, roll_up_health
 from ..logic.registry import UnknownCheckTypeError, all_specs, get_spec
 from ..logic.serialization import compute_fingerprint, from_config_entry, to_config_entry
 from ..logic.spec import CheckConfig, CheckTypeSpec
-from ..logic.subject_access import denied_subject_names, is_subject_denied, referenced_subject_names
+from ..logic.subject_access import (
+    check_type_reads_beyond_subject,
+    denied_subject_names,
+    is_subject_denied,
+    referenced_subject_names,
+)
 from ..logic.subjects import resolve_subject
 from .models import DataQualityCheck, DataQualityCheckRun, DataQualitySuiteRun
 
@@ -42,6 +47,7 @@ __all__ = [
     "SubjectUnresolvableError",
     "UnknownCheckTypeError",
     "all_specs",
+    "check_type_reads_beyond_subject",
     "checks_for_subject",
     "compile_check",
     "compute_fingerprint",

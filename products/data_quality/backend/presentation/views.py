@@ -371,7 +371,25 @@ class DataQualitySuiteRunViewSet(
                 name = ref.name if ref.exists else None
             if name and api.is_subject_denied(name, denied):
                 blocked.add(key)
+                continue
+            # The declared subject is visible, but a relationships/custom_sql check on it reads a
+            # further subject the member is denied. The suite's passed/failed counts then reflect an
+            # outcome over that denied table, so hide the whole single-subject suite rather than leak
+            # that its referenced-but-denied check ran.
+            if self._subject_has_denied_reference(subject_type, key, denied):
+                blocked.add(key)
         return blocked
+
+    def _subject_has_denied_reference(self, subject_type: str, subject_uuid: str, denied: set[str]) -> bool:
+        # All non-deleted checks, not just enabled ones: a now-disabled check may still have moved the
+        # counts of an earlier suite run, and its config still names the denied subject it read.
+        for check in api.checks_for_subject(self.team_id, subject_type, subject_uuid):
+            if any(
+                api.is_subject_denied(name, denied)
+                for name in api.referenced_subject_names(self.team_id, check.check_type, check.config)
+            ):
+                return True
+        return False
 
     @extend_schema(
         description="Every check execution in this suite run.",
@@ -381,10 +399,28 @@ class DataQualitySuiteRunViewSet(
     def check_runs(self, request: Request, **kwargs) -> Response:
         suite_run = self.get_object()
         runs: list[DataQualityCheckRun] = list(
-            DataQualityCheckRun.objects.for_team(self.team_id).filter(suite_run=suite_run).order_by("-created_at")
+            DataQualityCheckRun.objects.for_team(self.team_id)
+            .filter(suite_run=suite_run)
+            .select_related("quality_check")
+            .order_by("-created_at")
         )
         # A suite run is not subject-scoped, so drop runs whose subject the member is denied -- each
-        # carries the failed-row count and observed value.
+        # carries the failed-row count, observed value, and compiled query. "Subject" here is every
+        # subject the run reads, not just the declared one: a scheduled relationships/custom_sql run
+        # also touches a referenced table, and the per-check `runs` action already gates on those.
         if denied := self._denied_subject_names():
-            runs = [run for run in runs if not api.is_subject_denied(run.subject_name, denied)]
+            runs = [run for run in runs if not self._run_reads_denied_subject(run, denied)]
         return Response(DataQualityCheckRunSerializer(runs, many=True).data)
+
+    def _run_reads_denied_subject(self, run: DataQualityCheckRun, denied: set[str]) -> bool:
+        if api.is_subject_denied(run.subject_name, denied):
+            return True
+        check = run.quality_check
+        if check is None:
+            # The definition was hard-deleted, nulling the FK, so its referenced subjects can no
+            # longer be enumerated. Fail closed for the types that read beyond their declared subject.
+            return api.check_type_reads_beyond_subject(run.check_type)
+        return any(
+            api.is_subject_denied(name, denied)
+            for name in api.referenced_subject_names(self.team_id, run.check_type, check.config)
+        )

@@ -23,6 +23,7 @@ from products.notifications.backend.facade.api import (
 
 from ..facade.enums import SubjectType
 from ..models import DataQualityCheck
+from .subject_access import denied_subject_names, is_subject_denied, referenced_subject_names
 
 LOGGER = structlog.get_logger(__name__)
 
@@ -43,6 +44,9 @@ class _WarehouseSubjectResolver(RecipientsResolver):
     - **Object-level** access to *this* table or view. The resource-level filter only asks whether a
       member can see warehouse objects at all, so a member with general warehouse access but an
       explicit denial on the subject would still receive its name, column, check type, and count.
+    - **Referenced-subject** access. A `relationships` check reads a second subject and a `custom_sql`
+      check reads arbitrary tables, so `failed_row_count` is a count oracle over those too. A member
+      denied any subject the check reads must be dropped, matching how the run-history API gates them.
     - **Query** viewer access. The body's `failed_row_count` is a count oracle over the underlying
       warehouse rows that the run-history API gates behind query access, so a member denied `query`
       must not read it from the notification either.
@@ -55,7 +59,8 @@ class _WarehouseSubjectResolver(RecipientsResolver):
     def resolve(self, target_type: TargetType, target_id: str, team_id: int | None) -> list[int]:
         user_ids = super().resolve(target_type, target_id, team_id)
         user_ids = self.filter_by_access_control(user_ids, "query", self._team)
-        return self._filter_by_object_access(user_ids)
+        user_ids = self._filter_by_object_access(user_ids)
+        return self._filter_by_referenced_subject_access(user_ids)
 
     def _filter_by_object_access(self, user_ids: list[int]) -> list[int]:
         resource = _SUBJECT_RESOURCE.get(SubjectType(self._check.subject_type))
@@ -77,6 +82,21 @@ class _WarehouseSubjectResolver(RecipientsResolver):
                 .get(object_id)
             )
             if level is not None and access_level_satisfied_for_resource(resource, level, "viewer"):
+                allowed.append(user.id)
+        return allowed
+
+    def _filter_by_referenced_subject_access(self, user_ids: list[int]) -> list[int]:
+        # The declared subject isn't the only one the count depends on: a relationships check reads
+        # its target and a custom_sql check reads arbitrary tables. Drop members denied any of those,
+        # matching the run-history endpoint -- resolved by name the same way the loaders resolve them.
+        names = referenced_subject_names(self._team.id, self._check.check_type, self._check.config)
+        if not names:
+            return user_ids
+
+        allowed: list[int] = []
+        for user in User.objects.filter(id__in=user_ids):
+            denied = denied_subject_names(self._team, user)
+            if not any(is_subject_denied(name, denied) for name in names):
                 allowed.append(user.id)
         return allowed
 

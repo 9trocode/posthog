@@ -3,6 +3,8 @@ from uuid import uuid4
 from posthog.test.base import BaseTest
 from unittest.mock import patch
 
+from django.core.cache import cache
+
 from parameterized import parameterized
 
 from posthog.constants import AvailableFeature
@@ -36,7 +38,9 @@ class _Response:
 class TestDataQualityNotifications(BaseTest):
     def setUp(self) -> None:
         super().setUp()
-        self.view = DataWarehouseSavedQuery.objects.create(team=self.team, name="orders", query={"kind": "HogQLQuery"})
+        self.view = DataWarehouseSavedQuery.objects.create(
+            team=self.team, name="orders", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
+        )
         self.suite_run = DataQualitySuiteRun.objects.for_team(self.team.id).create(
             team=self.team, trigger=SuiteRunTrigger.MANUAL
         )
@@ -145,6 +149,61 @@ class TestDataQualityNotifications(BaseTest):
         resolved = _WarehouseSubjectResolver(check, self.team).resolve(TargetType.TEAM, str(self.team.id), self.team.id)
 
         assert allowed.id in resolved
+        assert blocked.id not in resolved
+
+    def _deny_view_for_member(self, view, member: User) -> None:
+        # Deny one member object-level access to a view the way the HogQL database sees it, so
+        # denied_subject_names() picks it up -- the same setup the REST run-history tests use.
+        self.organization.available_product_features = [
+            {"key": AvailableFeature.ACCESS_CONTROL, "name": AvailableFeature.ACCESS_CONTROL}
+        ]
+        self.organization.save(update_fields=["available_product_features"])
+        AccessControl.objects.create(
+            team=self.team,
+            resource="warehouse_view",
+            resource_id=str(view.id),
+            organization_member=OrganizationMembership.objects.get(organization=self.organization, user=member),
+            access_level="none",
+        )
+        flag = patch(
+            "posthog.hogql.database.database.feature_enabled_or_false",
+            side_effect=lambda name, *a, **k: name == "hogql-warehouse-access-control",
+        )
+        flag.start()
+        self.addCleanup(flag.stop)
+        cache.clear()
+
+    @parameterized.expand(
+        [
+            ("custom_sql", CheckType.CUSTOM_SQL, "", {"query": "SELECT 1 FROM orders"}),
+            ("relationships", CheckType.RELATIONSHIPS, "customer_id", None),
+        ]
+    )
+    def test_members_denied_a_referenced_subject_do_not_get_the_notification(
+        self, _name, check_type, column_name, config
+    ) -> None:
+        # A relationships check reads a target subject and a custom_sql check reads arbitrary tables,
+        # so the failing-row count is a count oracle over those too. A member allowed the declared
+        # subject ("customers") but denied a referenced one ("orders") must be dropped, matching the
+        # run-history endpoint -- while an admin, who is denied nothing, still receives it.
+        customers = DataWarehouseSavedQuery.objects.create(
+            team=self.team, name="customers", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
+        )
+        if config is None:
+            config = {"to_subject_type": SubjectType.VIEW, "to_subject_uuid": str(self.view.id), "to_column": "id"}
+        blocked = User.objects.create_and_join(self.organization, "blocked-ref@test.com", "password")
+        self._deny_view_for_member(self.view, blocked)
+        check = self._check(
+            subject_uuid=customers.id,
+            subject_name="customers",
+            check_type=check_type,
+            column_name=column_name,
+            config=config,
+        )
+
+        resolved = _WarehouseSubjectResolver(check, self.team).resolve(TargetType.TEAM, str(self.team.id), self.team.id)
+
+        assert self.user.id in resolved
         assert blocked.id not in resolved
 
     def test_a_notification_failure_does_not_fail_the_run(self) -> None:

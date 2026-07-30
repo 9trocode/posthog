@@ -518,6 +518,89 @@ class TestDataQualityCheckAPI(APIBaseTest):
 
     @parameterized.expand(
         [
+            ("custom_sql", CheckType.CUSTOM_SQL, "", {"query": "SELECT 1 FROM orders"}),
+            ("relationships", CheckType.RELATIONSHIPS, "customer_id", None),
+        ]
+    )
+    def test_check_runs_drop_runs_that_read_a_denied_referenced_subject(self, _name, check_type, column_name, config):
+        # The run's declared subject ("customers") is allowed, but the check reads the denied "orders"
+        # -- a custom_sql table or a relationships target. Its failed_row_count is an oracle over
+        # orders, so check_runs must drop it too, not only runs whose declared subject is denied.
+        allowed = DataWarehouseSavedQuery.objects.create(
+            team=self.team, name="customers", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
+        )
+        if config is None:
+            config = {"to_subject_type": SubjectType.VIEW, "to_subject_uuid": str(self.view.id), "to_column": "id"}
+        check = DataQualityCheck.objects.for_team(self.team.id).create(
+            team=self.team,
+            subject_type=SubjectType.VIEW,
+            subject_uuid=allowed.id,
+            subject_name="customers",
+            check_type=check_type,
+            column_name=column_name,
+            config=config,
+            fingerprint=uuid4().hex,
+        )
+        suite_run = DataQualitySuiteRun.objects.for_team(self.team.id).create(team=self.team, trigger="manual")
+        DataQualityCheckRun.objects.for_team(self.team.id).create(
+            team=self.team,
+            suite_run=suite_run,
+            quality_check=check,
+            subject_type=SubjectType.VIEW,
+            subject_uuid=allowed.id,
+            subject_name="customers",
+            check_type=check_type,
+            check_fingerprint=uuid4().hex,
+            status=CheckRunStatus.FAILED,
+            failed_row_count=3,
+        )
+        self._deny_the_view()
+
+        url = f"/api/projects/{self.team.id}/data_quality/check_suite_runs/{suite_run.id}/check_runs/"
+        response = self.client.get(url)
+
+        assert response.json() == []
+
+    @parameterized.expand(
+        [
+            ("custom_sql", CheckType.CUSTOM_SQL, "", {"query": "SELECT 1 FROM orders"}),
+            ("relationships", CheckType.RELATIONSHIPS, "customer_id", None),
+        ]
+    )
+    def test_single_subject_suite_hidden_when_its_subject_reads_a_denied_reference(
+        self, _name, check_type, column_name, config
+    ):
+        # A single-subject suite on the allowed "customers" whose check reads the denied "orders"
+        # exposes aggregate counts reflecting an outcome over orders, so list and detail must hide it
+        # -- not only suites whose declared subject is itself denied.
+        allowed = DataWarehouseSavedQuery.objects.create(
+            team=self.team, name="customers", query={"kind": "HogQLQuery", "query": "SELECT 1 AS id"}
+        )
+        if config is None:
+            config = {"to_subject_type": SubjectType.VIEW, "to_subject_uuid": str(self.view.id), "to_column": "id"}
+        DataQualityCheck.objects.for_team(self.team.id).create(
+            team=self.team,
+            subject_type=SubjectType.VIEW,
+            subject_uuid=allowed.id,
+            subject_name="customers",
+            check_type=check_type,
+            column_name=column_name,
+            config=config,
+            fingerprint=uuid4().hex,
+        )
+        suite = DataQualitySuiteRun.objects.for_team(self.team.id).create(
+            team=self.team, trigger="manual", subject_type=SubjectType.VIEW, subject_uuid=allowed.id
+        )
+        self._deny_the_view()
+
+        base = f"/api/projects/{self.team.id}/data_quality/check_suite_runs"
+        listed = self.client.get(f"{base}/")
+
+        assert str(suite.id) not in {row["id"] for row in listed.json()["results"]}
+        assert self.client.get(f"{base}/{suite.id}/").status_code == status.HTTP_404_NOT_FOUND
+
+    @parameterized.expand(
+        [
             ("create", lambda self, check: self.client.post(f"{self.url}/", self._payload(column_name="total"))),
             ("run", lambda self, check: self.client.post(f"{self.url}/{check.id}/run/")),
             ("runs", lambda self, check: self.client.get(f"{self.url}/{check.id}/runs/")),
