@@ -1,5 +1,6 @@
 import json
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
 from textwrap import dedent
 from typing import Any, Literal, cast
@@ -30,7 +31,10 @@ from ee.hogai.session_summaries.constants import (
 from ee.hogai.session_summaries.session.stringify import SingleSessionSummaryStringifier
 from ee.hogai.session_summaries.session_group.patterns import EnrichedSessionGroupSummaryPatternsList
 from ee.hogai.session_summaries.session_group.stringify import SessionGroupSummaryStringifier
-from ee.hogai.session_summaries.session_group.summarize_session_group import find_sessions_timestamps_dropping_missing
+from ee.hogai.session_summaries.session_group.summarize_session_group import (
+    find_sessions_timestamps_dropping_missing,
+    partition_sessions_by_recording_existence,
+)
 from ee.hogai.session_summaries.tracking import (
     capture_session_summary_generated,
     capture_session_summary_started,
@@ -40,6 +44,15 @@ from ee.hogai.tool import MaxTool
 from ee.hogai.utils.state import prepare_reasoning_progress_message
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class SessionSummariesResult:
+    """Result of a chat summarization run; summary_id is only set for the group path."""
+
+    content: str
+    summary_id: str | None
+    failed_sessions: list[FailedSessionInfo]
 
 
 class SummarizeSessionsToolArgs(BaseModel):
@@ -157,23 +170,20 @@ class SummarizeSessionsTool(MaxTool):
         )
         try:
             # Summarize the sessions
-            summaries_content, session_group_summary_id, failed_sessions = await self._summarize_sessions(
+            result = await self._summarize_sessions(
                 session_ids=session_ids,
                 summary_title=summary_title,
                 session_ids_source=llm_provided_session_ids_source,
                 # Recordings that were already missing at validation time still get reported as skipped
                 pre_dropped_session_ids=missing_session_ids,
             )
-            content: str | None = None
+            content: str | None = result.content
             artifact: dict | None = None
-            if session_group_summary_id:
-                content = summaries_content
+            if result.summary_id:
                 artifact = {
                     "title": summary_title or "Sessions summary",
-                    "session_group_summary_id": session_group_summary_id,
+                    "session_group_summary_id": result.summary_id,
                 }
-            else:
-                content, artifact = summaries_content, None
         except Exception as err:
             capture_session_summary_generated(
                 user=self._user,
@@ -195,7 +205,7 @@ class SummarizeSessionsTool(MaxTool):
             summary_type=summary_type,
             session_ids=session_ids,
             success=True,
-            failed_session_count=len(failed_sessions),
+            failed_session_count=len(result.failed_sessions),
         )
         return content, artifact
 
@@ -387,8 +397,8 @@ class SummarizeSessionsTool(MaxTool):
         dropped_sessions: list[FailedSessionInfo],
         min_timestamp: datetime,
         max_timestamp: datetime,
-    ) -> tuple[str, str, list[FailedSessionInfo]]:
-        """Summarize sessions as a group. Returns (summary_str, summary_id, failed_sessions)."""
+    ) -> SessionSummariesResult:
+        """Summarize sessions as a group."""
         from ee.hogai.session_summaries.utils import logging_session_ids
 
         total_requested = len(session_ids) + len(dropped_sessions)
@@ -441,7 +451,11 @@ class SummarizeSessionsTool(MaxTool):
                     summary_str = self._stringify_group_summary(summary)
                     # The workflow persists the dropped sessions too, so they come back in `failed_sessions`
                     note = self._format_failed_sessions_note(failed_sessions, total_requested=total_requested)
-                    return note + summary_str, session_group_summary_id, failed_sessions
+                    return SessionSummariesResult(
+                        content=note + summary_str,
+                        summary_id=session_group_summary_id,
+                        failed_sessions=failed_sessions,
+                    )
                 else:
                     msg = f"Unexpected update type ({update_type}) in session group summarization (session_ids: {logging_session_ids(session_ids)})."  # type: ignore[unreachable]
                     logger.error(msg, signals_type="session-summaries")
@@ -458,8 +472,7 @@ class SummarizeSessionsTool(MaxTool):
         *,
         session_ids_source: Literal["filters", "explicit"],
         pre_dropped_session_ids: list[str] | None = None,
-    ) -> tuple[str, str | None, list[FailedSessionInfo]]:
-        """Returns (summary_str, summary_id, failed_sessions). summary_id is only populated for the group path."""
+    ) -> SessionSummariesResult:
         dropped_sessions = self._missing_recordings_as_failed(pre_dropped_session_ids or [])
         # Fetch per-session metadata for the progress widget
         metadata = await database_sync_to_async(self._get_session_metadata, thread_sensitive=False)(session_ids)
@@ -489,7 +502,9 @@ class SummarizeSessionsTool(MaxTool):
             note = self._format_failed_sessions_note(
                 failed_sessions, total_requested=len(session_ids) + len(dropped_sessions)
             )
-            return note + summaries_content, None, failed_sessions
+            return SessionSummariesResult(
+                content=note + summaries_content, summary_id=None, failed_sessions=failed_sessions
+            )
         # The group flow needs timestamps, and a recording can drop out between validation reads (still
         # ingesting, deleted, or a lagging replica), so report it as failed instead of erroring the whole batch
         sessions = await database_sync_to_async(find_sessions_timestamps_dropping_missing, thread_sensitive=False)(
@@ -507,28 +522,20 @@ class SummarizeSessionsTool(MaxTool):
             )
             failed_sessions = dropped_sessions + run_failed_sessions
             note = self._format_failed_sessions_note(failed_sessions, total_requested=total_requested)
-            return note + summaries_content, None, failed_sessions
+            return SessionSummariesResult(
+                content=note + summaries_content, summary_id=None, failed_sessions=failed_sessions
+            )
         # For large groups, process in detail, searching for patterns
-        summaries_content, session_group_summary_id, failed_sessions = await self._summarize_sessions_as_group(
+        return await self._summarize_sessions_as_group(
             session_ids=sessions.found_session_ids,
             summary_title=summary_title,
             dropped_sessions=dropped_sessions,
             min_timestamp=sessions.min_timestamp,
             max_timestamp=sessions.max_timestamp,
         )
-        return summaries_content, session_group_summary_id, failed_sessions
 
     def _validate_specific_session_ids(self, session_ids: list[str]) -> tuple[list[str], list[str]]:
         """Partition the requested session IDs into (found, missing), deduped and in the original order."""
-        from posthog.session_recordings.queries.session_replay_events import SessionReplayEvents
-
-        replay_events = SessionReplayEvents()
-        sessions_found = replay_events.sessions_found_with_timestamps(
-            session_ids=session_ids,
-            team=self._team,
-        ).session_ids
         # Dedupe while preserving order: duplicate IDs would otherwise spawn duplicate summarization tasks
         deduped_session_ids = list(dict.fromkeys(session_ids))
-        found = [sid for sid in deduped_session_ids if sid in sessions_found]
-        missing = [sid for sid in deduped_session_ids if sid not in sessions_found]
-        return found, missing
+        return partition_sessions_by_recording_existence(deduped_session_ids, self._team)

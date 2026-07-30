@@ -90,14 +90,14 @@ class TestSummarizeSessionsTool(BaseTest):
                 fake_execute_summarize_session_group,
             ),
         ):
-            content, summary_id, failed_sessions = await tool._summarize_sessions(
+            result = await tool._summarize_sessions(
                 session_ids=REQUESTED_SESSION_IDS, summary_title="Test", session_ids_source="explicit"
             )
 
         assert workflow_kwargs["session_ids"] == found_session_ids
-        assert summary_id == "summary-id"
-        assert [(fs.session_id, fs.category) for fs in failed_sessions] == [("s-6", "skipped")]
-        assert "only 6 of 7 sessions were included" in content
+        assert result.summary_id == "summary-id"
+        assert [(fs.session_id, fs.category) for fs in result.failed_sessions] == [("s-6", "skipped")]
+        assert "only 6 of 7 sessions were included" in result.content
 
     async def test_group_summary_falls_back_to_individual_when_too_few_recordings_are_left(self) -> None:
         found_session_ids, dropped_session_ids = REQUESTED_SESSION_IDS[:5], REQUESTED_SESSION_IDS[5:]
@@ -127,15 +127,18 @@ class TestSummarizeSessionsTool(BaseTest):
             patch("ee.hogai.tools.replay.summarize_sessions.SingleSessionSummaryStringifier") as mock_stringifier,
         ):
             mock_stringifier.return_value.stringify_session.return_value = "Session summary"
-            content, summary_id, failed_sessions = await tool._summarize_sessions(
+            result = await tool._summarize_sessions(
                 session_ids=REQUESTED_SESSION_IDS, summary_title="Test", session_ids_source="explicit"
             )
 
         mock_summarize_session_group.assert_not_called()
         assert sorted(call.kwargs["session_id"] for call in mock_summarize_session.await_args_list) == found_session_ids
-        assert summary_id is None
-        assert [(fs.session_id, fs.category) for fs in failed_sessions] == [("s-5", "skipped"), ("s-6", "skipped")]
-        assert "only 5 of 7 sessions were included" in content
+        assert result.summary_id is None
+        assert [(fs.session_id, fs.category) for fs in result.failed_sessions] == [
+            ("s-5", "skipped"),
+            ("s-6", "skipped"),
+        ]
+        assert "only 5 of 7 sessions were included" in result.content
 
     async def test_validate_specific_session_ids_dedupes_and_partitions(self) -> None:
         tool = await self._create_tool()
@@ -184,7 +187,7 @@ class TestSummarizeSessionsTool(BaseTest):
                 fake_execute_summarize_session_group,
             ),
         ):
-            content, summary_id, failed_sessions = await tool._summarize_sessions(
+            result = await tool._summarize_sessions(
                 session_ids=REQUESTED_SESSION_IDS,
                 summary_title="Test",
                 session_ids_source="explicit",
@@ -195,9 +198,9 @@ class TestSummarizeSessionsTool(BaseTest):
         assert [(fs.session_id, fs.category) for fs in workflow_kwargs["pre_run_failed_sessions"]] == [
             ("s-expired", "skipped")
         ]
-        assert summary_id == "summary-id"
-        assert [(fs.session_id, fs.category) for fs in failed_sessions] == [("s-expired", "skipped")]
-        assert "only 7 of 8 sessions were included" in content
+        assert result.summary_id == "summary-id"
+        assert [(fs.session_id, fs.category) for fs in result.failed_sessions] == [("s-expired", "skipped")]
+        assert "only 7 of 8 sessions were included" in result.content
 
     async def test_individual_summary_failures_are_counted_in_the_note(self) -> None:
         session_ids = REQUESTED_SESSION_IDS[:3]
@@ -215,11 +218,11 @@ class TestSummarizeSessionsTool(BaseTest):
             patch("ee.hogai.tools.replay.summarize_sessions.SingleSessionSummaryStringifier") as mock_stringifier,
         ):
             mock_stringifier.return_value.stringify_session.return_value = "Session summary"
-            content, summary_id, failed_sessions = await tool._summarize_sessions(
+            result = await tool._summarize_sessions(
                 session_ids=session_ids, summary_title="Test", session_ids_source="explicit"
             )
 
-        assert summary_id is None
-        assert [(fs.session_id, fs.category) for fs in failed_sessions] == [("s-1", "summarization_failed")]
-        assert "only 2 of 3 sessions were included" in content
-        assert content.count("Session summary") == 2
+        assert result.summary_id is None
+        assert [(fs.session_id, fs.category) for fs in result.failed_sessions] == [("s-1", "summarization_failed")]
+        assert "only 2 of 3 sessions were included" in result.content
+        assert result.content.count("Session summary") == 2
