@@ -588,6 +588,7 @@ depends_on = [
     "products.cdp",
     "products.cohorts",
     "products.exports",
+    "products.notifications",
     "products.signals",
     "products.tasks",
 ]
