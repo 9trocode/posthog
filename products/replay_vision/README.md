@@ -8,7 +8,7 @@ A sub-product of Session Replay. Users configure named **scanners** that PostHog
 
 **Observation** — one application of a scanner to a session, unique per (scanner, session). Created in `pending` when triggered (by the scanner's schedule or the `/observe/` action), transitions to `running` while `ApplyScannerWorkflow` executes (rasterize the recording to video → upload to Gemini → multi-turn scan), and lands in `succeeded` (result persisted, then a `$recording_observed` event plus embeddings/tags emitted fail-soft), `failed` (with a `kind:message` `error_reason`), or `ineligible` (the session doesn't qualify — too short, too idle, no recording). Each observation snapshots the full scanner state (`scanner_snapshot`) that produced it, so subsequent edits to the scanner don't retro-mutate history. Rows stranded in `pending`/`running` by a dead workflow are failed as `orphaned` by a reaper on the reconciler tick.
 
-**Quota** — succeeded observations write an immutable usage receipt; usage (receipts + in-flight rows) is counted against a monthly per-organization quota, with per-scanner volume estimates summed into a projected-usage prognosis shown at configuration time.
+**Quota** — succeeded observations write an immutable usage receipt. Usage (receipts + in-flight rows) is counted against a per-organization quota for the current billing period, with per-scanner volume estimates summed into a projected-usage prognosis shown at configuration time. A scanner can also carry its own optional `credit_limit` for the same period, so one broad scanner cannot drain the whole organization budget. A scanner that reaches its limit stops scanning until the period resets, stays enabled, and does not go back for the sessions it skipped.
 
 ## Layout
 

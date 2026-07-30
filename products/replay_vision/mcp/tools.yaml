@@ -234,9 +234,11 @@ tools:
             downsample applied after the query matches (default 1.0). `model` chooses the LLM. Names must be unique
             within the team. Before creating a broad scanner (a permissive `query` and/or high `sampling_rate`), first
             call `vision-scanners-estimate-create` to project its monthly observation volume and `vision-quota-retrieve`
-            to check the org's remaining budget — an enabled scanner sweeps matching recordings every 5 minutes, and
-            creation itself does not check quota, so a too-broad scanner can exhaust the monthly budget on its first
-            sweeps.
+            to check the org's remaining budget. An enabled scanner sweeps matching recordings every 5 minutes and
+            creation itself does not check quota, so a too-broad scanner can exhaust the org budget on its first
+            sweeps. Set `credit_limit` to cap what this one scanner can spend per billing period, so it cannot
+            starve the org's other scanners. The scanner stops scanning once the credits left cannot cover another
+            observation, and resumes when the period resets.
         exclude_params:
             - id
             - scanner_version

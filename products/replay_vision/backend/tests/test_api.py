@@ -2197,6 +2197,25 @@ class TestRetryActions(_VisionAPITestCase):
         self.assertTrue(ReplayObservation.objects.filter(id=observation.id).exists())
         start_workflow.assert_not_called()
 
+    def test_retry_keeps_row_when_the_scanners_own_limit_is_reached(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        # Retry deletes the failed row before dispatching, and create_observation_activity refuses the
+        # replacement on the same budget. Without this gate the row is gone and nothing replaces it,
+        # while the caller is told the retry started.
+        start_workflow = MagicMock()
+        mock_async_to_sync.return_value = start_workflow
+        observation = self._create_failed("sess-scanner-limit")
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(
+            credit_limit=observation_credits_for_model(self.scanner.model) - 1
+        )
+
+        resp = self.client.post(self.retry_url(str(observation.id)))
+
+        self.assertEqual(resp.status_code, 402, resp.json())
+        self.assertTrue(ReplayObservation.objects.filter(id=observation.id).exists())
+        start_workflow.assert_not_called()
+
     def test_retry_dispatch_failure_returns_503_with_row_restored(
         self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
     ) -> None:

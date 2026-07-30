@@ -772,15 +772,15 @@ class BulkObserveResultSerializer(serializers.Serializer):
             ("started", "Started"),
             ("already_running", "Already running"),
             ("skipped_limit", "Skipped, in-flight limit reached"),
-            ("skipped_quota", "Skipped, monthly credit quota reached"),
+            ("skipped_quota", "Skipped, the org's credit quota for this period was reached"),
             ("skipped_scanner_limit", "Skipped, scanner's own credit limit reached"),
             ("failed", "Failed to start"),
         ],
         help_text=(
             "'started' - a scan workflow was kicked off; 'already_running' - a scan for this session is "
             "already in flight (no-op, not recharged); 'skipped_limit' - the in-flight cap was reached "
-            "before this session; 'skipped_quota' - the org's monthly credit quota would be exceeded; "
-            "'skipped_scanner_limit' - this scanner's own credit limit would be exceeded; "
+            "before this session; 'skipped_quota' - the org's credit quota for this period would be exceeded. "
+            "'skipped_scanner_limit' - this scanner's own credit limit would be exceeded. "
             "'failed' - the workflow failed to start."
         ),
     )
