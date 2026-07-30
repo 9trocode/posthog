@@ -868,7 +868,7 @@ export const integrationsLogic = kea<integrationsLogicType>([
         },
         handleOauthCallback: async ({ kind, searchParams }) => {
             const { state, code, error, stripe_user_id, account_id, user_id, realmId } = searchParams
-            const { next, token, source, server_id } = fromParamsGivenUrl(state)
+            const { next, token, source, server_id, team_id } = fromParamsGivenUrl(state)
             const resolvedKind = kind
             let replaceUrl: string = next || urls.settings('project-integrations')
 
@@ -913,13 +913,22 @@ export const integrationsLogic = kea<integrationsLogicType>([
                     replaceUrl += `${replaceUrl.includes('?') ? '&' : '?'}code=${encodeURIComponent(code)}&server_id=${encodeURIComponent(server_id)}&state_token=${encodeURIComponent(token)}`
                     lemonToast.success('Authorization successful.')
                 } else {
+                    // The callback URL is not project-scoped, so after this full-page round-trip
+                    // the SPA may have re-resolved to the user's default team. Target the team
+                    // that started the flow (carried through the OAuth state) so the integration
+                    // lands on the project the user actually chose.
+                    const parsedTeamId = Number(team_id)
+                    const initiatingTeamId = Number.isFinite(parsedTeamId) ? parsedTeamId : undefined
                     // Intuit names the authorized QuickBooks company only in the callback's realmId
                     // param, and no API can look it up from the token later, so it rides along with
                     // the code exchange. Other providers never send it and are unaffected.
-                    const integration = await api.integrations.create({
-                        kind: resolvedKind,
-                        config: realmId ? { state, code, realmId: String(realmId) } : { state, code },
-                    })
+                    const integration = await api.integrations.create(
+                        {
+                            kind: resolvedKind,
+                            config: realmId ? { state, code, realmId: String(realmId) } : { state, code },
+                        },
+                        initiatingTeamId
+                    )
 
                     // Add the integration ID to the replaceUrl so that the landing page can use it
                     const url = new URL(replaceUrl, window.location.origin)
