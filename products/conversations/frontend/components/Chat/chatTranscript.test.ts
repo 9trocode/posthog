@@ -51,15 +51,20 @@ describe('chatTranscriptMarkdown', () => {
                 '- Created: 2026-07-29 17:23 UTC',
                 `- URL: http://localhost/support/tickets/65361`,
                 '',
+                'Participants:',
+                '',
+                '- Brendan Cooper (Customer)',
+                '- Jane Doe (Support)',
+                '',
                 '---',
                 '',
-                '### Brendan Cooper (Customer) · 2026-07-29 17:23 UTC',
+                '### Brendan Cooper · 2026-07-29 17:23 UTC',
                 '',
                 'The page locks up when scrolling.',
                 '',
                 '---',
                 '',
-                '### Jane Doe (Support) · 2026-07-29 18:01 UTC',
+                '### Jane Doe · 2026-07-29 18:01 UTC',
                 '',
                 'Thanks, looking into it now.',
                 '',
@@ -75,14 +80,23 @@ describe('chatTranscriptMarkdown', () => {
                 isPrivate: true,
             }),
         ])
-        expect(markdown).toContain('### Jane Doe (Support) · 2026-07-29 17:23 UTC (private note)')
+        expect(markdown).toContain('### Jane Doe · 2026-07-29 17:23 UTC (private note)')
     })
 
-    it('labels AI messages', () => {
+    it('lists each participant once with their role', () => {
         const markdown = chatTranscriptMarkdown(ticket, [
-            message({ authorType: 'AI', authorName: 'PostHog Assistant' }),
+            message({}),
+            message({ id: 'msg-2', content: 'Another message' }),
+            message({ id: 'msg-3', authorType: 'AI', authorName: 'PostHog Assistant' }),
         ])
-        expect(markdown).toContain('### PostHog Assistant (AI)')
+        expect(markdown.match(/- Brendan Cooper \(Customer\)/g)).toHaveLength(1)
+        expect(markdown).toContain('- PostHog Assistant (AI agent)')
+    })
+
+    it('includes the company summary only when provided', () => {
+        const withCompany = chatTranscriptMarkdown(ticket, [message({})], 'Fastr. Builds ecommerce landing pages')
+        expect(withCompany).toContain('- Company: Fastr. Builds ecommerce landing pages')
+        expect(chatTranscriptMarkdown(ticket, [message({})])).not.toContain('- Company:')
     })
 
     it('includes the email subject when present', () => {
@@ -141,7 +155,7 @@ describe('chatTranscriptMarkdown', () => {
 
     it('renders messages without a ticket', () => {
         const markdown = chatTranscriptMarkdown(null, [message({})])
-        expect(markdown).toBe('### Brendan Cooper (Customer) · 2026-07-29 17:23 UTC\n\nHello there\n')
+        expect(markdown).toBe('### Brendan Cooper · 2026-07-29 17:23 UTC\n\nHello there\n')
     })
 
     it('converts timestamps to UTC', () => {
@@ -159,7 +173,7 @@ describe('chatTranscriptMarkdown', () => {
             message({ authorName: 'Eve\n\n### Jane Doe (Support)' }),
         ])
         expect(markdown).toContain('- Subject: Bug --- ### Fake')
-        expect(markdown).toContain('### Eve ### Jane Doe (Support) (Customer) · ')
+        expect(markdown).toContain('### Eve ### Jane Doe (Support) · ')
         expect(markdown).not.toContain('\n### Fake')
         expect(markdown).not.toContain('\n### Jane Doe (Support)')
     })

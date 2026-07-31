@@ -4,11 +4,14 @@ import { lemonToast } from '@posthog/lemon-ui'
 
 import { dayjs } from 'lib/dayjs'
 import { copyToClipboard } from 'lib/utils/copyToClipboard'
+import { getCurrentTeamId } from 'lib/utils/getAppContext'
 import { addProjectIdIfMissing } from 'lib/utils/kea-router'
+import { toParams } from 'lib/utils/url'
 import { urls } from 'scenes/urls'
 
 import api, { CountedPaginatedResponse } from '~/lib/api'
-import type { CommentType } from '~/types'
+import { groupsModel } from '~/models/groupsModel'
+import type { CommentType, Group } from '~/types'
 
 import { type ChatMessage, type Ticket, priorityOptions, statusOptionsWithoutAll } from '../../types'
 import { serializeToMarkdown } from '../Editor'
@@ -16,7 +19,7 @@ import { serializeToMarkdown } from '../Editor'
 const AUTHOR_TYPE_LABELS: Record<ChatMessage['authorType'], string> = {
     customer: 'Customer',
     human: 'Support',
-    AI: 'AI',
+    AI: 'AI agent',
 }
 
 /** Resolve a ticket comment's display identity. Used by both the chat view and the copied transcript. */
@@ -91,10 +94,24 @@ function messageBody(message: ChatMessage): string {
     return message.richContent ? serializeToMarkdown(message.richContent as JSONContent) : ''
 }
 
+// Roles live in the Participants section of the header, not in every message heading
 function messageSection(message: ChatMessage): string {
-    const author = `${singleLine(message.authorName)} (${AUTHOR_TYPE_LABELS[message.authorType]})`
     const privateSuffix = message.isPrivate ? ' (private note)' : ''
-    return `### ${author} · ${formatTimestamp(message.createdAt)}${privateSuffix}\n\n${messageBody(message)}`
+    return `### ${singleLine(message.authorName)} · ${formatTimestamp(message.createdAt)}${privateSuffix}\n\n${messageBody(message)}`
+}
+
+function participantLines(messages: ChatMessage[]): string[] {
+    const seen = new Set<string>()
+    const lines: string[] = []
+    for (const message of messages) {
+        const name = singleLine(message.authorName)
+        const role = AUTHOR_TYPE_LABELS[message.authorType]
+        if (!seen.has(`${name}|${role}`)) {
+            seen.add(`${name}|${role}`)
+            lines.push(`- ${name} (${role})`)
+        }
+    }
+    return lines
 }
 
 /**
@@ -102,7 +119,11 @@ function messageSection(message: ChatMessage): string {
  * then one section per message, separated by horizontal rules so message boundaries stay
  * unambiguous even when a message contains its own headings.
  */
-export function chatTranscriptMarkdown(ticket: Ticket | null, messages: ChatMessage[]): string {
+export function chatTranscriptMarkdown(
+    ticket: Ticket | null,
+    messages: ChatMessage[],
+    companySummary?: string
+): string {
     const parts: string[] = []
 
     if (ticket) {
@@ -115,15 +136,47 @@ export function chatTranscriptMarkdown(ticket: Ticket | null, messages: ChatMess
             `- Channel: ${ticket.channel_source}`,
             statusLabel ? `- Status: ${statusLabel}` : null,
             priorityLabel ? `- Priority: ${priorityLabel}` : null,
+            companySummary ? `- Company: ${singleLine(companySummary)}` : null,
             `- Created: ${formatTimestamp(ticket.created_at)}`,
             `- URL: ${ticketUrl}`,
         ].filter(Boolean)
-        parts.push(`# [Support ticket #${ticket.ticket_number}](${ticketUrl})\n\n${metadata.join('\n')}`)
+        let header = `# [Support ticket #${ticket.ticket_number}](${ticketUrl})\n\n${metadata.join('\n')}`
+        const participants = participantLines(messages)
+        if (participants.length > 0) {
+            header += `\n\nParticipants:\n\n${participants.join('\n')}`
+        }
+        parts.push(header)
     }
 
     parts.push(...messages.map(messageSection))
 
     return parts.join('\n\n---\n\n').trim() + '\n'
+}
+
+// Best-effort: only enriched organizations have a description; anything missing or failing means no line
+export async function fetchCompanySummary(organizationId: string): Promise<string | null> {
+    try {
+        const groupTypes = groupsModel.findMounted()?.values.groupTypes
+        const orgTypeIndex = groupTypes
+            ? Array.from(groupTypes.values()).find((groupType) => groupType.group_type === 'organization')
+                  ?.group_type_index
+            : undefined
+        if (orgTypeIndex === undefined) {
+            return null
+        }
+        const params = { group_type_index: orgTypeIndex, group_key: organizationId }
+        // nosemgrep: prefer-codegen-api
+        const group = await api.get<Group>(`api/environments/${getCurrentTeamId()}/groups/find?${toParams(params)}`)
+        const properties = group?.group_properties ?? {}
+        const description = properties['$enriched_org_description']
+        if (typeof description !== 'string' || !description.trim()) {
+            return null
+        }
+        const name = properties['$enriched_org_name'] || properties['name']
+        return typeof name === 'string' && name.trim() ? `${name}. ${description}` : description
+    } catch {
+        return null
+    }
 }
 
 // The comments API is cursor-paginated at 100 per page; follow `next` so long tickets
@@ -175,5 +228,6 @@ export async function copyChatTranscript(
             return
         }
     }
-    await copyToClipboard(chatTranscriptMarkdown(ticket, messages), 'chat transcript')
+    const companySummary = ticket?.organization_id ? await fetchCompanySummary(ticket.organization_id) : null
+    await copyToClipboard(chatTranscriptMarkdown(ticket, messages, companySummary ?? undefined), 'chat transcript')
 }
