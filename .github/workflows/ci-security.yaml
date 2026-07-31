@@ -377,6 +377,10 @@ jobs:
 
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+              with:
+                  # PR merge commit plus both parents, so the new-warnings
+                  # pass can baseline against the PR base (HEAD^1)
+                  fetch-depth: 2
 
             # Pass 1: print WARNING-severity findings. No --error — this step
             # does not fail CI. Backlogs from migration-in-progress rules show
@@ -404,6 +408,26 @@ jobs:
                     semgrep \
                       --config ".semgrep/rules/devex/" \
                       --severity=ERROR \
+                      --error \
+                      --metrics=off \
+                      --verbose \
+                      --timeout 300 \
+                      bin/ common/ ee/ frontend/ packages/ posthog/ products/
+
+            # Pass 3 (PRs only): fail on newly-introduced WARNING findings.
+            # --baseline-commit diffs against the PR base (first parent of the
+            # merge commit), so the pass-1 backlog is grandfathered while new
+            # violations block. See .semgrep/rules/devex/README.md.
+            - name: New warnings (blocking)
+              if: github.event_name == 'pull_request'
+              run: |
+                  docker run --rm -v "${{ github.workspace }}:/src" -w /src \
+                    -e SEMGREP_ENABLE_VERSION_CHECK=false \
+                    ${{ env.SEMGREP_IMAGE }} \
+                    semgrep \
+                      --config ".semgrep/rules/devex/" \
+                      --severity=WARNING \
+                      --baseline-commit "$(git rev-parse HEAD^1)" \
                       --error \
                       --metrics=off \
                       --verbose \

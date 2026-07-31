@@ -28,7 +28,8 @@ rules:
           call site (two share a type) or must be read positionally (3+
           elements). Prefer a frozen dataclass with named fields:
           `@dataclass(frozen=True, kw_only=True)`. See the Python bullets in
-          the Code Style section of AGENTS.md. Informational, not blocking.
+          the Code Style section of AGENTS.md. Pre-existing findings are
+          grandfathered; only newly-introduced ones block CI.
       languages: [python]
       severity: WARNING
       metadata:
