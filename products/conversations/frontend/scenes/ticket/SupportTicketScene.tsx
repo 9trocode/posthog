@@ -1,6 +1,6 @@
 import { useActions, useValues } from 'kea'
 import { combineUrl, router } from 'kea-router'
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { IconChevronDown, IconCopy } from '@posthog/icons'
 import { LemonButton, LemonCard, LemonSelect, LemonTag, Link, Spinner } from '@posthog/lemon-ui'
@@ -13,6 +13,7 @@ import { dayjs } from 'lib/dayjs'
 import { LemonCalendarSelectInput } from 'lib/lemon-ui/LemonCalendar/LemonCalendarSelect'
 import { getAccessControlDisabledReason } from 'lib/utils/accessControlUtils'
 import { newInternalTab } from 'lib/utils/newInternalTab'
+import { humanFriendlyNumber } from 'lib/utils/numbers'
 import { PersonDisplay } from 'scenes/persons/PersonDisplay'
 import { SceneExport } from 'scenes/sceneTypes'
 import { teamLogic } from 'scenes/teamLogic'
@@ -26,7 +27,7 @@ import { AccessControlLevel, AccessControlResourceType, Breadcrumb } from '~/typ
 
 import { AssigneeIconDisplay, AssigneeLabelDisplay, AssigneeSelect } from '../../components/Assignee'
 import { ChannelsTag, getChannelThreadUrl } from '../../components/Channels/ChannelsTag'
-import { copyChatTranscript } from '../../components/Chat/chatTranscript'
+import { chatTranscriptMarkdown, copyChatTranscript, countTranscriptTokens } from '../../components/Chat/chatTranscript'
 import { ChatView } from '../../components/Chat/ChatView'
 import { IdentityBadge } from '../../components/IdentityBadge/IdentityBadge'
 import { SlaDisplay } from '../../components/SlaDisplay'
@@ -64,6 +65,44 @@ export const scene: SceneExport<{ ticketId: string; id: string }> = {
     // instance the component builds directly — otherwise the side panel reads a never-populated
     // logic instance and the access control tab never appears.
     paramsToProps: ({ params: { ticketId } }) => ({ ticketId: ticketId || 'new', id: ticketId || 'new' }),
+}
+
+// Rendered inside the tooltip, so the ~2 MB tokenizer chunk only loads on first hover.
+// The count sizes the paste for an LLM context window; "+" flags that unloaded older
+// messages will also be copied (and counted) on click.
+function CopyChatTooltip({
+    transcript,
+    hasMoreMessages,
+}: {
+    transcript: string
+    hasMoreMessages: boolean
+}): JSX.Element {
+    const [tokenCount, setTokenCount] = useState<number | null>(null)
+
+    useEffect(() => {
+        let cancelled = false
+        countTranscriptTokens(transcript)
+            .then((count) => {
+                if (!cancelled) {
+                    setTokenCount(count)
+                }
+            })
+            .catch(() => {})
+        return () => {
+            cancelled = true
+        }
+    }, [transcript])
+
+    return (
+        <>
+            Copy the entire conversation as Markdown
+            <div className="text-xs text-muted-alt">
+                {tokenCount === null
+                    ? 'Counting tokens…'
+                    : `~${humanFriendlyNumber(tokenCount)}${hasMoreMessages ? '+' : ''} LLM tokens (o200k)`}
+            </div>
+        </>
+    )
 }
 
 // The rendered label is "<Send|Attach> and set <statusLabel>", depending on the private note checkbox
@@ -219,7 +258,12 @@ export function SupportTicketScene({ ticketId }: { ticketId: string }): JSX.Elem
                         type="secondary"
                         size="small"
                         icon={<IconCopy />}
-                        tooltip="Copy the entire conversation as Markdown"
+                        tooltip={
+                            <CopyChatTooltip
+                                transcript={chatTranscriptMarkdown(ticket, chatMessages)}
+                                hasMoreMessages={hasMoreMessages}
+                            />
+                        }
                         data-attr="copy-chat-transcript"
                         disabledReason={chatMessages.length === 0 ? 'No messages to copy' : undefined}
                         onClick={() => void copyChatTranscript(ticket, chatMessages, hasMoreMessages)}

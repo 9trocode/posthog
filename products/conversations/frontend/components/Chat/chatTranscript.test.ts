@@ -4,7 +4,7 @@ import api from '~/lib/api'
 import type { CommentType } from '~/types'
 
 import type { ChatMessage, Ticket } from '../../types'
-import { chatTranscriptMarkdown, copyChatTranscript } from './chatTranscript'
+import { chatTranscriptMarkdown, copyChatTranscript, countTranscriptTokens } from './chatTranscript'
 
 jest.mock('lib/utils/copyToClipboard', () => ({ copyToClipboard: jest.fn() }))
 
@@ -213,5 +213,14 @@ describe('copyChatTranscript', () => {
         jest.spyOn(api.comments, 'list').mockRejectedValue(new Error('network down'))
         await copyChatTranscript(ticket, [message({})], true)
         expect(copyToClipboard).not.toHaveBeenCalled()
+    })
+})
+
+describe('countTranscriptTokens', () => {
+    it('counts tokens, scaling with transcript length', async () => {
+        const small = await countTranscriptTokens('Hello there')
+        const large = await countTranscriptTokens('Hello there, the page locks up when scrolling. '.repeat(50))
+        expect(small).toBeGreaterThan(0)
+        expect(large).toBeGreaterThan(small)
     })
 })

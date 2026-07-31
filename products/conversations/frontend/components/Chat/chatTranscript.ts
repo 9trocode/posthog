@@ -142,6 +142,18 @@ async function fetchAllTicketMessages(ticketId: string): Promise<CommentType[]> 
     return all.reverse()
 }
 
+// Lazy-loaded: the o200k ranks are ~2 MB, so they must never enter the main bundle.
+// o200k_base is the tiktoken encoding of current OpenAI models; counts for other
+// vendors differ slightly, which is fine for a cost indication.
+let tokenCounterPromise: Promise<(text: string) => number> | null = null
+
+export function countTranscriptTokens(text: string): Promise<number> {
+    if (!tokenCounterPromise) {
+        tokenCounterPromise = import('gpt-tokenizer/encoding/o200k_base').then((module) => module.countTokens)
+    }
+    return tokenCounterPromise.then((countTokens) => countTokens(text))
+}
+
 /**
  * Copy the whole conversation to the clipboard as markdown. Uses the already-loaded
  * messages when they are complete; refetches every page first when older messages
