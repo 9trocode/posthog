@@ -508,7 +508,7 @@ export interface errorTrackingIssueSceneLogicMeta {
         firstSeen: (issue: ErrorTrackingRelationalIssue | null) => Dayjs | null
         aggregations: (summary: ErrorTrackingIssueSummary | null) => ErrorTrackingIssueAggregations | undefined
         eventsQuery: (
-            issueFingerprints: ErrorTrackingFingerprint[],
+            issueId: string,
             filterTestAccounts: boolean,
             searchQuery: string,
             filterGroup: UniversalFiltersGroup,
