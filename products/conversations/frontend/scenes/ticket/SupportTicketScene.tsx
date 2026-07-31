@@ -99,7 +99,7 @@ function CopyChatTooltip({
             <div className="text-xs opacity-75">
                 {tokenCount === null
                     ? 'Counting tokens…'
-                    : `~${humanFriendlyNumber(tokenCount)}${hasMoreMessages ? '+' : ''} LLM tokens (o200k)`}
+                    : `~${humanFriendlyNumber(tokenCount)}${hasMoreMessages ? '+' : ''} LLM tokens`}
             </div>
         </>
     )
