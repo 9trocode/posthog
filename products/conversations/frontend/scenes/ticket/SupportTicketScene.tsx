@@ -96,7 +96,7 @@ function CopyChatTooltip({
     return (
         <>
             Copy the entire conversation as Markdown
-            <div className="text-xs text-muted-alt">
+            <div className="text-xs opacity-75">
                 {tokenCount === null
                     ? 'Counting tokens…'
                     : `~${humanFriendlyNumber(tokenCount)}${hasMoreMessages ? '+' : ''} LLM tokens (o200k)`}
