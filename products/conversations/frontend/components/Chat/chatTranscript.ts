@@ -134,6 +134,8 @@ async function fetchAllTicketMessages(ticketId: string): Promise<CommentType[]> 
     })
     all.push(...(response.results || []))
     while (response.next) {
+        // The cursor URL comes from the API itself; there is no generated client for following it
+        // nosemgrep: prefer-codegen-api
         response = await api.get<CountedPaginatedResponse<CommentType>>(response.next)
         all.push(...(response.results || []))
     }
