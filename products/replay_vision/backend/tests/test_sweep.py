@@ -643,8 +643,7 @@ async def test_capped_scanner_skips_the_sweep_entirely() -> None:
     await _run_sweep(mocks)
 
     called = [fn for fn, _ in mocks.activity_calls]
-    # A capped scanner does no work at all this tick: no vision-action or prompt-refresh LLM spend,
-    # no candidate query, no dispatch. The gate runs first so the limit sees every kind of work.
+    # The gate runs first, so a capped scanner does no work of any kind this tick.
     assert evaluate_due_vision_actions_activity not in called
     assert refresh_prompt_suggestion_activity not in called
     assert find_scanner_candidates_activity not in called
@@ -654,9 +653,8 @@ async def test_capped_scanner_skips_the_sweep_entirely() -> None:
 
 @pytest.mark.asyncio
 async def test_budget_check_failure_does_not_fail_the_sweep() -> None:
-    # During a rolling deploy the activity can land on a worker that doesn't have it registered.
-    # The gate fails open: admissions are still blocked at the persistence boundary, but one bad
-    # tick must not error the whole sweep.
+    # A rolling deploy can land the activity on a worker without it registered; the gate fails
+    # open rather than erroring the whole sweep.
     mocks = _SweepMocks(
         activity_results={
             check_scanner_budget_activity: RuntimeError("activity type not registered"),

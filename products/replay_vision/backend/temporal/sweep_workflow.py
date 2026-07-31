@@ -69,11 +69,8 @@ class SweepScannerWorkflow(PostHogWorkflow):
 
     @wf.run
     async def run(self, inputs: SweepScannerInputs) -> None:
-        # A scanner over its own credit limit does no work this tick: no vision-action dispatch, no
-        # prompt refresh, no candidate read. Best-effort and fail-open, like the neighbouring optional
-        # steps: during a rolling deploy an old worker without this activity registered must not fail
-        # the sweep, and admissions are still gated at the persistence boundary either way. Patched so
-        # sweeps already in flight across the deploy replay their recorded history unchanged.
+        # A capped scanner does no work this tick. Fails open (admissions stay gated at the persistence
+        # boundary), and patched so sweeps already in flight replay unchanged across the deploy.
         if wf.patched("replay-vision-scanner-credit-limit"):
             try:
                 budget = await wf.execute_activity(

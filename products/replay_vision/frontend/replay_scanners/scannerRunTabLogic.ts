@@ -253,7 +253,6 @@ export const scannerRunTabLogic = kea<scannerRunTabLogicType>([
                             `Started ${started} scan${started === 1 ? '' : 's'}${extras ? ` — ${extras}` : ''}`
                         )
                     } else if (limited > 0) {
-                        // Name the limit that actually bound, so the user knows which one to act on.
                         const dominant = (Object.keys(skipCounts) as BulkSkipOutcome[]).reduce((a, b) =>
                             skipCounts[b] > skipCounts[a] ? b : a
                         )
