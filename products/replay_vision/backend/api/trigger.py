@@ -64,8 +64,7 @@ def check_team_in_flight_capacity(team_id: int) -> None:
 def check_observation_quota(organization_id: UUID, observation_credits: int) -> None:
     """Raise 402 when starting an observation of this credit cost would exceed the org's monthly limit."""
     snapshot = compute_quota_snapshot(organization_id=organization_id)
-    # would_exceed is only ever true when a limit is set; checking it directly narrows the type
-    # without an assert, which vanishes under python -O.
+    # would_exceed is only true when a limit is set; the direct check narrows without an assert.
     if snapshot.credit_limit is not None and snapshot.would_exceed(observation_credits):
         raise QuotaLimitExceeded(
             detail=(
@@ -82,11 +81,9 @@ def check_scanner_quota(scanner: ReplayScanner) -> None:
     if scanner.credit_limit is None:
         return
     budget = compute_scanner_budget(scanner)
-    # blocked is only ever true when a limit is set; the direct check narrows without an assert.
+    # blocked is only true when a limit is set; the direct check narrows without an assert.
     if budget.credit_limit is not None and budget.blocked:
         record_scanner_limit_reached("on_demand")
-        # A distinct code so clients can tell this apart from the org-level quota_limit_exceeded
-        # and point at the right control.
         raise QuotaLimitExceeded(
             detail=(
                 f"This scanner has {budget.remaining:,} of its {budget.credit_limit:,} credit limit left "

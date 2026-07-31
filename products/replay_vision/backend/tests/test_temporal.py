@@ -557,8 +557,7 @@ class TestCreateObservationActivity:
         assert ReplayObservation.objects.filter(scanner=scanner, status=ObservationStatus.PENDING).count() == 1
 
     def test_concurrent_admissions_for_an_uncapped_scanner_both_succeed(self) -> None:
-        # The admission lock is only taken for capped scanners. Uncapped scanners, which is every
-        # scanner in production today, must keep the unserialized path: both applies insert their row.
+        # The admission lock is capped-only: two uncapped applies must not serialize or skip.
         scanner = _make_scanner(credit_limit=None)
         barrier = threading.Barrier(2)
         created: dict[str, bool] = {}
@@ -577,7 +576,6 @@ class TestCreateObservationActivity:
                     )
                 ).was_created
             finally:
-                # Dropping the worker's own connection avoids stranding state past teardown.
                 connections.close_all()
 
         threads = [threading.Thread(target=admit, args=(s,)) for s in ("free-a", "free-b")]
