@@ -108,15 +108,17 @@ export function chatTranscriptMarkdown(ticket: Ticket | null, messages: ChatMess
     if (ticket) {
         const statusLabel = statusOptionsWithoutAll.find((option) => option.value === ticket.status)?.label
         const priorityLabel = priorityOptions.find((option) => option.value === ticket.priority)?.label
+        // The ticket number is a hyperlink so agents reading the transcript can navigate to the ticket
+        const ticketUrl = `${window.location.origin}${addProjectIdIfMissing(urls.supportTicketDetail(ticket.ticket_number))}`
         const metadata = [
             ticket.email_subject ? `- Subject: ${singleLine(ticket.email_subject)}` : null,
             `- Channel: ${ticket.channel_source}`,
             statusLabel ? `- Status: ${statusLabel}` : null,
             priorityLabel ? `- Priority: ${priorityLabel}` : null,
             `- Created: ${formatTimestamp(ticket.created_at)}`,
-            `- URL: ${window.location.origin}${addProjectIdIfMissing(urls.supportTicketDetail(ticket.ticket_number))}`,
+            `- URL: ${ticketUrl}`,
         ].filter(Boolean)
-        parts.push(`# Support ticket #${ticket.ticket_number}\n\n${metadata.join('\n')}`)
+        parts.push(`# [Support ticket #${ticket.ticket_number}](${ticketUrl})\n\n${metadata.join('\n')}`)
     }
 
     parts.push(...messages.map(messageSection))

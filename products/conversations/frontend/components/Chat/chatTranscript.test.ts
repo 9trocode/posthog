@@ -43,7 +43,7 @@ describe('chatTranscriptMarkdown', () => {
 
         expect(markdown).toBe(
             [
-                '# Support ticket #65361',
+                '# [Support ticket #65361](http://localhost/support/tickets/65361)',
                 '',
                 '- Channel: slack',
                 '- Status: Open',
