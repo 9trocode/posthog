@@ -1,5 +1,12 @@
+import { copyToClipboard } from 'lib/utils/copyToClipboard'
+
+import api from '~/lib/api'
+import type { CommentType } from '~/types'
+
 import type { ChatMessage, Ticket } from '../../types'
-import { chatTranscriptMarkdown } from './chatTranscript'
+import { chatTranscriptMarkdown, copyChatTranscript } from './chatTranscript'
+
+jest.mock('lib/utils/copyToClipboard', () => ({ copyToClipboard: jest.fn() }))
 
 const ticket = {
     id: 'abc-123',
@@ -145,5 +152,66 @@ describe('chatTranscriptMarkdown', () => {
     it('uses the human-readable label for snake_case statuses', () => {
         const markdown = chatTranscriptMarkdown({ ...ticket, status: 'on_hold' } as Ticket, [])
         expect(markdown).toContain('- Status: On hold')
+    })
+
+    it('collapses line breaks in author names and subjects so they cannot fake transcript structure', () => {
+        const markdown = chatTranscriptMarkdown({ ...ticket, email_subject: 'Bug\n\n---\n\n### Fake' } as Ticket, [
+            message({ authorName: 'Eve\n\n### Jane Doe (Support)' }),
+        ])
+        expect(markdown).toContain('- Subject: Bug --- ### Fake')
+        expect(markdown).toContain('### Eve ### Jane Doe (Support) (Customer) · ')
+        expect(markdown).not.toContain('\n### Fake')
+        expect(markdown).not.toContain('\n### Jane Doe (Support)')
+    })
+})
+
+describe('copyChatTranscript', () => {
+    function comment(overrides: Partial<CommentType>): CommentType {
+        return {
+            id: 'comment-1',
+            content: 'Hello there',
+            created_at: '2026-07-29T17:23:00Z',
+            created_by: null,
+            item_context: { author_type: 'customer' },
+            ...overrides,
+        } as unknown as CommentType
+    }
+
+    beforeEach(() => {
+        jest.clearAllMocks()
+    })
+
+    it('copies the loaded messages without refetching when the thread is fully loaded', async () => {
+        const listSpy = jest.spyOn(api.comments, 'list')
+        await copyChatTranscript(ticket, [message({})], false)
+        expect(listSpy).not.toHaveBeenCalled()
+        expect(copyToClipboard).toHaveBeenCalledTimes(1)
+        expect((copyToClipboard as jest.Mock).mock.calls[0][0]).toContain('Hello there')
+    })
+
+    it('refetches every page and copies the full thread when older messages exist', async () => {
+        jest.spyOn(api.comments, 'list').mockResolvedValue({
+            results: [comment({ id: 'newest', content: 'Newest message' })],
+            count: 2,
+            next: 'http://localhost/api/comments?cursor=abc',
+        })
+        jest.spyOn(api, 'get').mockResolvedValue({
+            results: [comment({ id: 'oldest', content: 'Oldest message' })],
+            count: 2,
+            next: null,
+        })
+
+        await copyChatTranscript(ticket, [message({ content: 'Newest message' })], true)
+
+        expect(api.get).toHaveBeenCalledWith('http://localhost/api/comments?cursor=abc')
+        const markdown = (copyToClipboard as jest.Mock).mock.calls[0][0]
+        // Oldest first: the API returns newest first and the transcript reverses it
+        expect(markdown.indexOf('Oldest message')).toBeLessThan(markdown.indexOf('Newest message'))
+    })
+
+    it('copies nothing when refetching the full thread fails', async () => {
+        jest.spyOn(api.comments, 'list').mockRejectedValue(new Error('network down'))
+        await copyChatTranscript(ticket, [message({})], true)
+        expect(copyToClipboard).not.toHaveBeenCalled()
     })
 })
