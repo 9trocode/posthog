@@ -13,6 +13,7 @@ import {
     Tooltip,
 } from '@posthog/lemon-ui'
 
+import { EmptyMessage } from 'lib/components/EmptyMessage/EmptyMessage'
 import { IconPlayCircle } from 'lib/lemon-ui/icons'
 import { LemonMenu } from 'lib/lemon-ui/LemonMenu'
 import { debounce } from 'lib/utils/async'
@@ -625,13 +626,10 @@ export function SessionGroupSummary(): JSX.Element {
                         </div>
                     </>
                 ) : (
-                    <div className="flex flex-col items-center gap-1 rounded border border-dashed p-8 text-center">
-                        <h3 className="mb-0">No patterns found</h3>
-                        <p className="text-muted mb-0">
-                            We didn't find any recurring patterns across the {analyzedSessionsCount} sessions analyzed.
-                            Try summarizing a different set of recordings.
-                        </p>
-                    </div>
+                    <EmptyMessage
+                        title="No patterns found"
+                        description={`We didn't find any recurring patterns across the ${analyzedSessionsCount} sessions analyzed. Try summarizing a different set of recordings.`}
+                    />
                 )}
             </div>
 

@@ -11,7 +11,7 @@ from posthog.temporal.session_replay.session_summary_group.types import SessionS
 
 from ee.hogai.session_summaries.session_group.patterns import EnrichedSessionGroupSummaryPatternsList
 from ee.hogai.session_summaries.session_group.summarize_session_group import FoundSessionsWithTimestamps
-from ee.hogai.tools.replay.summarize_sessions import SummarizeSessionsTool
+from ee.hogai.tools.replay.summarize_sessions import SessionSummariesResult, SummarizeSessionsTool
 from ee.hogai.utils.types import AssistantState
 from ee.hogai.utils.types.base import NodePath
 
@@ -226,3 +226,27 @@ class TestSummarizeSessionsTool(BaseTest):
         assert [(fs.session_id, fs.category) for fs in result.failed_sessions] == [("s-1", "summarization_failed")]
         assert "only 2 of 3 sessions were included" in result.content
         assert result.content.count("Session summary") == 2
+
+    async def test_tracking_reports_the_executed_path_after_fallback(self) -> None:
+        # A group request that falls back to individual summaries should not be tracked as a group run
+        tool = await self._create_tool()
+        fallback_result = SessionSummariesResult(content="Session summary", summary_id=None, failed_sessions=[])
+
+        with (
+            patch.object(
+                SummarizeSessionsTool,
+                "_validate_specific_session_ids",
+                return_value=(REQUESTED_SESSION_IDS, []),
+            ),
+            patch.object(SummarizeSessionsTool, "_summarize_sessions", AsyncMock(return_value=fallback_result)),
+            patch("ee.hogai.tools.replay.summarize_sessions.capture_session_summary_started") as mock_started,
+            patch("ee.hogai.tools.replay.summarize_sessions.capture_session_summary_generated") as mock_generated,
+        ):
+            content, artifact = await tool._arun_impl(
+                recordings_filters_or_explicit_session_ids=REQUESTED_SESSION_IDS, summary_title="Test"
+            )
+
+        assert content == "Session summary"
+        assert artifact is None
+        assert mock_started.call_args.kwargs["summary_type"] == "group"
+        assert mock_generated.call_args.kwargs["summary_type"] == "single"

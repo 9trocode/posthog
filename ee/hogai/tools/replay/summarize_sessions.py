@@ -201,7 +201,9 @@ class SummarizeSessionsTool(MaxTool):
             team=self._team,
             tracking_id=tracking_id,
             summary_source="chat",
-            summary_type=summary_type,
+            # A group run can fall back to individual summaries when too few recordings survive validation,
+            # so report the path that actually ran (only the group path produces a summary id)
+            summary_type="group" if result.summary_id else "single",
             session_ids=session_ids,
             success=True,
             failed_session_count=len(result.failed_sessions),
