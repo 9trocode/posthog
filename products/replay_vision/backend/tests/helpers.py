@@ -20,11 +20,8 @@ def snapshot_for(scanner: ReplayScanner) -> dict[str, Any]:
 
 
 def seed_scanner_spend(scanner: ReplayScanner, credits: int, *, observations: int = 1) -> None:
-    """Settle spend for a scanner: `observations` succeeded rows, each with a `credits` usage receipt.
-
-    A receipt-less observation contributes nothing to `compute_scanner_budget`, which reads the
-    ledger, so seeded spend must come from real `ReplayObservationUsage` rows.
-    """
+    """Settle spend for a scanner: `observations` succeeded rows, each with a `credits` receipt.
+    The budget reads the receipt ledger, so receipt-less observations count nothing."""
     if credits <= 0 or observations <= 0:
         return
     snapshot = snapshot_for(scanner)

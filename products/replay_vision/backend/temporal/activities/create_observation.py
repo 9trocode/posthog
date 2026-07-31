@@ -98,11 +98,8 @@ def _create_observation(inputs: CreateObservationInputs) -> CreateObservationOut
 
     try:
         with transaction.atomic():
-            # Serialize admissions per capped scanner: without the row lock, concurrent applies all read
-            # the same pre-insert budget, all pass, and each reserve a PENDING row past the cap. Uncapped
-            # scanners (every scanner in production today) keep the lock-free path, so a limit set
-            # mid-admission is first seen by the next one. The limit is re-read under the lock because
-            # the pre-transaction read is not protected by it.
+            # Capped scanners serialize admissions on the row lock so concurrent applies cannot overshoot
+            # the cap; uncapped scanners keep the lock-free path. The limit is re-read under the lock.
             if scanner.credit_limit is not None:
                 locked = (
                     ReplayScanner.objects.select_for_update().filter(pk=scanner.pk).only("pk", "credit_limit").first()
