@@ -166,7 +166,7 @@ export async function fetchCompanySummary(organizationId: string): Promise<strin
         }
         const params = { group_type_index: orgTypeIndex, group_key: organizationId }
         // nosemgrep: prefer-codegen-api
-        const group = await api.get<Group>(`api/environments/${getCurrentTeamId()}/groups/find?${toParams(params)}`)
+        const group = await api.get<Group>(`api/projects/${getCurrentTeamId()}/groups/find?${toParams(params)}`)
         const properties = group?.group_properties ?? {}
         const description = properties['$enriched_org_description']
         if (typeof description !== 'string' || !description.trim()) {
