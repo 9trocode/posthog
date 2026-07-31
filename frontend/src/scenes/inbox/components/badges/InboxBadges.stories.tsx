@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react'
 
 import { SignalReportActionability, SignalReportPriority, SignalReportStatus } from '../../types'
 import { AnimatedEllipsis } from './AnimatedEllipsis'
+import { PrBadge, PrBadgeState } from './PrStateBadge'
 import { SignalReportActionabilityBadge } from './SignalReportActionabilityBadge'
 import { SignalReportPriorityBadge } from './SignalReportPriorityBadge'
 import { SignalReportStatusBadge } from './SignalReportStatusBadge'
@@ -21,6 +22,7 @@ const ACTIONABILITIES: SignalReportActionability[] = [
     'requires_human_input',
     'not_actionable',
 ]
+const PR_STATES: PrBadgeState[] = ['open', 'merged', 'closed']
 
 function Row({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
     return (
@@ -47,6 +49,16 @@ export const AllBadges: Story = {
             <Row label="Actionability">
                 {ACTIONABILITIES.map((a) => (
                     <SignalReportActionabilityBadge key={a} actionability={a} />
+                ))}
+            </Row>
+            <Row label="Pull request">
+                {PR_STATES.map((state) => (
+                    <PrBadge
+                        key={state}
+                        prNumber="12001"
+                        prUrl="https://github.com/PostHog/posthog/pull/12001"
+                        state={state}
+                    />
                 ))}
             </Row>
             <Row label="Working">

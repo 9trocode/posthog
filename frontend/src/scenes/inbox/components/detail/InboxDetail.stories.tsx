@@ -92,6 +92,22 @@ export const PullRequest: Story = {
     ),
 }
 
+// The header badge has no real GitHub state to read from, so it's inferred: a resolved report
+// means its implementation PR merged.
+export const PullRequestMerged: Story = {
+    render: () => (
+        <Frame>
+            <PullRequestDetail
+                report={makeReport({
+                    ...pullRequestReports[0],
+                    id: '019e64b8-0000-7000-8000-000000009882',
+                    status: SignalReportStatus.RESOLVED,
+                })}
+            />
+        </Frame>
+    ),
+}
+
 export const RunInProgress: Story = {
     render: () => (
         <Frame>
