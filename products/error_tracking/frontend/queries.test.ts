@@ -33,7 +33,7 @@ describe('queries', () => {
     describe('error tracking query tags', () => {
         it('tags issue event queries as error tracking', () => {
             const actual = errorTrackingIssueEventsQuery({
-                fingerprints: ['abc'],
+                issueId: 'issue-1',
                 filterTestAccounts: false,
                 filterGroup: {
                     type: FilterLogicalOperator.And,
@@ -52,9 +52,13 @@ describe('queries', () => {
             expect(actual.tags).toEqual({ productKey: ProductKey.ERROR_TRACKING })
         })
 
-        it('escapes quotes in fingerprints and search text', () => {
+        // The Occurrences tab used to filter on a fingerprint IN list assembled from a separate
+        // Postgres fetch, which could drift from the issue the ClickHouse-backed list already
+        // agreed on (e.g. after a merge or split rewrote one side but not the other) and silently
+        // empty the tab. Filtering directly on the issue id removes that drift entirely.
+        it('filters events by issue id rather than a fingerprint list', () => {
             const actual = errorTrackingIssueEventsQuery({
-                fingerprints: ["fp_with_'quote"],
+                issueId: "issue_with_'quote",
                 filterTestAccounts: false,
                 filterGroup: {
                     type: FilterLogicalOperator.And,
@@ -71,7 +75,7 @@ describe('queries', () => {
             })
 
             const where = (actual.where ?? []).join(' ')
-            expect(where).toContain("'fp_with_\\'quote'")
+            expect(where).toContain("properties.$exception_issue_id = 'issue_with_\\'quote'")
             expect(where).toContain("'%O\\'Brien%'")
         })
 

@@ -1,15 +1,9 @@
 import { expectLogic } from 'kea-test-utils'
 
-import { ErrorTrackingFingerprint } from 'lib/components/Errors/types'
-
 import { useMocks } from '~/mocks/jest'
 import { initKeaTests } from '~/test/init'
 
 import { errorTrackingIssueSceneLogic } from './errorTrackingIssueSceneLogic'
-
-const makeFingerprints = (fingerprint: string = 'fp-1'): ErrorTrackingFingerprint[] => [
-    { fingerprint, issue_id: 'issue-1', created_at: '2026-01-01T00:00:00Z' },
-]
 
 describe('errorTrackingIssueSceneLogic', () => {
     let logic: ReturnType<typeof errorTrackingIssueSceneLogic.build>
@@ -31,26 +25,33 @@ describe('errorTrackingIssueSceneLogic', () => {
 
     afterEach(() => logic?.unmount())
 
+    // eventsQuery filters directly on $exception_issue_id rather than assembling a fingerprint IN
+    // list, so it can't drift out of sync with the issue the fingerprints table separately tracks.
+    it('filters events by the issue id, not by fingerprints', () => {
+        expect(logic.values.eventsQuery.where).toEqual([
+            expect.stringContaining("properties.$exception_issue_id = 'issue-1'"),
+        ])
+    })
+
     // eventsQueryKey is the kea key of the events table's data source logic: every key change
     // unmounts and remounts the whole table tree. It used to be uuid() per recompute, so even a
-    // deep-equal fingerprints refetch rebuilt the table. These lock in the key contract both ways.
-    it('keeps eventsQuery and eventsQueryKey stable across deep-equal fingerprint loads', () => {
-        logic.actions.loadIssueFingerprintsSuccess(makeFingerprints())
+    // deep-equal recompute (e.g. re-setting an equal-but-freshly-constructed dateRange) rebuilt
+    // the table. These lock in the key contract both ways.
+    it('keeps eventsQuery and eventsQueryKey stable across deep-equal dateRange recomputes', () => {
         const initialQuery = logic.values.eventsQuery
         const initialKey = logic.values.eventsQueryKey
 
-        // Freshly constructed but deep-equal — as a refetch would deliver.
-        logic.actions.loadIssueFingerprintsSuccess(makeFingerprints())
+        // Freshly constructed but deep-equal — as a URL-driven update would deliver.
+        logic.actions.setDateRange({ ...logic.values.dateRange })
 
         expect(logic.values.eventsQuery).toBe(initialQuery)
         expect(logic.values.eventsQueryKey).toBe(initialKey)
     })
 
     it.each<[string, (logic: ReturnType<typeof errorTrackingIssueSceneLogic.build>) => void]>([
-        ['fingerprints change', (l) => l.actions.loadIssueFingerprintsSuccess(makeFingerprints('fp-2'))],
+        ['date range changes', (l) => l.actions.setDateRange({ date_from: '-30d', date_to: null })],
         ['search query changes', (l) => l.actions.setSearchQuery('needle')],
     ])('changes eventsQueryKey when the %s', (_name, mutate) => {
-        logic.actions.loadIssueFingerprintsSuccess(makeFingerprints())
         const initialKey = logic.values.eventsQueryKey
 
         mutate(logic)
