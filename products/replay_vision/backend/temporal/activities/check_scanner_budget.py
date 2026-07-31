@@ -17,10 +17,10 @@ def _notify_limit_reached(scanner: ReplayScanner) -> None:
             NotificationData,
             NotificationType,
             Priority,
+            RecipientsResolver,
             TargetType,
             create_notification,
         )
-        from products.notifications.backend.resolvers import RecipientsResolver  # noqa: PLC0415
 
         class ScannerViewersResolver(RecipientsResolver):
             """Keeps only recipients allowed to view this specific scanner.
