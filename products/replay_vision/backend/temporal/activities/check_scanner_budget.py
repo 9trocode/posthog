@@ -23,12 +23,8 @@ def _notify_limit_reached(scanner: ReplayScanner) -> None:
         )
 
         class ScannerViewersResolver(RecipientsResolver):
-            """Keeps only recipients allowed to view this specific scanner.
-
-            Scanners carry per-object access controls, but the notification pipeline's built-in
-            filter is resource-type wide, so without this a member denied access to this scanner
-            would still learn its name and limit state.
-            """
+            """Keeps only recipients with object-level viewer access: the pipeline's built-in
+            access filter is resource-type wide, not per scanner."""
 
             def resolve(self, target_type: TargetType, target_id: str, team_id: int | None) -> list[int]:
                 user_ids = super().resolve(target_type, target_id, team_id)

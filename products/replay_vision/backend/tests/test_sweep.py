@@ -382,8 +382,6 @@ def test_check_scanner_budget_activity_notifies_again_after_period_rolls_over() 
 
 @pytest.mark.django_db(transaction=True)
 def test_limit_notification_excludes_users_denied_on_the_scanner() -> None:
-    # The notification pipeline's built-in access filter is resource-type wide, so the resolver
-    # attached to the notification must drop members denied access to this specific scanner.
     from posthog.constants import AvailableFeature
     from posthog.models import OrganizationMembership, User
 
