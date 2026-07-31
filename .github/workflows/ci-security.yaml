@@ -93,6 +93,8 @@ jobs:
                         - 'packages/**'
                         - 'posthog/**'
                         - 'products/**'
+                        - 'services/**'
+                        - 'tools/**'
                         - '.semgrep/rules/devex/**'
                         - '.github/workflows/ci-security.yaml'
                       # Rule tests only read fixtures under .semgrep/.
@@ -396,7 +398,7 @@ jobs:
                       --metrics=off \
                       --verbose \
                       --timeout 300 \
-                      bin/ common/ ee/ frontend/ packages/ posthog/ products/
+                      bin/ common/ ee/ frontend/ packages/ posthog/ products/ services/ tools/
 
             # Pass 2: enforce ERROR-severity rules. Any finding fails the
             # job — regression guards live here.
@@ -412,7 +414,7 @@ jobs:
                       --metrics=off \
                       --verbose \
                       --timeout 300 \
-                      bin/ common/ ee/ frontend/ packages/ posthog/ products/
+                      bin/ common/ ee/ frontend/ packages/ posthog/ products/ services/ tools/
 
             # Pass 3 (PRs only): fail on newly-introduced WARNING findings.
             # --baseline-commit diffs against the PR base (first parent of the
@@ -432,7 +434,7 @@ jobs:
                       --metrics=off \
                       --verbose \
                       --timeout 300 \
-                      bin/ common/ ee/ frontend/ packages/ posthog/ products/
+                      bin/ common/ ee/ frontend/ packages/ posthog/ products/ services/ tools/
 
     semgrep-test-rules:
         needs: changes
