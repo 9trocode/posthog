@@ -276,8 +276,7 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
         required=False,
         allow_null=True,
         min_value=1,
-        # int4 bound: a declared IntegerField skips the model's implicit range validation, and DRF
-        # never runs full_clean, so an over-int4 value would otherwise 500 in Postgres instead of 400.
+        # int4 bound: DRF never runs full_clean, so an over-int4 value would 500 in Postgres, not 400.
         max_value=2147483647,
         help_text=(
             "Optional cap on this scanner's own credit spend per billing period. Null means no scanner-level "
