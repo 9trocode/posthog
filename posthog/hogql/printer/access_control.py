@@ -58,7 +58,7 @@ def build_access_control_guard(
     if not context.database or not context.database.user_access_control:
         return None
 
-    blocked_ids = context.database.user_access_control.blocked_resource_ids_by_scope.get(resource, set())
+    blocked_ids = context.database.user_access_control.blocked_resource_ids_by_scope.get(resource, frozenset())
     if not blocked_ids:
         return None
 
