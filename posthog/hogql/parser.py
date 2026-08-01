@@ -308,10 +308,10 @@ _SHADOW_COMPARISONS = Counter(
 def _run_shadow_comparison(
     rule: ParseRule,
     statement: str,
-    primary_backend: HogQLParserBackend,
-    shadow_backend: HogQLParserBackend,
     primary_node: Any,
     start: int | None,
+    *,
+    backends: ResolvedParserBackends,
 ) -> None:
     """Cross-backend parity check, gated by `_shadow_sample_rate`. Emits telemetry only for shadowed runs, and always
     returns the primary result untouched.
@@ -325,12 +325,14 @@ def _run_shadow_comparison(
     primary-accepted input; a packaging-class shadow failure (broken wheel, panic) is only counted. ASTs are compared
     INCLUDING per-node `start` / `end` positions — divergent spans are flagged "position-only" for triage.
     """
+    if backends.shadow is None:
+        return
     if random.random() >= _shadow_sample_rate():
         return
     test_mode = _is_test_mode()
     rule_label = str(rule)
-    primary_version = _BACKEND_VERSION.get(primary_backend, "unknown")
-    shadow_version = _BACKEND_VERSION.get(shadow_backend, "unknown")
+    primary_version = _BACKEND_VERSION.get(backends.primary, "unknown")
+    shadow_version = _BACKEND_VERSION.get(backends.shadow, "unknown")
 
     def _count(result: str) -> None:
         _SHADOW_COMPARISONS.labels(
@@ -340,14 +342,14 @@ def _run_shadow_comparison(
     # Divergent query SQL rides error tracking (not the logs), the channel that already carries query SQL on failures.
     divergence_properties = {
         "hogql_parser_rule": rule_label,
-        "hogql_parser_primary": primary_backend,
-        "hogql_parser_shadow": shadow_backend,
+        "hogql_parser_primary": backends.primary,
+        "hogql_parser_shadow": backends.shadow,
         "hogql_parser_primary_version": primary_version,
         "hogql_parser_shadow_version": shadow_version,
         "hogql_parser_statement": statement,
     }
     try:
-        shadow_node = _invoke_parser(shadow_backend, rule, statement, start)
+        shadow_node = _invoke_parser(backends.shadow, rule, statement, start)
     except BaseHogQLError as err:
         # Shadow rejects input the primary accepted: a divergence (raises in TEST).
         _count("shadow_rejected")
@@ -377,7 +379,7 @@ def _run_shadow_comparison(
     # also attached as a capture property via `divergence_properties`.
     excerpt = statement if len(statement) <= 2000 else statement[:2000] + "…(truncated)"
     mismatch = HogQLParserShadowMismatch(
-        f"{rule} parser AST mismatch ({kind}): {primary_backend} vs {shadow_backend}\nstatement: {excerpt!r}"
+        f"{rule} parser AST mismatch ({kind}): {backends.primary} vs {backends.shadow}\nstatement: {excerpt!r}"
     )
     if test_mode:
         raise mismatch
@@ -592,9 +594,7 @@ def parse_string_template(
             classify_input=string,
         )
         if resolved.shadow is not None:
-            _run_shadow_comparison(
-                ParseRule.FULL_TEMPLATE_STRING, "F'" + string, resolved.primary, resolved.shadow, node, None
-            )
+            _run_shadow_comparison(ParseRule.FULL_TEMPLATE_STRING, "F'" + string, node, None, backends=resolved)
         if placeholders:
             with timings.measure("replace_placeholders"):
                 node = replace_placeholders(node, placeholders)
@@ -619,7 +619,7 @@ def parse_expr(
     with timings.measure(f"parse_expr_{resolved.primary}"):
         node = _parse_cached(ParseRule.EXPR, expr, resolved.primary, cache_origin, start=start)
         if resolved.shadow is not None:
-            _run_shadow_comparison(ParseRule.EXPR, expr, resolved.primary, resolved.shadow, node, start)
+            _run_shadow_comparison(ParseRule.EXPR, expr, node, start, backends=resolved)
         if placeholders:
             with timings.measure("replace_placeholders"):
                 node = replace_placeholders(node, placeholders)
@@ -641,7 +641,7 @@ def parse_order_expr(
     with timings.measure(f"parse_order_expr_{resolved.primary}"):
         node = _parse_cached(ParseRule.ORDER_EXPR, order_expr, resolved.primary, cache_origin)
         if resolved.shadow is not None:
-            _run_shadow_comparison(ParseRule.ORDER_EXPR, order_expr, resolved.primary, resolved.shadow, node, None)
+            _run_shadow_comparison(ParseRule.ORDER_EXPR, order_expr, node, None, backends=resolved)
         if placeholders:
             with timings.measure("replace_placeholders"):
                 node = replace_placeholders(node, placeholders)
@@ -664,7 +664,7 @@ def parse_select(
         with tracer.start_as_current_span("parse_statement_to_node"):
             node = _parse_cached(ParseRule.SELECT, statement, resolved.primary, cache_origin)
         if resolved.shadow is not None:
-            _run_shadow_comparison(ParseRule.SELECT, statement, resolved.primary, resolved.shadow, node, None)
+            _run_shadow_comparison(ParseRule.SELECT, statement, node, None, backends=resolved)
         if placeholders:
             with timings.measure("replace_placeholders"), tracer.start_as_current_span("replace_placeholders"):
                 node = replace_placeholders(node, placeholders)
@@ -685,5 +685,5 @@ def parse_program(
     with timings.measure(f"parse_program_{resolved.primary}"):
         node = _parse_cached(ParseRule.PROGRAM, source, resolved.primary, cache_origin)
         if resolved.shadow is not None:
-            _run_shadow_comparison(ParseRule.PROGRAM, source, resolved.primary, resolved.shadow, node, None)
+            _run_shadow_comparison(ParseRule.PROGRAM, source, node, None, backends=resolved)
     return cast("ast.Program", node)
