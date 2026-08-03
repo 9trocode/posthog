@@ -58,6 +58,17 @@ describe('errorTrackingIssueSceneLogic', () => {
         expect(logic.values.eventsQueryKey).not.toBe(initialKey)
     })
 
+    // issueFingerprintsError used to have no reducer at all, so a failed fetch left
+    // issueFingerprintsLoading stuck false with an empty list — indistinguishable from "no
+    // exceptions" and with no way to retry. It must surface the error and clear on retry.
+    it('surfaces and clears a fingerprints load failure', () => {
+        logic.actions.loadIssueFingerprintsFailure('Failed to load exceptions')
+        expect(logic.values.issueFingerprintsError).toBe('Failed to load exceptions')
+
+        logic.actions.loadIssueFingerprints()
+        expect(logic.values.issueFingerprintsError).toBeNull()
+    })
+
     it('handles an empty initial event query result', async () => {
         await expectLogic(logic, () => {
             logic.actions.loadInitialEvent('2026-01-01T00:00:00Z')

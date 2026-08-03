@@ -91,6 +91,7 @@ export interface errorTrackingIssueSceneLogicValues {
     initialEventTimestamp: string | null
     issue: ErrorTrackingRelationalIssue | null
     issueFingerprints: ErrorTrackingFingerprint[]
+    issueFingerprintsError: string | null
     issueFingerprintsLoading: boolean
     issueId: string
     issueLoading: boolean
@@ -627,6 +628,14 @@ export const errorTrackingIssueSceneLogic = kea<errorTrackingIssueSceneLogicType
         listDateRange: {
             setListDateRange: (_, { dateRange }) => dateRange,
         },
+        issueFingerprintsError: [
+            null as string | null,
+            {
+                loadIssueFingerprints: () => null,
+                loadIssueFingerprintsSuccess: () => null,
+                loadIssueFingerprintsFailure: (_, { error }) => error,
+            },
+        ],
     })),
 
     loaders(({ values, actions, props }) => ({

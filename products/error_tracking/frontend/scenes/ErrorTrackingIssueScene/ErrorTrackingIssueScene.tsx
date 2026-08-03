@@ -360,9 +360,15 @@ const LeftHandColumn = ({ isMobile }: { isMobile: boolean }): JSX.Element => {
 }
 
 const ExceptionsTab = (): JSX.Element => {
-    const { eventsQuery, eventsQueryKey, selectedEvent, issueFingerprints, issueFingerprintsLoading } =
-        useValues(errorTrackingIssueSceneLogic)
-    const { selectEvent } = useActions(errorTrackingIssueSceneLogic)
+    const {
+        eventsQuery,
+        eventsQueryKey,
+        selectedEvent,
+        issueFingerprints,
+        issueFingerprintsLoading,
+        issueFingerprintsError,
+    } = useValues(errorTrackingIssueSceneLogic)
+    const { selectEvent, loadIssueFingerprints } = useActions(errorTrackingIssueSceneLogic)
     const eventsDataSource = eventsSourceLogic({ query: eventsQuery, queryKey: eventsQueryKey })
     const { itemsLoading } = useValues(eventsDataSource)
     const { loadData } = useActions(eventsDataSource)
@@ -406,7 +412,14 @@ const ExceptionsTab = (): JSX.Element => {
             </div>
             <Separator className="shrink-0" />
             <Metadata className="flex flex-col flex-1 min-h-0">
-                {issueFingerprintsLoading ? (
+                {issueFingerprintsError ? (
+                    <div className="flex flex-col items-start gap-2 text-muted text-sm px-2 py-3">
+                        <span>We couldn't load the exceptions for this issue.</span>
+                        <LemonButton type="secondary" size="small" onClick={() => loadIssueFingerprints()}>
+                            Try again
+                        </LemonButton>
+                    </div>
+                ) : issueFingerprintsLoading ? (
                     <div className="text-muted text-sm px-2 py-3">Loading exceptions...</div>
                 ) : issueFingerprints.length === 0 ? (
                     <div className="text-muted text-sm px-2 py-3">No exceptions found for this issue.</div>
