@@ -136,6 +136,47 @@ export function createUserMessageEvent(text: string, ts: number): AcpMessage {
 }
 
 /**
+ * The two frames a `/clear` on a finished cloud run produces, in log order: the
+ * message the user typed, then the boundary rehydration stops at.
+ *
+ * The backend writes these into the run log (there is no sandbox to emit them),
+ * and mirrors this shape — a finished run has no live stream to echo them back,
+ * so the client paints them from here and a later reload folds the persisted
+ * copies into the same thread.
+ */
+export function createConversationClearedEvents(
+  sessionId: string,
+  ts: number,
+): AcpMessage[] {
+  return [
+    {
+      type: "acp_message",
+      ts,
+      message: {
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "/clear" },
+          },
+        },
+      },
+    },
+    {
+      type: "acp_message",
+      ts,
+      message: {
+        jsonrpc: "2.0",
+        method: POSTHOG_NOTIFICATIONS.CONVERSATION_CLEARED,
+        params: {},
+      },
+    },
+  ];
+}
+
+/**
  * Create a user shell execute event.
  * When id is provided, it's used to track async execution (start/complete).
  * When result is undefined, it represents a command that's still running.

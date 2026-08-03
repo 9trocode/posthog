@@ -3550,6 +3550,24 @@ export class PostHogAPIClient {
     }
   }
 
+  /**
+   * Record a `/clear` boundary in a finished run's log, so the next run in the
+   * chain resumes past it with an empty conversation. Only valid for a finished
+   * run — an active one has an agent that owns the clear (409 otherwise).
+   */
+  async clearTaskRunConversation(taskId: string, runId: string): Promise<void> {
+    const teamId = await this.getTeamId();
+    const path = `/api/projects/${teamId}/tasks/${taskId}/runs/${runId}/clear_conversation/`;
+    const response = await this.api.fetcher.fetch({
+      method: "post",
+      url: new URL(`${this.api.baseUrl}${path}`),
+      path,
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to clear conversation: ${response.statusText}`);
+    }
+  }
+
   async getTaskRunSessionLogs(
     taskId: string,
     runId: string,

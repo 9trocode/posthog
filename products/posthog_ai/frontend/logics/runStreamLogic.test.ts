@@ -2516,6 +2516,39 @@ describe('runStreamLogic', () => {
         })
     })
 
+    describe('/clear inline items', () => {
+        it('replaces the in-progress clearing spinner with the conversation_cleared divider', async () => {
+            await expectLogic(logic, () => {
+                logic.actions.ingestAcpFrame(notification('_posthog/status', { status: 'clearing' }))
+                logic.actions.ingestAcpFrame(notification('_posthog/conversation_cleared', { sessionId: 'sess_new' }))
+                logic.actions.ingestAcpFrame(notification('_posthog/status', { status: 'clearing', isComplete: true }))
+            }).toFinishAllListeners()
+
+            expect(logic.values.threadItems).toEqual([expect.objectContaining({ type: 'conversation_cleared' })])
+        })
+
+        it('reports a failed clear in place of the spinner, since no boundary follows it', async () => {
+            await expectLogic(logic, () => {
+                logic.actions.ingestAcpFrame(notification('_posthog/status', { status: 'clearing' }))
+                logic.actions.ingestAcpFrame(
+                    notification('_posthog/status', {
+                        status: 'clearing_failed',
+                        error: 'Conversation clear timed out after 30000ms',
+                    })
+                )
+            }).toFinishAllListeners()
+
+            expect(logic.values.threadItems).toEqual([
+                expect.objectContaining({
+                    type: 'status',
+                    status: 'clearing_failed',
+                    isComplete: true,
+                    errorMessage: 'Conversation clear timed out after 30000ms',
+                }),
+            ])
+        })
+    })
+
     describe('_posthog/task_notification inline item', () => {
         it('pushes a task_notification item carrying status + summary', async () => {
             await expectLogic(logic, () => {
