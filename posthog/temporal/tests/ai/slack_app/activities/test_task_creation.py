@@ -23,9 +23,8 @@ from posthog.temporal.ai.slack_app.activities.task_creation import (
     _SLACK_DELIVERY_CONSTRAINTS_TEXT_ONLY,
     _THREAD_CONTEXT_TAG,
     _THREAD_CONTEXT_UPDATE_TAG,
+    _artifact_delivery_capabilities,
     _build_posthog_code_task_description,
-    _canvas_file_delivery_available,
-    _chart_delivery_available,
     _format_author_token,
     _indent_body,
     build_thread_context_update_block,
@@ -153,43 +152,27 @@ def test_build_description_limits_delivery_to_text_when_artifact_flag_off():
 
 
 @pytest.mark.parametrize(
-    "flag_enabled,granted_scopes,expected",
+    "flag_enabled,granted_scopes,expected_chart,expected_canvas_file",
     [
-        (True, "chat:write,canvases:write,files:write", True),
-        (True, "chat:write,canvases:write", False),
-        (True, "chat:write", False),
-        (False, "chat:write,canvases:write,files:write", False),
+        (True, "chat:write,canvases:write,files:write", True, True),
+        (True, "chat:write,canvases:write", True, False),
+        (True, "chat:write", True, False),
+        (False, "chat:write,canvases:write,files:write", False, False),
     ],
 )
-def test_canvas_file_delivery_requires_flag_and_scopes(flag_enabled, granted_scopes, expected):
-    # A flag-on workspace whose Slack install lacks the adapter scopes must not be
-    # offered canvas/file delivery in the prompt — the agent would create artifacts
-    # that delivery then rejects. Capability = rollout flag AND granted scopes.
+def test_artifact_delivery_capabilities(flag_enabled, granted_scopes, expected_chart, expected_canvas_file):
+    # Charts need only the rollout flag (they post by PostHog-hosted url on
+    # chat:write). Canvas/file delivery needs flag AND adapter scopes — a flag-on
+    # workspace without the scopes must not be offered artifacts that delivery
+    # would reject.
     integration = Integration(kind="slack", config={"scope": granted_scopes})
 
     with patch(
         "products.slack_app.backend.feature_flags.is_slack_app_canvas_file_artifacts_enabled",
         return_value=flag_enabled,
-    ):
-        assert _canvas_file_delivery_available(integration) is expected
-
-
-@pytest.mark.parametrize(
-    "flag_enabled,granted_scopes,expected",
-    [
-        (True, "chat:write", True),
-        (True, "chat:write,canvases:write,files:write", True),
-        (False, "chat:write,canvases:write,files:write", False),
-    ],
-)
-def test_chart_delivery_needs_only_the_flag(flag_enabled, granted_scopes, expected):
-    integration = Integration(kind="slack", config={"scope": granted_scopes})
-
-    with patch(
-        "products.slack_app.backend.feature_flags.is_slack_app_canvas_file_artifacts_enabled",
-        return_value=flag_enabled,
-    ):
-        assert _chart_delivery_available(integration) is expected
+    ) as flag_check:
+        assert _artifact_delivery_capabilities(integration) == (expected_chart, expected_canvas_file)
+    assert flag_check.call_count == 1
 
 
 def test_build_description_renders_labeled_mention_for_each_author():

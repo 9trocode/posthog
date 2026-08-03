@@ -86,27 +86,21 @@ _SLACK_DELIVERY_CONSTRAINTS_TEXT_ONLY = """Slack delivery constraints:
 _SLACK_CANVAS_FILE_ADAPTER_SCOPES = frozenset({"canvases:write", "files:write"})
 
 
-def _chart_delivery_available(integration: Integration) -> bool:
-    """Whether the workspace can deliver chart images.
+def _artifact_delivery_capabilities(integration: Integration) -> tuple[bool, bool]:
+    """``(chart, canvas_file)`` delivery availability, from one rollout-flag read
+    so the two prompt offers can't be derived from divergent flag evaluations.
 
-    Chart cards post by PostHog-hosted url and work on chat:write alone, so only the
-    rollout flag gates them — not the in-review canvases:write / files:write scopes.
+    Chart cards post by PostHog-hosted url and work on chat:write alone, so the
+    flag is all they need. Canvas/file delivery additionally requires the Slack
+    scopes the adapters check at delivery time — the prompt offer must match
+    delivery capability so the agent is never invited to create an artifact that
+    delivery will reject.
     """
     from products.slack_app.backend.feature_flags import is_slack_app_canvas_file_artifacts_enabled  # noqa: PLC0415
 
-    return is_slack_app_canvas_file_artifacts_enabled(integration)
-
-
-def _canvas_file_delivery_available(integration: Integration) -> bool:
-    """Whether the workspace can actually deliver canvas/file artifacts.
-
-    The prompt offer must match delivery capability — the rollout flag AND the Slack
-    scopes the adapters check at delivery time — so the agent is never invited to
-    create an artifact that delivery will reject.
-    """
-    if not _chart_delivery_available(integration):
-        return False
-    return not SlackIntegration(integration).missing_scopes(_SLACK_CANVAS_FILE_ADAPTER_SCOPES)
+    chart = is_slack_app_canvas_file_artifacts_enabled(integration)
+    canvas_file = chart and not SlackIntegration(integration).missing_scopes(_SLACK_CANVAS_FILE_ADAPTER_SCOPES)
+    return chart, canvas_file
 
 
 # Cap on how many messages a single follow-up update block can carry. Threads with
@@ -645,6 +639,9 @@ def create_posthog_code_task_for_repo_activity(
     from products.slack_app.backend.feature_flags import is_slack_app_living_artifacts_enabled  # noqa: PLC0415
 
     living_artifacts_enabled = is_slack_app_living_artifacts_enabled(integration)
+    chart_delivery, canvas_file_delivery = (
+        _artifact_delivery_capabilities(integration) if living_artifacts_enabled else (False, False)
+    )
 
     description = _build_posthog_code_task_description(
         user_text,
@@ -652,8 +649,8 @@ def create_posthog_code_task_for_repo_activity(
         user_message_ts,
         mentioner_slack_user_id=slack_user_id,
         mentioner_display_name=mentioner_display_name,
-        canvas_file_artifacts_enabled=living_artifacts_enabled and _canvas_file_delivery_available(integration),
-        chart_artifacts_enabled=living_artifacts_enabled and _chart_delivery_available(integration),
+        canvas_file_artifacts_enabled=canvas_file_delivery,
+        chart_artifacts_enabled=chart_delivery,
         living_artifacts_enabled=living_artifacts_enabled,
     )
 
