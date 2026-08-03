@@ -73,6 +73,7 @@ describe('queries', () => {
             const where = (actual.where ?? []).join(' ')
             expect(where).toContain("'fp_with_\\'quote'")
             expect(where).toContain("'%O\\'Brien%'")
+            expect(where).toContain('isNotNull(issue_id)')
         })
 
         it('tags issue breakdown insight queries as error tracking', () => {
@@ -93,6 +94,18 @@ describe('queries', () => {
             })
 
             expect(actual.source.tags).toEqual({ productKey: ProductKey.ERROR_TRACKING })
+            expect(actual.source).toMatchObject({
+                series: [
+                    {
+                        properties: [
+                            {
+                                key: "issue_id = 'issue-id'",
+                                type: 'hogql',
+                            },
+                        ],
+                    },
+                ],
+            })
         })
     })
 })
