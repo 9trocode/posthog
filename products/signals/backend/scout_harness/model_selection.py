@@ -46,7 +46,8 @@ the per-run decision is reproducible. An absent payload / no matching team or sc
 all resolve to `None` — the agent-server default. Gating the model must never be able to fail a run.
 
 This is separate from the `signals-scout` enrollment/limits flag — that decides *whether* a team
-runs scouts; this decides *on which model*.
+runs scouts; this decides *on which model*. `resolve_configured_scout_model` at the bottom is the
+other, much simpler half: the model a team picked for itself in the inbox.
 """
 
 from __future__ import annotations
@@ -59,6 +60,8 @@ import posthoganalytics
 
 from posthog.exceptions_capture import capture_exception
 from posthog.models.team.team import Team
+
+from products.signals.backend.models import ScoutModelChoice, SignalTeamConfig
 
 SCOUTS_MODEL_FLAG = "scouts-model-selection"
 
@@ -299,3 +302,18 @@ def resolve_scout_model(team: Team, skill_name: str, run_id: str) -> ScoutModel:
         runtime_adapter=adapters.get(model) or _infer_runtime_adapter(model),
         reasoning_effort=efforts.get(model),
     )
+
+
+def resolve_configured_scout_model(team_id: int) -> ScoutModel:
+    """The model this team picked for its scouts in the inbox, if any.
+
+    The runner resolves this beneath `resolve_scout_model`, so a per-run trial keeps winning.
+    Effort stays unset: the picker offers a model, not a depth. `ScoutModel(None, None)` means
+    PostHog picks, which is the default.
+    """
+    model = SignalTeamConfig.objects.filter(team_id=team_id).values_list("scout_model", flat=True).first()
+    # `choices` is no DB constraint, so a value outside the curated set can sit in a row written
+    # before an id was retired. Fall back rather than route a run onto a model we've since dropped.
+    if model not in ScoutModelChoice.values:
+        return ScoutModel(model=None, runtime_adapter=None)
+    return ScoutModel(model=model, runtime_adapter=_infer_runtime_adapter(model))

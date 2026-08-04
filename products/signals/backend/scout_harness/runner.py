@@ -26,7 +26,7 @@ from products.signals.backend.scout_harness.limits import (
     FAILURE_STREAK_PAUSE_THRESHOLD,
     STALE_RUN_CUTOFF_S,
 )
-from products.signals.backend.scout_harness.model_selection import resolve_scout_model
+from products.signals.backend.scout_harness.model_selection import resolve_configured_scout_model, resolve_scout_model
 from products.signals.backend.scout_harness.prompt import (
     HARNESS_PROMPT_VERSION,
     SignalScoutRunSummary,
@@ -246,10 +246,13 @@ async def arun_signals_scout(
         team, skill.name, str(run_id)
     )
 
-    # The scout-model gate is the per-scout, per-run experiment layer; the `signals-pipeline-models`
-    # runtime pin is the default layer beneath it. When the gate resolves a model for this run it
-    # wins (its unallocated remainder resolves None and falls through to the pin), so a fleet-wide
-    # pin can't silently swallow a configured model trial. Either way the whole
+    configured_model = await database_sync_to_async(resolve_configured_scout_model, thread_sensitive=False)(team_id)
+
+    # Three layers, most specific first. The scout-model gate is the per-scout, per-run experiment
+    # layer; the team's own inbox choice sits under it; the `signals-pipeline-models` runtime pin is
+    # the fleet-wide default beneath both. When the gate resolves a model for this run it wins (its
+    # unallocated remainder resolves None and falls through), so neither a team's choice nor a
+    # fleet-wide pin can silently swallow a configured model trial. Either way the whole
     # runtime/model/effort triple is taken from one source — a Codex runtime never pairs with a
     # model it can't serve. Model-only pin entries are still ignored for scout: a pin supplies
     # model+runtime as a pair, and overriding one without the other would mis-route.
@@ -258,6 +261,10 @@ async def arun_signals_scout(
         runtime_adapter: str | None = scout_model.runtime_adapter
         model: str | None = scout_model.model
         reasoning_effort: str | None = scout_model.reasoning_effort
+    elif configured_model.model:
+        runtime_adapter = configured_model.runtime_adapter
+        model = configured_model.model
+        reasoning_effort = configured_model.reasoning_effort
     elif agent_runtime.runtime_adapter:
         runtime_adapter = agent_runtime.runtime_adapter
         model = agent_runtime.model
