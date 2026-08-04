@@ -290,6 +290,9 @@ x-posthog-mcp-mode: tools
 The header wins when both the header and the query parameter are set.
 An explicit value always wins over the client auto-detection; any other value is ignored and the auto-detection takes over.
 
+The cli-mode command surface is documented publicly on [posthog.com/docs/model-context-protocol/tools](https://posthog.com/docs/model-context-protocol/tools), which embeds `schema/exec-command-reference.md` at build time.
+That fragment is generated from the templates in `src/templates/sections/` by `scripts/generate-exec-docs.ts` (part of `hogli build:openapi`); edit the templates, not the fragment.
+
 ### Consumer attribution
 
 Wrapping apps and AI-tool plugins that install or proxy the PostHog MCP can self-identify so usage can be attributed to the install path (e.g. plugin-installed vs. manually-pasted URL). The wrapped MCP client (Claude Code, Cursor, …) is already captured separately via the MCP `clientInfo` handshake — this signal is only for the wrapping context.
@@ -325,6 +328,17 @@ Or use `bin/start-mcp-server` from the repo root, which also bootstraps `.env` a
 Then replace `https://mcp.posthog.com/mcp` with `http://localhost:8787/mcp` in the MCP configuration.
 
 The server defaults to port **8787**, reads config from `.env` (see `.env.example`), and expects a local Redis on port `6379` for session state; production deployments must set `REDIS_URL` to a TLS-encrypted `rediss://` endpoint.
+
+### Session cache migration
+
+Legacy MCP sessions store client context across five `mcp:session:*` keys with a seven-day expiry. The compact schema stores the same context in one `mcp:s:<id>:c` key with a 24-hour idle expiry.
+
+The server writes and compares both schemas. Legacy keys remain authoritative unless one of these environment variables enables compact reads:
+
+- `MCP_SESSION_CACHE_V2_READ_PROJECT_IDS`: comma-separated project IDs
+- `MCP_SESSION_CACHE_V2_READ_ALL=true`: all projects
+
+Monitor `mcp_session_cache_comparisons_total` for `match`, `mismatch`, and `compact_missing` before enabling reads. Monitor `mcp_session_cache_operations_total` for compact read or write errors. Compact read failures fall back to legacy state, so removing either environment variable rolls back the read path without deleting data.
 
 ### Edge-proxy worker (Cloudflare)
 
