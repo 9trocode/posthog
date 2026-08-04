@@ -297,14 +297,20 @@ static SECRET_TOKEN_RE: Lazy<Regex> =
 /// tokens (`phc_`) are world-readable by design and are left intact.
 ///
 /// A raw-text regex alone is not enough: a caller can smuggle a valid token as
-/// JSON unicode escapes (`"phs_..."`), which serde decodes
-/// for authentication but which never contain the literal `phs_` prefix for the
-/// regex to see. So when the body parses as JSON we redact structurally — walk
-/// the *decoded* values, redact any string carrying a `phs_` token, and
-/// re-serialize — then run the regex over the result as a backstop. Non-JSON
-/// bodies fall back to the raw-text regex.
+/// escape sequences (`"phs_..."`, or JSON5-only forms like `"\x70\x68\x73\x5f..."`),
+/// which the parser decodes for authentication but which never contain the
+/// literal `phs_` prefix for the regex to see. So when the body parses we redact
+/// structurally — walk the *decoded* values, redact any string carrying a `phs_`
+/// token, and re-serialize — then run the regex over the result as a backstop.
+///
+/// Parsing uses `json5`, matching `FlagRequest::from_bytes`: `/flags`
+/// authenticates the body via json5, so any escape form that produces a valid
+/// `phs_` token there — including JSON5-only hex escapes and single-quoted
+/// strings that strict `serde_json` rejects — must be decoded here too, or it
+/// would slip past to the raw-text fallback. Unparseable bodies fall back to the
+/// raw-text regex.
 fn redact_secret_tokens(body: &str) -> Cow<'_, str> {
-    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(body) {
+    if let Ok(mut value) = json5::from_str::<serde_json::Value>(body) {
         if redact_secret_tokens_in_json(&mut value) {
             if let Ok(serialized) = serde_json::to_string(&value) {
                 return Cow::Owned(
@@ -646,6 +652,33 @@ mod tests {
     }
 
     #[test]
+    fn redact_secret_tokens_redacts_json5_hex_escaped_token() {
+        // `/flags` authenticates the body with json5, which accepts escape forms strict JSON
+        // rejects — hex escapes (`\xXX`) and single-quoted strings. A token smuggled that way
+        // decodes to a valid `phs_` for auth but never shows the literal prefix to a serde_json
+        // parse, so the redactor must parse with json5 too. The escapes below decode to
+        // "phs_redactme123"; the value is single-quoted (also JSON5-only).
+        let body = r#"{api_key: '\x70\x68\x73\x5fredactme123'}"#;
+        // Guard: the literal prefix is genuinely hidden in the raw body the regex would scan,
+        // and the body is not parseable as strict JSON.
+        assert!(!body.contains("phs_"));
+        assert!(serde_json::from_str::<serde_json::Value>(body).is_err());
+        let redacted = redact_secret_tokens(body);
+        assert!(
+            !redacted.contains("phs_redactme123"),
+            "decoded secret token recoverable from log: {redacted}"
+        );
+        assert!(
+            !redacted.contains("\\x70") && !redacted.contains("x70"),
+            "escaped secret token bytes still present in log: {redacted}"
+        );
+        assert!(
+            redacted.contains("phs_<redacted>"),
+            "expected redaction marker: {redacted}"
+        );
+    }
+
+    #[test]
     fn body_log_teams_parses_empty() {
         assert!("{}".parse::<BodyLogTeams>().unwrap().0.is_empty());
         assert!("".parse::<BodyLogTeams>().unwrap().0.is_empty());
@@ -872,6 +905,45 @@ mod tests {
         );
         assert!(
             !captured.contains("0070"),
+            "escaped secret token bytes leaked into body log: {captured}"
+        );
+        assert!(
+            captured.contains("phs_<redacted>"),
+            "expected redacted token marker in body log: {captured}"
+        );
+    }
+
+    #[test]
+    fn log_response_redacts_json5_hex_escaped_token() {
+        // `/flags` authenticates via json5, so a token encoded with JSON5-only syntax (hex
+        // escapes, single-quoted string) is a valid credential yet invisible to a strict-JSON
+        // parse. Redaction must decode it the same way and keep it out of the body log, even
+        // when truncation later cuts the padded body.
+        let mut map = HashMap::new();
+        map.insert(42, vec!["*".into()]);
+        // Small cap so truncation happens inside the padding, well after the token.
+        let logger = BodyLogger::new(BodyLogTeams(map), 100);
+        let resp = make_response(&["my-feature"]);
+
+        // Hex escapes decode to "phs_"; the value is single-quoted (JSON5-only). Full token
+        // decodes to "phs_SECRETTOKENVALUE".
+        let padding = "A".repeat(500);
+        let body = format!(r#"{{api_key: '\x70\x68\x73\x5fSECRETTOKENVALUE', pad: '{padding}'}}"#);
+        assert!(
+            !body.contains("phs_"),
+            "literal prefix must be hidden in the raw body"
+        );
+
+        let captured = capture_log_response(|_| {
+            logger.log_response(Uuid::nil(), Some(42), Some(Bytes::from(body)), &resp);
+        });
+
+        assert!(
+            !captured.contains("SECRETTOKENVALUE"),
+            "decoded secret token leaked into body log: {captured}"
+        );
+        assert!(
+            !captured.contains("x70"),
             "escaped secret token bytes leaked into body log: {captured}"
         );
         assert!(
