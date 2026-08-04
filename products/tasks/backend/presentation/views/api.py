@@ -1742,7 +1742,7 @@ class TaskRunViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         summary="Send command to task run",
         description="Queue user_message JSON-RPC commands through the task workflow and forward sandbox control "
         "commands to the agent server. Supports user_message, cancel, close, permission_response, "
-        "set_config_option, mcp_response, native Pi RPC commands, and Pi queue operations.",
+        "set_config_option, mcp_response, side_question, native Pi RPC commands, and Pi queue operations.",
         strict_request_validation=True,
     )
     @action(
@@ -1776,9 +1776,13 @@ class TaskRunViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSet):
         request_id = request.validated_data.get("id")
         params = request.validated_data.get("params")
 
-        if method == "user_message":
+        # Both methods drive the agent and spend model tokens on the caller's behalf,
+        # so they sit behind the same access gate as the rest of Code.
+        if method in {"user_message", "side_question"}:
             if access_response := code_access_required_response(request.user):
                 return access_response
+
+        if method == "user_message":
             command_params = dict(params or {})
             artifact_ids = command_params.pop("artifact_ids", [])
             if artifact_ids:
