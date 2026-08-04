@@ -820,13 +820,13 @@ def stripe_source(
     api_version: str,
     should_use_incremental_field: bool = False,
 ):
-    # External table definitions were built for the acacia API versions (legacy + 2025-02-24), and
-    # only endpoints with a PostHog-managed canonical schema have them. For newer API versions or
-    # endpoints without a canonical schema, skip column hints and let the pipeline infer the columns
-    # from the rows Stripe returns.
+    # External table definitions were built for the acacia API versions (legacy + 2025-02-24). For
+    # those versions, only endpoints with a PostHog-managed canonical schema get column hints; the
+    # rest let the pipeline infer their columns from the rows Stripe returns. Newer API versions
+    # reshape fields the canonical definitions assume, so skip hints entirely there and always infer.
     table_name = f"stripe_{endpoint.lower()}"
-    if api_version in STRIPE_VERSIONS_WITH_EXTERNAL_TABLE_DEFINITIONS and table_name in external_tables:
-        column_mapping = get_dlt_mapping_for_external_table(table_name)
+    if api_version in STRIPE_VERSIONS_WITH_EXTERNAL_TABLE_DEFINITIONS:
+        column_mapping = get_dlt_mapping_for_external_table(table_name) if table_name in external_tables else {}
         column_hints: dict[str, Any] | None = {key: value.get("data_type") for key, value in column_mapping.items()}
     else:
         column_hints = None
