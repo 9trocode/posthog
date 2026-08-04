@@ -10,7 +10,11 @@ from structlog.types import FilteringBoundLogger
 
 from posthog.redis import get_client
 
-from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import ResumableData, SourceInputs
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import (
+    ResumableData,
+    SourceInputs,
+    SourceResponse,
+)
 
 
 class ResumableSourceManager(Generic[ResumableData]):
@@ -107,3 +111,31 @@ class ResumableSourceManager(Generic[ResumableData]):
 
             self._logger.debug(f"Loading resumable source state. key={self._key}, data={data}")
             return self._load_json(data)
+
+
+@dataclasses.dataclass(frozen=True)
+class ResumePlan(Generic[ResumableData]):
+    """How *this run* resumes, resolved once so no call site re-derives it.
+
+    Existing only when the run is genuinely resumable: the source class supplied a manager **and**
+    the response reported `supports_resume`. Sources own their checkpoints — saving as they walk and
+    clearing once they finish — so the pipeline only needs to know whether resume is cheap, plus the
+    manager to ask whether an earlier attempt left anything behind.
+    """
+
+    manager: ResumableSourceManager[ResumableData]
+
+
+def resolve_resume_plan(
+    manager: ResumableSourceManager[ResumableData] | None,
+    resource: SourceResponse,
+) -> ResumePlan[ResumableData] | None:
+    """Combine the class-level capability (a manager exists) with the run-level one.
+
+    A resumable-source class whose current run can't actually resume — a SQL full load with no
+    orderable primary key, say — reports `supports_resume=False` and resolves to `None` here, so it
+    is treated as non-resumable everywhere downstream instead of at each call site.
+    """
+    if manager is None or not resource.supports_resume:
+        return None
+    return ResumePlan(manager=manager)
