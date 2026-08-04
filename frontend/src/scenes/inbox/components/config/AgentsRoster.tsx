@@ -129,7 +129,7 @@ const AgentCard = memo(function AgentCard({ agent, state, onToggle, dormantAfter
                     <LemonTag type={statusTag.type} size="small">
                         {statusTag.label}
                     </LemonTag>
-                    {dormantAfterDays !== null && (
+                    {armed && dormantAfterDays !== null && (
                         <Tooltip
                             title={`${agent.label} hasn't received data in the last ${dormantAfterDays} days, so this source has nothing to find. Start sending data, or switch it off.`}
                         >
@@ -362,7 +362,7 @@ export function AgentsRoster(): JSX.Element {
                                     state={stateFor(agent.source)}
                                     onToggle={handleToggle}
                                     dormantAfterDays={
-                                        stateFor(agent.source).armed && dormantSourceProducts.has(agent.sourceProduct)
+                                        dormantSourceProducts.has(agent.sourceProduct)
                                             ? (sourceDormancy?.lookback_days ?? null)
                                             : null
                                     }
