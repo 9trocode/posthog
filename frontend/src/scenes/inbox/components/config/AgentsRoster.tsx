@@ -2,7 +2,7 @@ import { useActions, useValues } from 'kea'
 import { memo, useCallback } from 'react'
 
 import { IconArrowUpRight } from '@posthog/icons'
-import { LemonButton, LemonSkeleton, LemonSwitch, LemonTag, Link, Spinner } from '@posthog/lemon-ui'
+import { LemonButton, LemonSkeleton, LemonSwitch, LemonTag, Link, Spinner, Tooltip } from '@posthog/lemon-ui'
 
 import { LemonTagType } from 'lib/lemon-ui/LemonTag/LemonTag'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
@@ -68,9 +68,14 @@ interface AgentCardProps {
     agent: AgentRosterDefinition
     state: AgentSourceState
     onToggle: (source: AgentRosterSource) => void
+    /**
+     * Days the backing product has gone without data, when that's why this source can't fire.
+     * Null when the source is fine, or when we haven't been able to tell.
+     */
+    dormantAfterDays: number | null
 }
 
-const AgentCard = memo(function AgentCard({ agent, state, onToggle }: AgentCardProps): JSX.Element {
+const AgentCard = memo(function AgentCard({ agent, state, onToggle, dormantAfterDays }: AgentCardProps): JSX.Element {
     const { armed, loading, requiresSetup, syncStatus } = state
     const status = resolveAgentStatus(armed, syncStatus)
     const statusTag = STATUS_TAG[status]
@@ -124,6 +129,15 @@ const AgentCard = memo(function AgentCard({ agent, state, onToggle }: AgentCardP
                     <LemonTag type={statusTag.type} size="small">
                         {statusTag.label}
                     </LemonTag>
+                    {dormantAfterDays !== null && (
+                        <Tooltip
+                            title={`${agent.label} hasn't received data in the last ${dormantAfterDays} days, so this source has nothing to find. Start sending data, or switch it off.`}
+                        >
+                            <LemonTag type="warning" size="small">
+                                No data
+                            </LemonTag>
+                        </Tooltip>
+                    )}
                     {loading ? (
                         <Spinner className="text-lg" />
                     ) : requiresSetup ? (
@@ -176,6 +190,8 @@ export function AgentsRoster(): JSX.Element {
         isPgAnalyzeIssuesToggling,
         isHealthChecksToggling,
         isCiSignalsToggling,
+        dormantSourceProducts,
+        sourceDormancy,
     } = useValues(signalSourcesLogic)
     const {
         toggleSessionAnalysis,
@@ -345,6 +361,11 @@ export function AgentsRoster(): JSX.Element {
                                     agent={agent}
                                     state={stateFor(agent.source)}
                                     onToggle={handleToggle}
+                                    dormantAfterDays={
+                                        stateFor(agent.source).armed && dormantSourceProducts.has(agent.sourceProduct)
+                                            ? (sourceDormancy?.lookback_days ?? null)
+                                            : null
+                                    }
                                 />
                             ))}
                     </div>
