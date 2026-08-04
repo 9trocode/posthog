@@ -807,7 +807,7 @@ export interface ReplayScannerTemplateApi {
     /** AI model restored when this template is selected.
      *
      * * `gemini-3.5-flash-lite` - Gemini 3.5 Flash Lite
-     * * `gemini-3-flash-preview` - Gemini 3 Flash (preview)
+     * * `gemini-3-flash-preview` - Gemini 3 Flash
      * * `gemini-3.6-flash` - Gemini 3.6 Flash */
     readonly model: ScannerModelEnumApi
     /** Whether scanners created from this template emit PostHog Signals. */
