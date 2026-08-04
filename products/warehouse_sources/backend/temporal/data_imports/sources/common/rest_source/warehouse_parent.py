@@ -12,7 +12,7 @@ from products.warehouse_sources.backend.temporal.data_imports.naming_convention 
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.core.arrow_utils import (
     pyarrow_schema_from_arrow_exportable,
 )
-from products.warehouse_sources.backend.temporal.data_imports.pipelines.core.delta_table_access import (
+from products.warehouse_sources.backend.temporal.data_imports.pipelines.core.delta.table import (
     build_delta_table_uri,
     delta_storage_options,
 )
