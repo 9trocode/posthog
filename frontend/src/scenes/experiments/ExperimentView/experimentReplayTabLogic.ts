@@ -202,6 +202,9 @@ export interface experimentReplayTabLogicActions {
     recordingsLoaded: (sessionIds: string[]) => {
         sessionIds: string[]
     }
+    scannerCrossSellClicked: () => {
+        value: true
+    }
     setMetricFilterMode: (mode: ExperimentReplayMetricFilterMode) => {
         mode: ExperimentReplayMetricFilterMode
     }
@@ -296,6 +299,7 @@ export const experimentReplayTabLogic = kea<experimentReplayTabLogicType>([
         recordingsLoaded: (sessionIds: string[]) => ({ sessionIds }),
         recordingOpened: (sessionId: string) => ({ sessionId }),
         prefetchSessionContexts: (sessionIds: string[]) => ({ sessionIds }),
+        scannerCrossSellClicked: true,
     }),
     loaders(({ values, props }) => ({
         sessionBucket: [
@@ -702,6 +706,13 @@ export const experimentReplayTabLogic = kea<experimentReplayTabLogicType>([
         // the player is fetching it right now, and including it would compute it twice.
         recordingOpened: ({ sessionId }) => {
             actions.prefetchSessionContexts(values.loadedSessionIds.filter((id) => id !== sessionId))
+        },
+        scannerCrossSellClicked: () => {
+            void addProductIntentForCrossSell({
+                from: ProductKey.EXPERIMENTS,
+                to: ProductKey.REPLAY_VISION,
+                intent_context: ProductIntentContext.EXPERIMENT_CREATE_SCANNER,
+            })
         },
         prefetchSessionContexts: async ({ sessionIds }, breakpoint) => {
             if (!values.featureFlags[FEATURE_FLAGS.REPLAY_EXPERIMENT_CONTEXT] || sessionIds.length === 0) {

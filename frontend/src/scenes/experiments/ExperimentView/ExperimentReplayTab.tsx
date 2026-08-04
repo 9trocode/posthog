@@ -1,4 +1,5 @@
 import { useActions, useValues } from 'kea'
+import { combineUrl } from 'kea-router'
 import { Fragment } from 'react'
 
 import { IconChevronDown, IconInfo } from '@posthog/icons'
@@ -14,12 +15,16 @@ import {
     DropdownMenuTrigger,
 } from '@posthog/quill'
 
+import { useFeatureFlag } from 'lib/hooks/useFeatureFlag'
 import { LemonButton } from 'lib/lemon-ui/LemonButton'
 import { Tooltip } from 'lib/lemon-ui/Tooltip'
 import { pluralize } from 'lib/utils/strings'
 import { SessionRecordingsPlaylist } from 'scenes/session-recordings/playlist/SessionRecordingsPlaylist'
+import { urls } from 'scenes/urls'
 
 import { Experiment } from '~/types'
+
+import { experimentScannerParams } from 'products/replay_vision/frontend/replay_scanners/experimentTargeting'
 
 import { SummarizeSessionReplaysButton } from '../components/SummarizeSessionReplaysButton'
 import { isLaunched } from '../experimentStatus'
@@ -183,7 +188,9 @@ export function ExperimentReplayTab({ experiment }: { experiment: Experiment }):
         playlistFiltersChanged,
         recordingsLoaded,
         recordingOpened,
+        scannerCrossSellClicked,
     } = useActions(logic)
+    const replayVisionEnabled = useFeatureFlag('REPLAY_VISION')
 
     if (!isLaunched(experiment)) {
         return <LemonBanner type="info">Launch the experiment to see recordings of participants.</LemonBanner>
@@ -213,11 +220,36 @@ export function ExperimentReplayTab({ experiment }: { experiment: Experiment }):
         }
     }
 
+    const scannerSetupUrl = combineUrl(
+        urls.replayVisionScannerTemplate('new'),
+        experimentScannerParams({
+            experimentId: experiment.id as number,
+            variantKeys: effectiveVariantKey ? [effectiveVariantKey] : [],
+            useExposureFallback: usingExposureFallback,
+        })
+    ).url
+
     return (
         <div data-attr="experiment-recordings-tab">
             {usingExposureFallback && (
                 <LemonBanner type="info" className="mb-2">
                     {EXPOSURE_FALLBACK_NOTICE}
+                </LemonBanner>
+            )}
+            {replayVisionEnabled && (
+                <LemonBanner
+                    type="info"
+                    className="mb-2"
+                    dismissKey="experiment-replay-vision-scanner-cross-sell"
+                    action={{
+                        children: 'Set up a scanner',
+                        to: scannerSetupUrl,
+                        onClick: () => scannerCrossSellClicked(),
+                        'data-attr': 'experiment-recordings-scanner-cross-sell',
+                    }}
+                >
+                    Replay vision can watch new recordings from this experiment for you. Scanners check each session and
+                    report what they find.
                 </LemonBanner>
             )}
             <div className="mb-2 flex flex-wrap gap-2">
