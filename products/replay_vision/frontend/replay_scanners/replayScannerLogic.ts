@@ -17,6 +17,7 @@ import { loaders } from 'kea-loaders'
 import { actionToUrl, beforeUnload, router, urlToAction } from 'kea-router'
 import { CombinedLocation } from 'kea-router/lib/utils'
 
+import api from 'lib/api'
 import { scrollToFormError } from 'lib/forms/scrollToFormError'
 import { lemonToast } from 'lib/lemon-ui/LemonToast'
 import { copyToClipboard } from 'lib/utils/copyToClipboard'
@@ -53,6 +54,11 @@ import { refreshVisionQuota } from '../logics/visionQuotaLogic'
 import { observationClipboardText } from '../utils/observation'
 import { type UrlSorting, parseCsvParam, parseSortParam, serializeSortParam } from '../utils/urlParams'
 import { clampDurationFilter, durationFilterError } from './durationBounds'
+import {
+    ExperimentScannerContext,
+    parseExperimentScannerParams,
+    prefillScannerForExperiment,
+} from './experimentTargeting'
 import { clearScannerDraft, readScannerDraft, writeScannerDraft } from './scannerDraft'
 import {
     SCANNER_EDITOR_STEPS,
@@ -228,6 +234,7 @@ export interface replayScannerLogicValues {
     copyingAllObservations: boolean
     durationValidationError: string | null
     estimateRequestVersion: number
+    experimentContext: ExperimentScannerContext | null
     hasActiveObservationFilters: boolean
     hasObservationsInFlight: boolean
     hasUnsavedChanges: boolean
@@ -287,6 +294,9 @@ export interface replayScannerLogicActions {
     }
     appendClassifierTags: (tags: string[]) => {
         tags: string[]
+    }
+    applyTemplate: (templateKey: string | null) => {
+        templateKey: string | null
     }
     clearObservationFilters: () => {
         value: true
@@ -429,6 +439,9 @@ export interface replayScannerLogicActions {
         dateFrom: string | null
         dateTo: string | null
     }
+    setExperimentContext: (context: ExperimentScannerContext | null) => {
+        context: ExperimentScannerContext | null
+    }
     setObservationDateRange: (
         dateFrom: string | null,
         dateTo: string | null
@@ -569,6 +582,8 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
         loadScanner: true,
         loadScannerSuccess: (scanner: ReplayScanner) => ({ scanner }),
         loadScannerFailure: true,
+        setExperimentContext: (context: ExperimentScannerContext | null) => ({ context }),
+        applyTemplate: (templateKey: string | null) => ({ templateKey }),
         saveAffectedCohort: (tag?: string) => ({ tag }),
         setScannerType: (scannerType: ScannerType) => ({ scannerType }),
         setSubmitIntent: (intent: 'save' | 'advance') => ({ intent }),
@@ -777,6 +792,12 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 saveAffectedCohort: (_, { tag }) => tag ?? null,
                 saveAffectedCohortSuccess: () => null,
                 saveAffectedCohortFailure: () => null,
+            },
+        ],
+        experimentContext: [
+            null as ExperimentScannerContext | null,
+            {
+                setExperimentContext: (_, { context }) => context,
             },
         ],
         originalScanner: [
@@ -1180,6 +1201,25 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                         const { template: _drop, ...rest } = router.values.searchParams
                         router.actions.replace(router.values.location.pathname, rest)
                     }
+                    const experimentParams = parseExperimentScannerParams(router.values.searchParams)
+                    if (experimentParams) {
+                        // An experiment deep link expresses fresh intent, so it outranks a saved
+                        // draft; the draft is left in place for the next plain entry.
+                        try {
+                            const experiment = await api.experiments.get(experimentParams.experimentId)
+                            const context: ExperimentScannerContext = {
+                                experiment,
+                                variantKeys: experimentParams.variantKeys,
+                                useExposureFallback: experimentParams.useExposureFallback,
+                            }
+                            actions.setExperimentContext(context)
+                            actions.loadScannerSuccess(prefillScannerForExperiment(newScanner(templateKey), context))
+                        } catch {
+                            lemonToast.error("Couldn't load the experiment. Set recording filters manually instead.")
+                            actions.loadScannerSuccess(newScanner(templateKey))
+                        }
+                        return
+                    }
                     actions.loadScannerSuccess(newScanner(templateKey))
                     if (draft) {
                         actions.setScannerValues(draft)
@@ -1208,6 +1248,14 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                     actions.loadObservations()
                     actions.loadObservationStats()
                 }
+            },
+
+            // The template picker resets the form to the template's config; an experiment prefill
+            // (targeted query, scoped name) has to survive that reset, so it is re-applied here.
+            applyTemplate: ({ templateKey }) => {
+                const base = newScanner(templateKey)
+                const context = values.experimentContext
+                actions.resetScanner(context ? prefillScannerForExperiment(base, context) : base)
             },
 
             setScannerType: ({ scannerType }) => {

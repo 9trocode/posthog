@@ -7,7 +7,7 @@ import { urls } from 'scenes/urls'
 
 import { ScannerTypeBadge } from '../../components/ScannerTypeBadge'
 import { replayScannerLogic } from '../replayScannerLogic'
-import { ScannerTemplate, ScannerTemplateIcon, defaultScannerTemplates, newScanner } from '../scannerTemplates'
+import { ScannerTemplate, ScannerTemplateIcon, defaultScannerTemplates } from '../scannerTemplates'
 import { scannerTypeOutputHint } from '../types'
 
 const TEMPLATE_ICONS: Record<ScannerTemplateIcon, JSX.Element> = {
@@ -24,7 +24,7 @@ function TemplateCard({ template }: { template: ScannerTemplate | 'blank' }): JS
 
     const handleClick = (): void => {
         const templateKey = isBlank ? null : template.key
-        replayScannerLogic({ id: 'new' }).actions.resetScanner(newScanner(templateKey))
+        replayScannerLogic({ id: 'new' }).actions.applyTemplate(templateKey)
         const params = isBlank ? searchParams : { ...searchParams, template: template.key }
         router.actions.push(combineUrl(urls.replayVisionScannerConfigure('new'), params).url)
     }
