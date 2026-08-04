@@ -1,9 +1,15 @@
-.rt-PopoverContent:has(.combobox-content) {
+/* The combobox class lands on the popover element itself, so this cannot be a
+   :has() descendant match. The explicit sizing matters: left to `auto` the
+   popover resolves to the height of its own scrollbar and clips the panel away,
+   since [cmdk-root] carries the real frame. */
+.rt-PopoverContent.combobox-content {
   padding: 0;
   background: transparent;
   border: none;
   box-shadow: none;
-  overflow: hidden;
+  overflow: visible;
+  width: max-content;
+  height: max-content;
 }
 
 .combobox-content [cmdk-root] {
