@@ -23,6 +23,12 @@ import { ResponsiveLayouts } from 'react-grid-layout'
 import type { Layout } from 'react-grid-layout'
 
 import { LemonDialog, lemonToast } from '@posthog/lemon-ui'
+import {
+    dashboardsGroupsCreate,
+    dashboardsGroupsDeleteCreate,
+    dashboardsGroupsMoveTileCreate,
+    dashboardsGroupsUpdatePartialUpdate,
+} from '@posthog/products-dashboards/frontend/generated/api'
 import type { DashboardWidgetRunResultApi } from '@posthog/products-dashboards/frontend/generated/api.schemas'
 import { isWidgetConfigValidationError, updateDashboardWidgetTile } from '@posthog/products-dashboards/frontend/utils'
 import {
@@ -55,7 +61,7 @@ import { BREAKPOINTS, dashboardToSaveableTemplate, getDashboardTileDisplayName }
 import {
     calculateDuplicateLayout,
     calculateInsertionLayout,
-    calculateLayouts,
+    calculateLayoutsWithGroups,
     DEFAULT_INSERTED_TILE_SIZE,
 } from 'scenes/dashboard/tileLayouts'
 import {
@@ -261,9 +267,11 @@ export interface dashboardLogicValues {
     cancellingPreview: boolean
     columns: number | null
     containerWidth: number | null
+    createDashboardGroupLoading: boolean
     currentLayoutSize: 'sm' | 'xs'
     dashboard: DashboardType<QueryBasedInsightModel> | null
     dashboardFailedToLoad: boolean
+    dashboardGroupsEnabled: boolean
     dashboardLayouts: Record<DashboardTile['id'], DashboardTile['layouts']>
     dashboardLoadData: {
         action: DashboardLoadAction | undefined
@@ -454,8 +462,21 @@ export interface dashboardLogicActions {
             toDashboardName: string
         }
     }
+    createDashboardGroup: (name: string) => {
+        name: string
+    }
+    createDashboardGroupFinished: () => {
+        value: true
+    }
     dashboardNotFound: () => {
         value: true
+    }
+    deleteDashboardGroup: (
+        groupId: string,
+        memberHandling: 'delete_tiles' | 'move_to_ungrouped'
+    ) => {
+        groupId: string
+        memberHandling: 'delete_tiles' | 'move_to_ungrouped'
     }
     duplicateTile: (tile: DashboardTile<QueryBasedInsightModel>) => {
         tile: DashboardTile<QueryBasedInsightModel<Node<Record<string, any>>>>
@@ -531,6 +552,29 @@ export interface dashboardLogicActions {
     }
     loadingDashboardItemsStarted: (action: DashboardLoadAction) => {
         action: DashboardLoadAction
+    }
+    moveDashboardTileToGroup: (payload: {
+        groupId: string | null
+        layouts: {
+            sm: {
+                h: number
+                w: number
+                x: number
+                y: number
+            }
+        }
+        tileId: number
+    }) => {
+        groupId: string | null
+        layouts: {
+            sm: {
+                h: number
+                w: number
+                x: number
+                y: number
+            }
+        }
+        tileId: number
     }
     moveToDashboard: (
         tile: DashboardTile<QueryBasedInsightModel>,
@@ -621,6 +665,13 @@ export interface dashboardLogicActions {
         payload?: {
             tile: DashboardTile<QueryBasedInsightModel<Node<Record<string, any>>>>
         }
+    }
+    renameDashboardGroup: (
+        groupId: string,
+        name: string
+    ) => {
+        groupId: string
+        name: string
     }
     reportDashboardViewed: () => {
         value: true
@@ -865,6 +916,27 @@ export interface dashboardLogicActions {
         columns: number
         containerWidth: number
     }
+    updateDashboardGroupLayout: (payload: {
+        groupId: string
+        layouts: {
+            sm: {
+                h: number
+                w: number
+                x: number
+                y: number
+            }
+        }
+    }) => {
+        groupId: string
+        layouts: {
+            sm: {
+                h: number
+                w: number
+                x: number
+                y: number
+            }
+        }
+    }
     updateDashboardLastRefresh: (lastDashboardRefresh: Dayjs) => {
         lastDashboardRefresh: Dayjs
     }
@@ -1030,6 +1102,11 @@ export interface dashboardLogicMeta {
             tiles: DashboardTile<QueryBasedInsightModel<Node<Record<string, any>>>>[],
             placement: DashboardPlacement
         ) => boolean
+        dashboardGroupsEnabled: (
+            featureFlags: FeatureFlagsSet,
+            dashboard: DashboardType<QueryBasedInsightModel<Node<Record<string, any>>>> | null,
+            placement: DashboardPlacement
+        ) => boolean
         inlineTileInsertionEnabled: (featureFlags: FeatureFlagsSet) => boolean
         insightTiles: (
             tiles: DashboardTile<QueryBasedInsightModel<Node<Record<string, any>>>>[]
@@ -1069,7 +1146,8 @@ export interface dashboardLogicMeta {
         ) => boolean
         sizeKey: (columns: number | null) => DashboardLayoutSize | undefined
         layouts: (
-            tiles: DashboardTile<QueryBasedInsightModel<Node<Record<string, any>>>>[]
+            tiles: DashboardTile<QueryBasedInsightModel<Node<Record<string, any>>>>[],
+            dashboard: DashboardType<QueryBasedInsightModel<Node<Record<string, any>>>> | null
         ) => Partial<Record<DashboardLayoutSize, Layout>>
         layout: (
             layouts: Partial<Record<DashboardLayoutSize, Layout>>,
@@ -1218,6 +1296,22 @@ export const dashboardLogic = kea<dashboardLogicType>([
         clearAddWidgetSelectedTypes: true,
         toggleAddWidgetCollapsedGroup: (groupId: string) => ({ groupId }),
         addWidgetTileFinished: true,
+        createDashboardGroup: (name: string) => ({ name }),
+        createDashboardGroupFinished: true,
+        moveDashboardTileToGroup: (payload: {
+            tileId: number
+            groupId: string | null
+            layouts: { sm: { x: number; y: number; w: number; h: number } }
+        }) => payload,
+        updateDashboardGroupLayout: (payload: {
+            groupId: string
+            layouts: { sm: { x: number; y: number; w: number; h: number } }
+        }) => payload,
+        renameDashboardGroup: (groupId: string, name: string) => ({ groupId, name }),
+        deleteDashboardGroup: (groupId: string, memberHandling: 'delete_tiles' | 'move_to_ungrouped') => ({
+            groupId,
+            memberHandling,
+        }),
         /** One-shot signal asking the view to scroll the dashboard to the bottom (e.g. after adding tiles). */
         requestScrollToBottom: true,
         /** Update a single refresh status. */
@@ -2339,6 +2433,13 @@ export const dashboardLogic = kea<dashboardLogicType>([
                 addWidgetTileFinished: () => false,
             },
         ],
+        createDashboardGroupLoading: [
+            false,
+            {
+                createDashboardGroup: () => true,
+                createDashboardGroupFinished: () => false,
+            },
+        ],
         // Incremented on each scroll-to-bottom request; the view effects on the change.
         scrollToBottomSignal: [
             0,
@@ -2652,6 +2753,19 @@ export const dashboardLogic = kea<dashboardLogicType>([
                 return !!featureFlags[FEATURE_FLAGS.DASHBOARD_WIDGETS]
             },
         ],
+        dashboardGroupsEnabled: [
+            (s) => [s.featureFlags, s.dashboard, s.placement],
+            (
+                featureFlags: import('lib/logic/featureFlagLogic').FeatureFlagsSet,
+                dashboard: DashboardType<QueryBasedInsightModel> | null,
+                placement: DashboardPlacement
+            ): boolean => {
+                if (placement === DashboardPlacement.Public && (dashboard?.groups?.length ?? 0) > 0) {
+                    return true
+                }
+                return !!featureFlags[FEATURE_FLAGS.DASHBOARD_GROUPS]
+            },
+        ],
         inlineTileInsertionEnabled: [
             (s) => [s.featureFlags],
             (featureFlags: import('lib/logic/featureFlagLogic').FeatureFlagsSet): boolean =>
@@ -2802,12 +2916,13 @@ export const dashboardLogic = kea<dashboardLogicType>([
             },
         ],
         layouts: [
-            (s) => [s.tiles],
+            (s) => [s.tiles, s.dashboard],
             (
                 tiles: DashboardTile<
                     QueryBasedInsightModel<import('~/queries/schema/schema-general').Node<Record<string, any>>>
-                >[]
-            ) => calculateLayouts(tiles),
+                >[],
+                dashboard: DashboardType<QueryBasedInsightModel> | null
+            ) => calculateLayoutsWithGroups(tiles, dashboard?.groups ?? []),
             // Tile refreshes replace `tiles` once per insight response without touching geometry;
             // keeping the result reference stable stops react-grid-layout re-laying-out every tile
             // N times per dashboard refresh cycle.
@@ -3079,6 +3194,46 @@ export const dashboardLogic = kea<dashboardLogicType>([
         },
     })),
     listeners(({ actions, values, cache, props, sharedListeners }) => ({
+        createDashboardGroup: async ({ name }) => {
+            try {
+                await dashboardsGroupsCreate(String(values.currentTeamId), props.id, { name })
+                actions.loadDashboard({ action: DashboardLoadAction.Update })
+                lemonToast.success('Group added')
+            } catch {
+                lemonToast.error('Could not add group. Try again.')
+            } finally {
+                actions.createDashboardGroupFinished()
+            }
+        },
+        moveDashboardTileToGroup: async ({ tileId, groupId, layouts }) => {
+            await dashboardsGroupsMoveTileCreate(String(values.currentTeamId), props.id, {
+                tile_id: tileId,
+                group_id: groupId,
+                layouts,
+            })
+            actions.loadDashboard({ action: DashboardLoadAction.Update })
+        },
+        updateDashboardGroupLayout: async ({ groupId, layouts }) => {
+            await dashboardsGroupsUpdatePartialUpdate(String(values.currentTeamId), props.id, {
+                group_id: groupId,
+                layouts,
+            })
+            actions.loadDashboard({ action: DashboardLoadAction.Update })
+        },
+        renameDashboardGroup: async ({ groupId, name }) => {
+            await dashboardsGroupsUpdatePartialUpdate(String(values.currentTeamId), props.id, {
+                group_id: groupId,
+                name,
+            })
+            actions.loadDashboard({ action: DashboardLoadAction.Update })
+        },
+        deleteDashboardGroup: async ({ groupId, memberHandling }) => {
+            await dashboardsGroupsDeleteCreate(String(values.currentTeamId), props.id, {
+                group_id: groupId,
+                member_handling: memberHandling,
+            })
+            actions.loadDashboard({ action: DashboardLoadAction.Update })
+        },
         scheduleRefreshDashboardWidgets: ({ tileId }: { tileId: number }) => {
             if (!cache.widgetTileRefreshScheduler) {
                 cache.widgetTileRefreshScheduler = createDashboardWidgetTileRefreshScheduler((id) =>
