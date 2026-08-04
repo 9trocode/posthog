@@ -7,7 +7,7 @@ import type { PiControllerSessionState } from "@posthog/core/pi-runtime/piSessio
 import { Skeleton } from "@posthog/quill";
 import { isTerminalStatus } from "@posthog/shared/domain-types";
 import { useCallback } from "react";
-import { PiModelSelector, PiThinkingLevelSelector } from "./PiSessionControls";
+import { PiReasoningLevelSelector } from "./PiReasoningLevelSelector";
 import {
   getPiPendingConfig,
   usePiPendingConfigStore,
@@ -126,23 +126,15 @@ export function PiSessionModelControls({
     return <Skeleton className="h-7 w-32 bg-foreground/15" />;
   }
 
-  const supportsThinking = thinkingLevels.some((level) => level !== "off");
   return (
-    <span className="flex gap-1">
-      <PiModelSelector
-        models={models}
-        currentModel={currentModel}
-        disabled={disabled}
-        onChange={setModel}
-      />
-      {currentThinkingLevel && thinkingLevelsLoaded && supportsThinking && (
-        <PiThinkingLevelSelector
-          level={currentThinkingLevel}
-          levels={thinkingLevels}
-          disabled={disabled}
-          onChange={setThinkingLevel}
-        />
-      )}
-    </span>
+    <PiReasoningLevelSelector
+      models={models}
+      currentModel={currentModel}
+      thinkingLevels={thinkingLevelsLoaded ? thinkingLevels : []}
+      currentThinkingLevel={currentThinkingLevel}
+      disabled={disabled}
+      onModelChange={setModel}
+      onThinkingLevelChange={setThinkingLevel}
+    />
   );
 }

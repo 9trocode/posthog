@@ -73,10 +73,7 @@ import type { EditorHandle } from "../../message-editor/types";
 import { useAutoFocusOnTyping } from "../../message-editor/useAutoFocusOnTyping";
 import { resolveAndAttachDroppedFiles } from "../../message-editor/utils/persistFile";
 import { usePanelLayoutStore } from "../../panels/panelLayoutStore";
-import {
-  PiModelSelector,
-  PiThinkingLevelSelector,
-} from "../../pi-sessions/PiSessionControls";
+import { PiReasoningLevelSelector } from "../../pi-sessions/PiReasoningLevelSelector";
 import { usePiModelCatalog } from "../../pi-sessions/usePiModelCatalog";
 import { DropZoneOverlay } from "../../sessions/components/DropZoneOverlay";
 import { ReasoningLevelSelector } from "../../sessions/components/ReasoningLevelSelector";
@@ -1413,16 +1410,6 @@ export function TaskInput({
                   }
                   enableCommands
                   enableBashMode={false}
-                  modelSelector={
-                    autoresearchDraft ? null : runtime === "pi" ? (
-                      <PiModelSelector
-                        models={piModelCatalog}
-                        currentModel={currentPiModel}
-                        disabled={isCreatingTask || isPiConfigLoading}
-                        onChange={handlePiModelChange}
-                      />
-                    ) : null
-                  }
                   historyButton={
                     <PromptHistoryDialog
                       onSelect={handleHistorySelect}
@@ -1432,14 +1419,16 @@ export function TaskInput({
                   }
                   reasoningSelector={
                     autoresearchDraft ? null : runtime === "pi" ? (
-                      currentPiThinkingLevel && supportsPiThinking ? (
-                        <PiThinkingLevelSelector
-                          level={currentPiThinkingLevel}
-                          levels={piThinkingLevels}
-                          disabled={isCreatingTask || isPiConfigLoading}
-                          onChange={handlePiThinkingLevelChange}
-                        />
-                      ) : null
+                      <PiReasoningLevelSelector
+                        models={piModelCatalog}
+                        currentModel={currentPiModel}
+                        thinkingLevels={piThinkingLevels}
+                        currentThinkingLevel={currentPiThinkingLevel}
+                        disabled={isCreatingTask}
+                        isLoading={isPiConfigLoading}
+                        onModelChange={handlePiModelChange}
+                        onThinkingLevelChange={handlePiThinkingLevelChange}
+                      />
                     ) : (
                       <ReasoningLevelSelector
                         thoughtOption={thoughtOption}
