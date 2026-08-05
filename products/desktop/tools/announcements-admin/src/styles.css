@@ -1,0 +1,154 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: light-dark(#fafafa, #151515);
+  color: light-dark(#1c1c1c, #ededed);
+}
+
+.editor {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+header > div {
+  flex: 1;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+.muted {
+  color: light-dark(#6b6b6b, #9a9a9a);
+  font-size: 13px;
+  margin: 0;
+}
+
+.center {
+  text-align: center;
+  margin-top: 18vh;
+}
+
+.login {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.panel {
+  border: 1px solid light-dark(#e0e0e0, #333);
+  border-radius: 8px;
+  padding: 14px;
+  background: light-dark(#fff, #1d1d1d);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: light-dark(#555, #aaa);
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid light-dark(#ccc, #444);
+  border-radius: 6px;
+  background: light-dark(#fff, #242424);
+  color: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid light-dark(#ccc, #444);
+  border-radius: 6px;
+  background: light-dark(#f4f4f4, #2a2a2a);
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: #f54e00;
+  border-color: #f54e00;
+  color: #fff;
+}
+
+button.ghost {
+  background: transparent;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error {
+  color: #d43939;
+  font-size: 13px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+details textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+code {
+  background: light-dark(#eee, #2a2a2a);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
