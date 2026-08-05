@@ -88,6 +88,7 @@ from products.replay_vision.backend.quota import (
 )
 from products.replay_vision.backend.tag_suggestions import SuggestionError, suggest_classifier_tags
 from products.replay_vision.backend.tags import slugify_tag
+from products.replay_vision.backend.telemetry import vision_action_lifecycle_properties
 from products.replay_vision.backend.temporal.constants import (
     MAX_IN_FLIGHT_APPLIES_PER_SCANNER,
     MAX_IN_FLIGHT_APPLIES_PER_TEAM,
@@ -495,7 +496,18 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
         # Every scanner starts with a built-in daily digest so the overview has a summary to show.
         # Flag-gated so teams without the actions feature don't accrue synthesis runs they can't see.
         if is_replay_vision_actions_enabled(user, team):
-            provision_scanner_digest(scanner, user)
+            digest = provision_scanner_digest(scanner, user)
+            if digest is not None:
+                # auto_provisioned marks this digest as a side effect of scanner creation rather than a
+                # user configuring one, so setup-intent analyses can exclude it while its later edits
+                # and deletes still reconcile against a created event.
+                report_user_action(
+                    user,
+                    "replay_vision_digest_created",
+                    {**vision_action_lifecycle_properties(digest, team), "auto_provisioned": True},
+                    team=team,
+                    request=self.context["request"],
+                )
         report_user_action(
             user,
             "replay_vision_scanner_created",
