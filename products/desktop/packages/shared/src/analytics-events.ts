@@ -1276,6 +1276,17 @@ export interface LoopLinkCopiedProperties {
   visibility: "personal" | "team";
 }
 
+export interface AnnouncementProperties {
+  announcement_id: string;
+  announcement_kind: "announcement" | "required-update";
+  announcement_style: "banner" | "modal";
+}
+
+export interface AnnouncementCtaClickedProperties
+  extends AnnouncementProperties {
+  cta_type: "external" | "deeplink" | "update";
+}
+
 // Event names as constants
 export const ANALYTICS_EVENTS = {
   // App lifecycle
@@ -1449,6 +1460,11 @@ export const ANALYTICS_EVENTS = {
   LOOPS_PROMO_OPENED: "Loops promo opened",
   LOOPS_PROMO_DISMISSED: "Loops promo dismissed",
   LOOPS_PROMO_LEARN_MORE_CLICKED: "Loops promo learn more clicked",
+
+  // Remote in-app announcement events
+  ANNOUNCEMENT_SHOWN: "Announcement shown",
+  ANNOUNCEMENT_DISMISSED: "Announcement dismissed",
+  ANNOUNCEMENT_CTA_CLICKED: "Announcement CTA clicked",
 
   // Loops events
   LOOP_LIST_VIEWED: "Loop list viewed",
@@ -1628,6 +1644,11 @@ export type EventPropertyMap = {
   [ANALYTICS_EVENTS.LOOPS_PROMO_OPENED]: never;
   [ANALYTICS_EVENTS.LOOPS_PROMO_DISMISSED]: never;
   [ANALYTICS_EVENTS.LOOPS_PROMO_LEARN_MORE_CLICKED]: never;
+
+  // Remote in-app announcement events
+  [ANALYTICS_EVENTS.ANNOUNCEMENT_SHOWN]: AnnouncementProperties;
+  [ANALYTICS_EVENTS.ANNOUNCEMENT_DISMISSED]: AnnouncementProperties;
+  [ANALYTICS_EVENTS.ANNOUNCEMENT_CTA_CLICKED]: AnnouncementCtaClickedProperties;
 
   // Loops events
   [ANALYTICS_EVENTS.LOOP_LIST_VIEWED]: LoopListViewedProperties;

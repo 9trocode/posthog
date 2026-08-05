@@ -122,6 +122,8 @@ function GeometricPattern() {
   );
 }
 
+// Legacy ad-hoc announcement — new broad announcements go through the remote
+// announcements system instead (packages/ui/src/features/announcements).
 export function LoopsPromoCard() {
   const loopsEnabled = useFeatureFlag(LOOPS_FLAG, import.meta.env.DEV);
   const dismissed = useLoopsPromoStore((state) => state.dismissed);

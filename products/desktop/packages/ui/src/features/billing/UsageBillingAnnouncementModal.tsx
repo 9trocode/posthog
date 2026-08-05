@@ -17,7 +17,8 @@ import { useUsage } from "./useUsage";
 /**
  * One-time blocking announcement of the usage-based billing cutover. The
  * flag is its launch switch — flip at cutover, delete once the fleet has
- * acknowledged.
+ * acknowledged. Legacy ad-hoc surface: new broad announcements go through
+ * the remote announcements system (packages/ui/src/features/announcements).
  */
 export function UsageBillingAnnouncementModal() {
   const isOpen = useBillingAnnouncementVisible();

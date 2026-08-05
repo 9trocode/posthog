@@ -54,9 +54,22 @@ import {
   type TaskLinkService,
 } from "@posthog/core/links/task-link";
 import { publicProcedure, router } from "@posthog/host-trpc/trpc";
+import {
+  DEEP_LINK_SERVICE,
+  type IDeepLinkRegistry,
+} from "@posthog/platform/deep-link";
 import type { NotificationTarget } from "@posthog/platform/notifications";
+import { z } from "zod";
 
 export const deepLinkRouter = router({
+  open: publicProcedure
+    .input(z.object({ url: z.string() }))
+    .mutation(({ ctx, input }) =>
+      ctx.container
+        .get<IDeepLinkRegistry>(DEEP_LINK_SERVICE)
+        .handleUrl(input.url),
+    ),
+
   onOpenTask: publicProcedure.subscription(async function* (opts) {
     const service = opts.ctx.container.get<TaskLinkService>(TASK_LINK_SERVICE);
     const iterable = service.toIterable(TaskLinkEvent.OpenTask, {
