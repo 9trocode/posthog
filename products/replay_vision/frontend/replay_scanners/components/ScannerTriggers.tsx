@@ -226,6 +226,7 @@ export function ScannerTriggers({ scannerId }: { scannerId: string }): JSX.Eleme
         featureFlags[FEATURE_FLAGS.TAXONOMIC_FILTER_CATEGORY_DROPDOWN]
     )
     const scannerFilterTypes = [...SCANNER_BASE_FILTER_TYPES, ...groupsTaxonomicTypes]
+    const experimentTargetingEnabled = !!featureFlags[FEATURE_FLAGS.VISION_ENTRYPOINT_EXPERIMENTS]
 
     if (!scanner) {
         return <div className="text-muted">Loading…</div>
@@ -284,7 +285,7 @@ export function ScannerTriggers({ scannerId }: { scannerId: string }): JSX.Eleme
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    {!attached && (
+                                    {!attached && experimentTargetingEnabled && (
                                         <LemonButton
                                             size="xsmall"
                                             type="secondary"
