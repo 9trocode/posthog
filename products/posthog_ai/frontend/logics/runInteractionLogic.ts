@@ -553,11 +553,16 @@ export const runInteractionLogic = kea<runInteractionLogicType>([
             (s) => [s.effortOverride, (_, p) => p.currentEffort, s.claudeDefaultEffort, s.selectedModel, s.catalogue],
             (
                 override: string | null,
-                current: string | null | undefined, serverDefault: string | null,
+                current: string | null | undefined,
+                serverDefault: string | null,
                 model: string,
                 catalogue: ModelChoiceApi[]
             ): ReasoningEffortEnumApi =>
-                resolveEffortForModel(catalogue, override ?? current ?? serverDefault ?? DEFAULT_COMPOSER_EFFORT, model),
+                resolveEffortForModel(
+                    catalogue,
+                    override ?? current ?? serverDefault ?? DEFAULT_COMPOSER_EFFORT,
+                    model
+                ),
         ],
         // The permission mode to display and launch with: the client-side override, else the session's live
         // mode (from the stream's `current_mode_update` frames), else the run's stored launch mode, else the

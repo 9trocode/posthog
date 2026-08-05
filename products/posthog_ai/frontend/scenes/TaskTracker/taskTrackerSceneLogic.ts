@@ -12,7 +12,6 @@ import { tasksCreate, tasksRunCreate } from 'products/tasks/frontend/generated/a
 import {
     type ModelChoiceApi,
     OriginProductEnumApi,
-    type ClaudeTaskRunCreateSchemaApi,
     ReasoningEffortEnumApi,
     type TaskWriteApi,
     TaskExecutionModeEnumApi,
@@ -33,11 +32,7 @@ import { toolStreamEventsLogic } from '../../logics/toolStreamEventsLogic'
 import type { AttachedContextItem } from '../../types/contextTypes'
 import type { RepositoryConfig, Task } from '../../types/taskTypes'
 import type { TaskListParams } from '../../types/taskTypes'
-import {
-    buildRunCreateRequest,
-DEFAULT_COMPOSER_MODEL,
-resolveEffortForModel,
-} from '../../utils/composerModels'
+import { buildRunCreateRequest, DEFAULT_COMPOSER_MODEL, resolveEffortForModel } from '../../utils/composerModels'
 import { DEFAULT_COMPOSER_MODE, type PermissionMode } from '../../utils/composerModes'
 import { wrapWithPosthogContext } from '../../utils/posthogContextBlock'
 
@@ -431,13 +426,14 @@ export const taskTrackerSceneLogic = kea<taskTrackerSceneLogicType>([
                 newTaskData.model ?? claudeDefaultModel ?? DEFAULT_COMPOSER_MODEL,
         ],
         displayEffort: [
-            (s) => [s.newTaskData, s.claudeDefaultEffort, s.displayModel],
+            (s) => [s.newTaskData, s.claudeDefaultEffort, s.displayModel, s.catalogue],
             (
                 newTaskData: TaskCreateForm,
                 claudeDefaultEffort: string | null,
-                displayModel: string
+                displayModel: string,
+                catalogue: ModelChoiceApi[]
             ): ReasoningEffortEnumApi =>
-                resolveEffortForModel(newTaskData.reasoningEffort ?? claudeDefaultEffort, displayModel),
+                resolveEffortForModel(catalogue, newTaskData.reasoningEffort ?? claudeDefaultEffort, displayModel),
         ],
         // Neither picker touched: submit omits the triple so the backend resolves it, which also
         // lets a warm run provisioned under the default match.
@@ -549,43 +545,36 @@ export const taskTrackerSceneLogic = kea<taskTrackerSceneLogicType>([
                 const projectId = String(values.currentProjectId)
                 const newTask = await tasksCreate(projectId, taskData)
 
-                // Omitted only when nothing is pinned AND a server default exists, so the backend
-                // resolves it (which also lets warm runs match). Otherwise send the displayed
-                // selection — with no default anywhere that's the built-in model, preserving
-                // pre-defaults behavior.
-                const runtimeSelection: ClaudeTaskRunCreateSchemaApi | Record<string, never> =
-                    values.isDefaultSelection && values.claudeDefaultModel
-                        ? {}
-                        : {
-                              runtime_adapter: ClaudeRuntimeAdapterEnumApi.Claude,
-                              model: values.displayModel,
-                              reasoning_effort: values.displayEffort,
-                          }
-
                 // Auto-run the task after creation; the detail scene shows the latest run by default. The
                 // run checks out the chosen branch (server falls back to the repo's default branch if unset).
+                const runPayload = {
+                    branch: repositoryConfig.branch ?? null,
+                    // Interactive keeps the sandbox agent-server's event stream open across turns, so
+                    // follow-up messages stream their reply over the same SSE (background runs seal the
+                    // stream after the first turn). Interactive runs boot with the agent-server pulling
+                    // pending_user_message from run state (the workflow doesn't forward it), so seed the
+                    // typed message as turn 1 — otherwise the first prompt is lost and the run idles.
+                    mode: TaskExecutionModeEnumApi.Interactive,
+                    // Wrap only the message sent to the agent with the on-screen context block; the task
+                    // `description` field and the optimistic seed (`startOptimisticRun`) stay raw.
+                    pending_user_message: wrapWithPosthogContext(description, seededContext),
+                }
+
+                // The model triple is omitted only when nothing is pinned AND a server default exists, so
+                // the backend resolves it (which also lets a warm run provisioned under that default
+                // match). Otherwise send the displayed selection, with the runtime derived from the model.
                 const runResponse = await tasksRunCreate(
                     projectId,
                     newTask.id,
-                    buildRunCreateRequest(
-                        values.catalogue,
-                        model,
-                        resolveEffortForModel(values.catalogue, reasoningEffort, model),
-                        permissionMode,
-                        {
-                            branch: repositoryConfig.branch ?? null,
-                            ...runtimeSelection,
-                            // Interactive keeps the sandbox agent-server's event stream open across turns, so
-                            // follow-up messages stream their reply over the same SSE (background runs seal the
-                            // stream after the first turn). Interactive runs boot with the agent-server pulling
-                            // pending_user_message from run state (the workflow doesn't forward it), so seed the
-                            // typed message as turn 1 — otherwise the first prompt is lost and the run idles.
-                            mode: TaskExecutionModeEnumApi.Interactive,
-                            // Wrap only the message sent to the agent with the on-screen context block; the task
-                            // `description` field and the optimistic seed (`startOptimisticRun`) stay raw.
-                            pending_user_message: wrapWithPosthogContext(description, seededContext),
-                        }
-                    )
+                    values.isDefaultSelection && values.claudeDefaultModel
+                        ? { ...runPayload, initial_permission_mode: permissionMode }
+                        : buildRunCreateRequest(
+                              values.catalogue,
+                              values.displayModel,
+                              values.displayEffort,
+                              permissionMode,
+                              runPayload
+                          )
                 )
 
                 // Mark the seeded non-text refs sent under the created task, so the run's first follow-up

@@ -2,30 +2,17 @@ import { useActions, useValues } from 'kea'
 
 import { LemonButton, LemonSelect } from '@posthog/lemon-ui'
 
+import { modelCatalogueLogic } from 'products/posthog_ai/frontend/logics/modelCatalogueLogic'
 import {
-    COMPOSER_MODELS,
     getEffortLabel,
     getEffortsForModel,
     getModelLabel,
+    getRuntimeAdapterLabel,
+    listRuntimeAdapters,
+    modelsForRuntimeAdapter,
 } from 'products/posthog_ai/frontend/utils/composerModels'
 
 import { type AIRunPreferenceDraft, taskAgentDefaultsLogic } from './taskAgentDefaultsLogic'
-
-// The Claude group comes from the composer's own list so a model you can pick for a run is
-// always settable as a default, and vice versa. Codex models are offered because the default
-// also applies to surfaces that can run them (Slack, PostHog Code) even though the web tracker
-// only drives Claude; they have no frontend registry yet, so they mirror the backend run-config
-// registry (products/tasks/backend/temporal/process_task/utils.py) by hand.
-const MODEL_OPTIONS = [
-    { title: 'Claude', options: COMPOSER_MODELS },
-    {
-        title: 'Codex',
-        options: [
-            { value: 'gpt-5.5', label: 'GPT-5.5' },
-            { value: 'gpt-5', label: 'GPT-5' },
-        ],
-    },
-]
 
 function PreferenceEditor({
     draft,
@@ -40,7 +27,19 @@ function PreferenceEditor({
     onChange: (draft: Partial<AIRunPreferenceDraft>) => void
     onSave: () => void
 }): JSX.Element {
-    const effortOptions = getEffortsForModel(draft.model)
+    const { catalogue } = useValues(modelCatalogueLogic)
+
+    // Grouped by harness off the same catalogue the composer renders, so a model you can pick for a
+    // run is always settable as a default and vice versa — including the Codex models that only
+    // Slack and PostHog Code drive today.
+    const modelOptions = listRuntimeAdapters(catalogue).map((adapter) => ({
+        title: getRuntimeAdapterLabel(adapter),
+        options: modelsForRuntimeAdapter(catalogue, adapter).map((choice) => ({
+            value: choice.model,
+            label: choice.display_name,
+        })),
+    }))
+    const effortOptions = getEffortsForModel(catalogue, draft.model)
 
     return (
         <div className="flex flex-wrap items-center gap-2">
@@ -53,12 +52,14 @@ function PreferenceEditor({
                         reasoning_effort:
                             draft.reasoning_effort &&
                             model &&
-                            getEffortsForModel(model).some((option) => option.value === draft.reasoning_effort)
+                            getEffortsForModel(catalogue, model).some(
+                                (option) => option.value === draft.reasoning_effort
+                            )
                                 ? draft.reasoning_effort
                                 : null,
                     })
                 }
-                options={[{ options: [{ value: null as string | null, label: inheritLabel }] }, ...MODEL_OPTIONS]}
+                options={[{ options: [{ value: null as string | null, label: inheritLabel }] }, ...modelOptions]}
                 placeholder={inheritLabel}
                 data-attr="task-agent-default-model"
             />
@@ -96,6 +97,7 @@ export function TaskAgentProjectDefaultSettings(): JSX.Element {
 
 export function TaskAgentMyPreferenceSettings(): JSX.Element {
     const { myDraft, myPreferencesLoading, resolvedDefaults } = useValues(taskAgentDefaultsLogic)
+    const { catalogue } = useValues(modelCatalogueLogic)
     const { setMyDraft, submitMyDraft } = useActions(taskAgentDefaultsLogic)
 
     return (
@@ -111,7 +113,7 @@ export function TaskAgentMyPreferenceSettings(): JSX.Element {
                 {resolvedDefaults?.model ? (
                     <>
                         Runs you start without picking a model will use{' '}
-                        <strong>{getModelLabel(resolvedDefaults.model)}</strong>
+                        <strong>{getModelLabel(catalogue, resolvedDefaults.model)}</strong>
                         {resolvedDefaults.reasoning_effort ? (
                             <> ({getEffortLabel(resolvedDefaults.reasoning_effort)} effort)</>
                         ) : null}{' '}
