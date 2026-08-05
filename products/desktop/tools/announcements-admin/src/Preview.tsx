@@ -1,10 +1,11 @@
+import { useEffect, useState } from "react";
 import type { EditableItem } from "./items";
 
 function firstLine(body: string): string {
   return body.split("\n")[0] || "Body text appears here";
 }
 
-function BannerMock({ item }: { item: EditableItem }) {
+function BannerMock({ item, stale }: { item: EditableItem; stale: boolean }) {
   return (
     <div className="pv-banner">
       <span className="pv-banner-icon" aria-hidden>
@@ -14,7 +15,7 @@ function BannerMock({ item }: { item: EditableItem }) {
         <strong>{item.title || "Announcement title"}</strong>
         <em>{firstLine(item.body)}</em>
       </span>
-      {item.minVersion ? (
+      {stale ? (
         <span className="pv-btn pv-btn-solid">Update now</span>
       ) : item.ctaLabel ? (
         <span className="pv-btn">{item.ctaLabel}</span>
@@ -26,12 +27,12 @@ function BannerMock({ item }: { item: EditableItem }) {
   );
 }
 
-function ModalMock({ item }: { item: EditableItem }) {
+function ModalMock({ item, stale }: { item: EditableItem; stale: boolean }) {
   const blocking = item.kind === "required-update" || item.requiresAck;
   const primary =
     item.kind === "required-update"
       ? "Restart to update"
-      : item.minVersion
+      : stale
         ? "Update now"
         : item.requiresAck
           ? item.ackLabel || "OK"
@@ -52,12 +53,47 @@ function ModalMock({ item }: { item: EditableItem }) {
 
 /** The announcement as PostHog Desktop will render it, inside a mock window. */
 export function Preview({ item }: { item: EditableItem | null }) {
+  // An announcement with a minVersion has two real states — which button a
+  // user sees depends on their app version, so let the author flip between
+  // them. required-update has one state: it only exists below its minVersion.
+  const hasStateToggle =
+    item?.kind === "announcement" && item.minVersion !== "";
+  const [viewStale, setViewStale] = useState(false);
+  useEffect(() => {
+    if (!hasStateToggle) setViewStale(false);
+  }, [hasStateToggle]);
+
+  const stale =
+    item?.kind === "required-update" || (hasStateToggle && viewStale);
   const isBanner =
     item?.kind === "announcement" &&
     item.style === "banner" &&
     !item.requiresAck;
+
   return (
     <div className="preview">
+      {hasStateToggle && item && (
+        <div
+          className="pv-states"
+          role="group"
+          aria-label="Previewed app version"
+        >
+          <button
+            type="button"
+            className={viewStale ? "pv-state" : "pv-state pv-state-active"}
+            onClick={() => setViewStale(false)}
+          >
+            App up to date
+          </button>
+          <button
+            type="button"
+            className={viewStale ? "pv-state pv-state-active" : "pv-state"}
+            onClick={() => setViewStale(true)}
+          >
+            Below {item.minVersion}
+          </button>
+        </div>
+      )}
       <div
         className="pv-frame"
         role="img"
@@ -69,7 +105,7 @@ export function Preview({ item }: { item: EditableItem | null }) {
           <span className="pv-dot" />
           <span className="pv-tab" />
         </div>
-        {item && isBanner && <BannerMock item={item} />}
+        {item && isBanner && <BannerMock item={item} stale={stale} />}
         <div className="pv-body">
           <div className="pv-sidebar" aria-hidden>
             <span />
@@ -82,7 +118,7 @@ export function Preview({ item }: { item: EditableItem | null }) {
             <span />
             <span />
           </div>
-          {item && !isBanner && <ModalMock item={item} />}
+          {item && !isBanner && <ModalMock item={item} stale={stale} />}
         </div>
       </div>
       {item ? (

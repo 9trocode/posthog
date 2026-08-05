@@ -62,7 +62,7 @@ export function toPayloadItem(item: EditableItem): Record<string, unknown> {
     base.minVersion = item.minVersion;
     return base;
   }
-  base.style = item.requiresAck ? "modal" : item.style;
+  base.style = item.style;
   if (item.minVersion) base.minVersion = item.minVersion;
   if (item.requiresAck) {
     base.requiresAck = true;

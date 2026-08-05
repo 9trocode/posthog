@@ -295,14 +295,16 @@ export function Editor({
                 </label>
                 {item.kind === "announcement" && (
                   <label>
-                    style{item.requiresAck && " — modal while ack required"}
+                    style
                     <select
-                      value={item.requiresAck ? "modal" : item.style}
-                      disabled={item.requiresAck}
+                      value={item.style}
                       onChange={(e) =>
-                        update(index, {
-                          style: e.target.value as EditableItem["style"],
-                        })
+                        update(
+                          index,
+                          e.target.value === "banner"
+                            ? { style: "banner", requiresAck: false }
+                            : { style: "modal" },
+                        )
                       }
                     >
                       <option value="banner">banner</option>
@@ -312,7 +314,7 @@ export function Editor({
                 )}
               </div>
 
-              {item.kind === "announcement" && (
+              {item.kind === "announcement" && item.style === "modal" && (
                 <div className="grid">
                   <label className="check">
                     <input
@@ -343,7 +345,9 @@ export function Editor({
               {item.kind === "announcement" && !item.requiresAck && (
                 <div className="grid">
                   <label>
-                    button label — optional
+                    {item.minVersion
+                      ? "button label — shown once the app is up to date"
+                      : "button label — optional"}
                     <input
                       placeholder="Learn more"
                       value={item.ctaLabel}

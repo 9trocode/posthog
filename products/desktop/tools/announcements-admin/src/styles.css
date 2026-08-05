@@ -374,6 +374,30 @@ select:disabled {
   margin-top: 8px;
 }
 
+.pv-states {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.pv-state {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  padding: 5px 10px;
+  border: none;
+  background: var(--card);
+  color: var(--moss);
+  cursor: pointer;
+}
+
+.pv-state-active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
 .pv-frame {
   background: #fbfbf9;
   border: 1px solid var(--ink);
