@@ -15,6 +15,7 @@ from products.replay_vision.backend.models.replay_observation import (
     ObservationTrigger,
     ReplayObservation,
 )
+from products.replay_vision.backend.models.replay_observation_usage import ReplayObservationUsage
 from products.replay_vision.backend.models.replay_scanner import ReplayScanner, ScannerModel, ScannerType
 from products.replay_vision.backend.queries.scanner_candidate_query import DEFAULT_CANDIDATE_LIMIT, CandidateSession
 from products.replay_vision.backend.temporal import SweepScannerWorkflow
@@ -360,6 +361,24 @@ def test_check_scanner_budget_activity_notifies_once_per_period_on_settled_exhau
     mock_notify.assert_called_once()
     scanner.refresh_from_db()
     assert scanner.limit_notified_period_start is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_scanner_capped_last_period_is_uncapped_after_the_period_resets() -> None:
+    # The cap is per billing period: a scanner that went dark last period resumes on the first
+    # tick of the new one, still collecting into the same scanner.
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(credit_limit=limit)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
+    last_period = dt.datetime.now(dt.UTC) - dt.timedelta(days=40)
+    ReplayObservation.objects.filter(scanner=scanner).update(created_at=last_period)
+    ReplayObservationUsage.objects.filter(scanner_id=scanner.id).update(observation_created_at=last_period)
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        output = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    assert output.capped is False
+    mock_notify.assert_not_called()
 
 
 @pytest.mark.django_db(transaction=True)
