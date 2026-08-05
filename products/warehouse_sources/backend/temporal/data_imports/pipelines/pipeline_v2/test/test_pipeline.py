@@ -21,7 +21,7 @@ async def test_run_cleanup_does_not_call_get_delta_table_and_does_not_mask_impor
     # longer make its own object-storage call at all.
     pipeline = PipelineNonDLT.__new__(PipelineNonDLT)
     pipeline._logger = AsyncMock()
-    pipeline._resume_plan = None
+    pipeline._resumable_source_manager = None
     pipeline._resource = cast(SourceResponse, object())
     delta_table_ref = AsyncMock()
     delta_table_ref.get_delta_table.cache_pop.return_value = None

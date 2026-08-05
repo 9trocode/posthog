@@ -76,8 +76,7 @@ from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline
 from products.warehouse_sources.backend.temporal.data_imports.pipelines.pipeline_v3.s3.writer import ParquetCompression
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import (
     ResumableSourceManager,
-    ResumePlan,
-    resolve_resume_plan,
+    resolve_resume_manager,
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import (
     ResumableData,
@@ -98,7 +97,7 @@ class PipelineV3(Generic[ResumableData]):
     _is_incremental: bool
     _reset_pipeline: bool
     _delta_table_ref: DeltaTableRef
-    _resume_plan: ResumePlan[ResumableData] | None
+    _resumable_source_manager: ResumableSourceManager[ResumableData] | None
     _internal_schema: HogQLSchema
     _sinks: PipelineSinks
     _batcher: Batcher
@@ -186,8 +185,8 @@ class PipelineV3(Generic[ResumableData]):
         self._uses_delta_write_column_selection = source_uses_delta_write_column_selection(source.source_type)
         self._observed_columns: dict[str, dict[str, Any]] = {}
 
-        self._resume_plan = resolve_resume_plan(resumable_source_manager, self._resource)
-        is_resume = self._resume_plan is not None and self._resume_plan.manager.can_resume()
+        self._resumable_source_manager = resolve_resume_manager(resumable_source_manager, self._resource)
+        is_resume = self._resumable_source_manager is not None and self._resumable_source_manager.can_resume()
 
         self._pg_producer = PostgresProducer(
             database_url=WAREHOUSE_SOURCES_DATABASE_URL,
@@ -240,10 +239,8 @@ class PipelineV3(Generic[ResumableData]):
     async def run(self) -> PipelineResult:
         pa_memory_pool = pa.default_memory_pool()
 
-        # `_resume_plan` is None when this run can't resume at all; `can_resume` is the separate
-        # question of whether a checkpoint from an earlier attempt is actually there to resume from.
-        source_is_resumable = self._resume_plan is not None
-        should_resume = self._resume_plan is not None and self._resume_plan.manager.can_resume()
+        should_resume = self._resumable_source_manager is not None and self._resumable_source_manager.can_resume()
+        source_is_resumable = self._resumable_source_manager is not None
 
         if should_resume:
             await self._logger.ainfo("V3 Pipeline: Resumable source detected - attempting to resume previous import")

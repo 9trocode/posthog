@@ -113,23 +113,10 @@ class ResumableSourceManager(Generic[ResumableData]):
             return self._load_json(data)
 
 
-@dataclasses.dataclass(frozen=True)
-class ResumePlan(Generic[ResumableData]):
-    """How *this run* resumes, resolved once so no call site re-derives it.
-
-    Existing only when the run is genuinely resumable: the source class supplied a manager **and**
-    the response reported `supports_resume`. Sources own their checkpoints — saving as they walk and
-    clearing once they finish — so the pipeline only needs to know whether resume is cheap, plus the
-    manager to ask whether an earlier attempt left anything behind.
-    """
-
-    manager: ResumableSourceManager[ResumableData]
-
-
-def resolve_resume_plan(
+def resolve_resume_manager(
     manager: ResumableSourceManager[ResumableData] | None,
     resource: SourceResponse,
-) -> ResumePlan[ResumableData] | None:
+) -> ResumableSourceManager[ResumableData] | None:
     """Combine the class-level capability (a manager exists) with the run-level one.
 
     A resumable-source class whose current run can't actually resume — a SQL full load with no
@@ -138,4 +125,4 @@ def resolve_resume_plan(
     """
     if manager is None or not resource.supports_resume:
         return None
-    return ResumePlan(manager=manager)
+    return manager
