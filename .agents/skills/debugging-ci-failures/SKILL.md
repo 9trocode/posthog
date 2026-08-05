@@ -22,8 +22,8 @@ irreversible actions unless the user explicitly asks.
 Always start with the `hogli ci:insights` digest. It aggregates across runs and
 branches — which `gh` cannot do cheaply — and tells you whether a failure is
 yours, trunk-borne, or a known flake. `gh` is authoritative for one run's
-current state. Use the digest to decide *what* is broken and *whose* it is; use
-`gh` to read *exactly* what failed in a given run. The data arrives by webhook
+current state. Use the digest to decide _what_ is broken and _whose_ it is; use
+`gh` to read _exactly_ what failed in a given run. The data arrives by webhook
 and can lag by minutes, so during a live incident confirm a specific run
 against `gh`.
 
@@ -77,13 +77,14 @@ hogli ci:insights view <ref> --logs              # ...plus the failing log lines
 
 Read each row's `state` as the verdict:
 
-| State                  | Means                                                                   |
-| ---------------------- | ----------------------------------------------------------------------- |
-| `breaking_master`      | failing on the default branch and that job's latest run is still red    |
-| `novel_burst`          | new within a day, already spreading across branches, not on trunk yet   |
-| `potentially_resolved` | hit trunk but that job is green again — weak evidence a fix landed      |
-| `flaky`                | sporadic across two or more branches over more than a day               |
-| `pr_only`              | confined to one branch — one PR's own problem                           |
+| State                  | Means                                                                 |
+| ---------------------- | --------------------------------------------------------------------- |
+| `breaking_master`      | failing on the default branch and that job's latest run is still red  |
+| `blocking_merge_queue` | failing only on merge-queue gate branches, so it is holding landings  |
+| `novel_burst`          | new within a day, already spreading across branches, not on trunk yet |
+| `potentially_resolved` | hit trunk but that job is green again — weak evidence a fix landed    |
+| `flaky`                | sporadic across two or more branches over more than a day             |
+| `pr_only`              | confined to one branch — one PR's own problem                         |
 
 `potentially_resolved` is a hint, not a conclusion: confirm from run data before
 reporting a failure as already fixed.
