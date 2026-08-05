@@ -31,7 +31,7 @@ use rdkafka::ClientConfig;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
-use tracing::log::{debug, error, info, warn};
+use tracing::log::{debug, error, info};
 use tracing::{info_span, instrument, Instrument};
 
 use super::producer::RdKafkaProducer;
@@ -182,10 +182,8 @@ pub struct KafkaTopicConfig {
     pub dlq_topic: String,
     pub error_tracking_topic: String,
     pub traces_topic: String,
-    /// Dedicated topic for `DataType::AiEvents` (`CAPTURE_ANALYTICS_AI_EVENTS_TOPIC`). Optional
-    /// because the AI lane is opt-in: startup validation guarantees it is set
-    /// whenever the routing policy can produce `AiEvents` records.
-    pub ai_events_topic: Option<String>,
+    /// Dedicated topic for `DataType::AiEvents` (`CAPTURE_ANALYTICS_AI_EVENTS_TOPIC`).
+    pub ai_events_topic: String,
     /// Overflow topic for the AI lane (`CAPTURE_ANALYTICS_AI_EVENTS_OVERFLOW_TOPIC`). Unset
     /// means AI events never overflow; when set, stamped/forced overflow on
     /// `AiEvents` records reroutes here with the same key semantics as the
@@ -574,20 +572,8 @@ impl<P: KafkaProducer> KafkaSinkBase<P> {
                     // AI events never reroute historical; like the
                     // exception/heatmap lanes the record keeps its event key
                     // on the default route (v1 only nulls keys for
-                    // Main/Overflow-shaped destinations). An unset topic
-                    // should be impossible here (startup validation requires
-                    // CAPTURE_ANALYTICS_AI_EVENTS_TOPIC whenever the routing policy can produce
-                    // AiEvents), so fall back to the main topic rather than
-                    // failing the batch.
-                    let default_topic: &str = match self.topics.ai_events_topic.as_deref() {
-                        Some(topic) if !topic.is_empty() => topic,
-                        _ => {
-                            warn!(
-                                "CAPTURE_ANALYTICS_AI_EVENTS_TOPIC not configured for an AiEvents record; falling back to main topic"
-                            );
-                            &self.topics.main_topic
-                        }
-                    };
+                    // Main/Overflow-shaped destinations).
+                    let default_topic: &str = &self.topics.ai_events_topic;
                     match self.topics.ai_events_overflow_topic.as_deref() {
                         // The AI overflow valve is armed: mirror the
                         // analytics main lane's overflow handling onto the
@@ -866,7 +852,7 @@ pub(crate) fn test_topics() -> KafkaTopicConfig {
         dlq_topic: "events_plugin_ingestion_dlq".to_string(),
         error_tracking_topic: "error_tracking_events".to_string(),
         traces_topic: "tracing_ingestion".to_string(),
-        ai_events_topic: Some("ai_events".to_string()),
+        ai_events_topic: "ai_events".to_string(),
         ai_events_overflow_topic: Some("ai_events_overflow".to_string()),
     }
 }
@@ -919,7 +905,7 @@ mod tests {
             kafka_heatmaps_topic: "events_plugin_ingestion".to_string(),
             kafka_replay_overflow_topic: "session_recording_snapshot_item_overflow".to_string(),
             kafka_dlq_topic: "events_plugin_ingestion_dlq".to_string(),
-            capture_analytics_ai_events_topic: None,
+            capture_analytics_ai_events_topic: "events_plugin_ingestion_ai".to_string(),
             capture_analytics_ai_events_overflow_topic: None,
             kafka_traces_topic: "traces_ingestion".to_string(),
             kafka_metrics_topic: "metrics_ingestion".to_string(),
@@ -2254,45 +2240,6 @@ mod tests {
                 format!("{:?}", records[0].headers),
                 format!("{:?}", records[1].headers)
             );
-        }
-
-        #[tokio::test]
-        async fn ai_events_missing_topic_falls_back_to_main() {
-            // Should be impossible in production (startup validation), but a
-            // misconfigured sink must degrade to the main topic, not error.
-            let producer = MockKafkaProducer::new();
-            let mut topics = test_topics();
-            topics.ai_events_topic = None;
-            let sink = KafkaSinkBase::with_producer(producer.clone(), topics);
-
-            let input = EventInput {
-                data_type: DataType::AiEvents,
-                ..Default::default()
-            };
-            sink.send(create_test_event(&input)).await.unwrap();
-
-            let records = producer.get_records();
-            assert_eq!(records.len(), 1);
-            assert_eq!(records[0].topic, MAIN_TOPIC);
-            assert_eq!(records[0].key.as_deref(), Some("test_token:test_user"));
-        }
-
-        #[tokio::test]
-        async fn ai_events_empty_topic_falls_back_to_main() {
-            let producer = MockKafkaProducer::new();
-            let mut topics = test_topics();
-            topics.ai_events_topic = Some(String::new());
-            let sink = KafkaSinkBase::with_producer(producer.clone(), topics);
-
-            let input = EventInput {
-                data_type: DataType::AiEvents,
-                ..Default::default()
-            };
-            sink.send(create_test_event(&input)).await.unwrap();
-
-            let records = producer.get_records();
-            assert_eq!(records.len(), 1);
-            assert_eq!(records[0].topic, MAIN_TOPIC);
         }
 
         // ==================== RedirectToTopic ====================
