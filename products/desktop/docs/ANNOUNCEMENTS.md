@@ -1,12 +1,14 @@
 # Remote in-app announcements
 
 Broad in-app announcements are **remote content, not code**. They live in the
-JSON payload of the `posthog-desktop-announcements` feature flag (PostHog project
-2) and render through this feature. Publishing, changing, or retiring an
-announcement means editing that flag payload — never adding a component.
+JSON payload of the `posthog-desktop-announcements` feature flag (PostHog
+project 2) and render through `packages/ui/src/features/announcements/`.
+Publishing, changing, or retiring an announcement means editing that flag
+payload — never adding a component. The employee-gated editor is
+https://desktop-announcements-admin.hosthog.dev (`tools/announcements-admin/`).
 
 **Do not build new ad-hoc announcement surfaces** (flag-gated promo cards,
-dismissible banners, one-time modals). That is a Forbidden Pattern in the root
+dismissible banners, one-time modals). That is a Forbidden Pattern in
 AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
 `ScoutAlphaBanner` predate this system and are legacy, not templates.
 

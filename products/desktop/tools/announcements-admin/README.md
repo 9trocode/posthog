@@ -24,7 +24,7 @@ login redirects back to the deployed origin.
 
 Shared with the app: `@posthog/shared/announcements`
 (`packages/shared/src/announcements.ts`). See
-`packages/ui/src/features/announcements/AGENTS.md` for how the app consumes it.
+`products/desktop/docs/ANNOUNCEMENTS.md` for how the app consumes it.
 
 ## Deploy
 

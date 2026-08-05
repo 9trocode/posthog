@@ -119,7 +119,7 @@ For each new file or meaningful change:
 - Bespoke clients that wrap `trpcClient.x` one-to-one.
 - `*Port`, `*_PORT`, or `ports.ts` naming.
 - Business logic in `apps/<host>`.
-- New ad-hoc broad in-app announcement or promo surfaces (flag-gated promo cards, dismissible banners, one-time modals like the Loops announcement). Broad announcements are remotely controlled via the `posthog-desktop-announcements` flag payload — see [packages/ui/src/features/announcements/AGENTS.md](./packages/ui/src/features/announcements/AGENTS.md). Existing ad-hoc surfaces (`LoopsPromoCard`, `UsageBillingAnnouncementModal`, `ScoutAlphaBanner`) are legacy, not a pattern to copy.
+- New ad-hoc broad in-app announcement or promo surfaces (flag-gated promo cards, dismissible banners, one-time modals like the Loops announcement). Broad announcements are remotely controlled via the `posthog-desktop-announcements` flag payload — see [docs/ANNOUNCEMENTS.md](./docs/ANNOUNCEMENTS.md). Existing ad-hoc surfaces (`LoopsPromoCard`, `UsageBillingAnnouncementModal`, `ScoutAlphaBanner`) are legacy, not a pattern to copy.
 
 ## Host Boundary
 
@@ -328,6 +328,7 @@ See [docs/testing.md](./docs/testing.md).
 - [docs/architecture.md](./docs/architecture.md)
 - [docs/conventions.md](./docs/conventions.md)
 - [docs/testing.md](./docs/testing.md)
+- [docs/ANNOUNCEMENTS.md](./docs/ANNOUNCEMENTS.md)
 - [docs/DEEP-LINKS.md](./docs/DEEP-LINKS.md)
 - [docs/LOCAL-DEVELOPMENT.md](./docs/LOCAL-DEVELOPMENT.md)
 - [docs/UPDATES.md](./docs/UPDATES.md)
