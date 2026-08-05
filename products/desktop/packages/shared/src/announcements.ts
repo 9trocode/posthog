@@ -18,6 +18,25 @@ const ctaUrlSchema = z
     message: "must be an https:// URL or a posthog-code:// deep link",
   });
 
+export const HERO_HEDGEHOGS = ["builder", "explorer", "happy", "loop"] as const;
+
+/**
+ * The modal's hero band. Absent = a default hedgehog; "none" = plain modal.
+ * Banners never render a hero.
+ */
+const heroSchema = z.union([
+  z.object({
+    hedgehog: z.enum(HERO_HEDGEHOGS),
+    /** Band background, hex only. Defaults to PostHog blue. */
+    color: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/)
+      .optional(),
+  }),
+  z.object({ imageUrl: z.url({ protocol: /^https$/ }) }),
+  z.object({ none: z.literal(true) }),
+]);
+
 const baseAnnouncementShape = {
   /** Stable per-user dismissal key. Changing it resurfaces the announcement. */
   id: z.string().min(1),
@@ -26,6 +45,7 @@ const baseAnnouncementShape = {
   body: z.string().min(1),
   startsAt: z.iso.datetime({ offset: true }).optional(),
   endsAt: z.iso.datetime({ offset: true }).optional(),
+  hero: heroSchema.optional(),
 };
 
 export const announcementSchema = z
@@ -103,4 +123,5 @@ export function readSuppressChangelog(payload: unknown): boolean {
 }
 
 export type Announcement = z.infer<typeof announcementSchema>;
+export type AnnouncementHero = z.infer<typeof heroSchema>;
 export type AnnouncementsPayload = z.infer<typeof announcementsPayloadSchema>;

@@ -1,4 +1,7 @@
-import { announcementsPayloadSchema } from "@posthog/shared/announcements";
+import {
+  announcementsPayloadSchema,
+  HERO_HEDGEHOGS,
+} from "@posthog/shared/announcements";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { type FlagRecord, readPayload, savePayload } from "./api";
@@ -363,6 +366,73 @@ export function Editor({
                         value={item.ackLabel}
                         onChange={(e) =>
                           update(index, { ackLabel: e.target.value })
+                        }
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+
+              {(item.kind === "required-update" || item.style === "modal") && (
+                <div className="grid">
+                  <label>
+                    hero
+                    <select
+                      value={item.heroType}
+                      onChange={(e) =>
+                        update(index, {
+                          heroType: e.target.value as EditableItem["heroType"],
+                        })
+                      }
+                    >
+                      <option value="default">default hedgehog</option>
+                      <option value="hedgehog">pick hedgehog</option>
+                      <option value="image">image url</option>
+                      <option value="none">plain — no hero</option>
+                    </select>
+                  </label>
+                  {item.heroType === "hedgehog" && (
+                    <>
+                      <label>
+                        hedgehog
+                        <select
+                          value={item.heroHedgehog}
+                          onChange={(e) =>
+                            update(index, {
+                              heroHedgehog: e.target
+                                .value as EditableItem["heroHedgehog"],
+                            })
+                          }
+                        >
+                          {HERO_HEDGEHOGS.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        band color — hex, optional
+                        <input
+                          className="mono"
+                          placeholder="#2f80fa"
+                          value={item.heroColor}
+                          onChange={(e) =>
+                            update(index, { heroColor: e.target.value })
+                          }
+                        />
+                      </label>
+                    </>
+                  )}
+                  {item.heroType === "image" && (
+                    <label>
+                      image url — https only
+                      <input
+                        className="mono"
+                        placeholder="https://…"
+                        value={item.heroImageUrl}
+                        onChange={(e) =>
+                          update(index, { heroImageUrl: e.target.value })
                         }
                       />
                     </label>

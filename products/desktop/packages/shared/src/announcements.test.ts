@@ -67,6 +67,15 @@ describe("announcements schema", () => {
         ackLabel: "I understand",
       },
     ],
+    [
+      "hedgehog hero with color",
+      { ...validAnnouncement, hero: { hedgehog: "builder", color: "#2f80fa" } },
+    ],
+    [
+      "image hero",
+      { ...validAnnouncement, hero: { imageUrl: "https://posthog.com/x.png" } },
+    ],
+    ["suppressed hero", { ...validAnnouncement, hero: { none: true } }],
     ["required update", validRequiredUpdate],
   ])("accepts %s", (_name, input) => {
     expect(announcementSchema.safeParse(input).success).toBe(true);
@@ -114,6 +123,18 @@ describe("announcements schema", () => {
     [
       "empty ackLabel",
       { ...validAnnouncement, style: "modal", requiresAck: true, ackLabel: "" },
+    ],
+    [
+      "unknown hero hedgehog",
+      { ...validAnnouncement, hero: { hedgehog: "max" } },
+    ],
+    [
+      "non-hex hero color",
+      { ...validAnnouncement, hero: { hedgehog: "happy", color: "blue" } },
+    ],
+    [
+      "http hero image",
+      { ...validAnnouncement, hero: { imageUrl: "http://posthog.com/x.png" } },
     ],
   ])("rejects %s", (_name, input) => {
     expect(announcementSchema.safeParse(input).success).toBe(false);

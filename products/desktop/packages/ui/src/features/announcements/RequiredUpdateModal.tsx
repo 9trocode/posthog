@@ -4,6 +4,7 @@ import type { Announcement } from "@posthog/shared/announcements";
 import { MarkdownRenderer } from "@posthog/ui/features/editor/components/MarkdownRenderer";
 import { track } from "@posthog/ui/shell/analytics";
 import { useEffect } from "react";
+import { AnnouncementHero } from "./AnnouncementHero";
 import { UpdateAction } from "./UpdateAction";
 
 type RequiredUpdate = Extract<Announcement, { kind: "required-update" }>;
@@ -29,7 +30,12 @@ export function RequiredUpdateModal({
   return (
     <Dialog open>
       <DialogContent className="sm:max-w-md" showCloseButton={false}>
-        <div className="flex flex-col gap-4 px-5 pt-5 pb-5">
+        <AnnouncementHero
+          hero={announcement.hero}
+          defaultHedgehog="builder"
+          defaultColor="#f54e00"
+        />
+        <div className="flex flex-col gap-4 px-5 pt-4 pb-5">
           <div className="flex flex-col gap-1.5">
             <DialogTitle className="font-semibold text-[17px] text-gray-12 tracking-tight">
               {announcement.title}

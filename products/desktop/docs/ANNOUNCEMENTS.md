@@ -27,6 +27,11 @@ AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
 - Surfaces: `AnnouncementBanner` (top-of-app bar, mounted in `__root.tsx`
   after `ConnectivityBanner`) and `AnnouncementsHost` (the modal surfaces,
   mounted beside `UsageBillingAnnouncementModal`).
+- Modals open with a hero band (`AnnouncementHero`, styled after the Loops
+  promo dialog): a hedgehog on a colored band by default, overridable per item
+  via `hero` — `{ "hedgehog": "builder" | "explorer" | "happy" | "loop",
+  "color": "#rrggbb" }`, `{ "imageUrl": "https://…" }`, or `{ "none": true }`
+  for a plain modal. Banners never render a hero.
 
 ## The two kinds
 

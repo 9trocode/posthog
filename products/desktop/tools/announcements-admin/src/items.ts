@@ -1,4 +1,7 @@
-import type { Announcement } from "@posthog/shared/announcements";
+import type {
+  Announcement,
+  HERO_HEDGEHOGS,
+} from "@posthog/shared/announcements";
 
 export interface EditableItem {
   kind: "announcement" | "required-update";
@@ -13,6 +16,10 @@ export interface EditableItem {
   ctaUrl: string;
   requiresAck: boolean;
   ackLabel: string;
+  heroType: "default" | "hedgehog" | "image" | "none";
+  heroHedgehog: (typeof HERO_HEDGEHOGS)[number];
+  heroColor: string;
+  heroImageUrl: string;
 }
 
 export function blankItem(kind: EditableItem["kind"]): EditableItem {
@@ -29,6 +36,10 @@ export function blankItem(kind: EditableItem["kind"]): EditableItem {
     ctaUrl: "",
     requiresAck: false,
     ackLabel: "",
+    heroType: "default",
+    heroHedgehog: "happy",
+    heroColor: "",
+    heroImageUrl: "",
   };
 }
 
@@ -46,6 +57,19 @@ export function toEditable(items: Announcement[]): EditableItem[] {
     ctaUrl: item.kind === "announcement" ? (item.cta?.url ?? "") : "",
     requiresAck: item.kind === "announcement" ? item.requiresAck : false,
     ackLabel: item.kind === "announcement" ? (item.ackLabel ?? "") : "",
+    heroType: !item.hero
+      ? ("default" as const)
+      : "none" in item.hero
+        ? ("none" as const)
+        : "imageUrl" in item.hero
+          ? ("image" as const)
+          : ("hedgehog" as const),
+    heroHedgehog:
+      item.hero && "hedgehog" in item.hero ? item.hero.hedgehog : "happy",
+    heroColor:
+      item.hero && "hedgehog" in item.hero ? (item.hero.color ?? "") : "",
+    heroImageUrl:
+      item.hero && "imageUrl" in item.hero ? item.hero.imageUrl : "",
   }));
 }
 
@@ -58,6 +82,16 @@ export function toPayloadItem(item: EditableItem): Record<string, unknown> {
   };
   if (item.startsAt) base.startsAt = item.startsAt;
   if (item.endsAt) base.endsAt = item.endsAt;
+  if (item.heroType === "none") {
+    base.hero = { none: true };
+  } else if (item.heroType === "image") {
+    base.hero = { imageUrl: item.heroImageUrl };
+  } else if (item.heroType === "hedgehog") {
+    base.hero = {
+      hedgehog: item.heroHedgehog,
+      ...(item.heroColor ? { color: item.heroColor } : {}),
+    };
+  }
   if (item.kind === "required-update") {
     base.minVersion = item.minVersion;
     return base;

@@ -27,6 +27,26 @@ function BannerMock({ item, stale }: { item: EditableItem; stale: boolean }) {
   );
 }
 
+function HeroBand({ item }: { item: EditableItem }) {
+  if (item.heroType === "none") return null;
+  if (item.heroType === "image") {
+    if (!item.heroImageUrl) return null;
+    return (
+      <div className="pv-hero">
+        <img src={item.heroImageUrl} alt="" />
+      </div>
+    );
+  }
+  const color =
+    (item.heroType === "hedgehog" && item.heroColor) ||
+    (item.kind === "required-update" ? "#f54e00" : "#2f80fa");
+  return (
+    <div className="pv-hero" style={{ backgroundColor: color }} aria-hidden>
+      🦔
+    </div>
+  );
+}
+
 function ModalMock({ item, stale }: { item: EditableItem; stale: boolean }) {
   const blocking = item.kind === "required-update" || item.requiresAck;
   const primary =
@@ -40,6 +60,7 @@ function ModalMock({ item, stale }: { item: EditableItem; stale: boolean }) {
   return (
     <div className="pv-scrim">
       <div className="pv-modal">
+        <HeroBand item={item} />
         <strong>{item.title || "Announcement title"}</strong>
         <p>{item.body || "Body text appears here. Markdown renders in-app."}</p>
         <div className="pv-modal-actions">
