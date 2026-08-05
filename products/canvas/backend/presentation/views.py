@@ -448,7 +448,7 @@ class CanvasViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
             return _capacity_response()
         except CanvasSourceVersion.DoesNotExist:
             return Response({"detail": "Version not found for this canvas."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(CanvasBuildSerializer(build).data)
+        return Response(CanvasBuildSerializer(build, context={"request": request}).data)
 
     @extend_schema(
         operation_id="canvases_builds_retrieve",
@@ -474,7 +474,7 @@ class CanvasViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
         response = {
             "published_build_id": str(canvas.published_build_id) if canvas.published_build_id else None,
             "current_version_id": (str(canvas.current_source_version_id) if canvas.current_source_version_id else None),
-            "builds": CanvasBuildSerializer(builds, many=True).data,
+            "builds": CanvasBuildSerializer(builds, many=True, context={"request": request}).data,
         }
         return Response(response)
 
@@ -502,7 +502,7 @@ class CanvasViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
             return _capacity_response()
         except ValueError as error:
             return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(CanvasBuildSerializer(build).data)
+        return Response(CanvasBuildSerializer(build, context={"request": request}).data)
 
     def _request_user(self) -> User | None:
         """The requesting real user, or None for anonymous/service principals."""
