@@ -51,6 +51,11 @@ tools:
         param_overrides:
             page_size:
                 default: 10
+        # OCSF output is for direct SIEM polling — its fields don't match the
+        # ActivityLog response shape this tool projects, so keep them off the tool.
+        exclude_params:
+            - schema
+            - include_values
         feature_entitlement: audit_logs
         url_prefix: /activity
         response:

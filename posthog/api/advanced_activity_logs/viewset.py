@@ -542,6 +542,7 @@ class AdvancedActivityLogsViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSe
         super().__init__(*args, **kwargs)
         self._filter_manager = None
         self._field_discovery = None
+        self._validated_query: dict[str, Any] = {}
 
     @property
     def filter_manager(self) -> AdvancedActivityLogFilterManager:
@@ -605,14 +606,14 @@ class AdvancedActivityLogsViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSe
         if self.request.query_params.get("is_csv_export") == "1":
             return ActivityLogFlatExportSerializer
 
-        if self.request.query_params.get("schema") == ACTIVITY_LOG_SCHEMA_OCSF:
+        if self._validated_query.get("schema") == ACTIVITY_LOG_SCHEMA_OCSF:
             return ActivityLogOCSFSerializer
 
         return super().get_serializer_class()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        context["include_values"] = self.request.query_params.get("include_values") == "true"
+        context["include_values"] = bool(self._validated_query.get("include_values", False))
         return context
 
     @extend_schema(parameters=[AdvancedActivityLogFiltersSerializer])
@@ -620,6 +621,7 @@ class AdvancedActivityLogsViewSet(TeamAndOrgViewSetMixin, viewsets.GenericViewSe
         filters_serializer = AdvancedActivityLogFiltersSerializer(data=request.query_params)
         filters_serializer.is_valid(raise_exception=True)
         filters = filters_serializer.validated_data
+        self._validated_query = filters
 
         queryset = self.get_queryset()
         queryset = self.filter_manager.apply_filters(queryset, filters)
