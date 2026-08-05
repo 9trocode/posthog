@@ -112,11 +112,7 @@ export function Preview({ item }: { item: EditableItem | null }) {
   return (
     <div className="preview">
       {hasStateToggle && item && (
-        <div
-          className="pv-states"
-          role="group"
-          aria-label="Previewed app version"
-        >
+        <fieldset className="pv-states" aria-label="Previewed app version">
           <button
             type="button"
             className={viewStale ? "pv-state" : "pv-state pv-state-active"}
@@ -131,7 +127,7 @@ export function Preview({ item }: { item: EditableItem | null }) {
           >
             Below {item.minVersion}
           </button>
-        </div>
+        </fieldset>
       )}
       <div
         className="pv-frame"
