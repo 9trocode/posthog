@@ -171,3 +171,10 @@ reversal mechanics.
 Use consistent terminology: variant _split_ (between variants) is distinct from _rollout_ (overall %
 entering); the `$feature_flag_called` exposure event is distinct from a _custom exposure event_; the
 _Exclude_ / _First seen_ options control multivariate handling, not exposure.
+
+## Related skills
+
+- **`configuring-experiment-analytics`** — fix the exposure or metric configuration the diagnosis points at
+- **`configuring-experiment-rollout`** — split-change anti-patterns and safe rollout adjustments
+- **`managing-experiment-lifecycle`** — reset, end, or restart when the experiment can't be salvaged in place
+- **`analyzing-experiment-session-replays`** — when the numbers are fine but you need to see the behavior behind them
