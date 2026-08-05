@@ -152,6 +152,18 @@ class ReplayScanner(UUIDModel):
         help_text="Keyset tiebreaker; set when the last batch saturated so the next sweep resumes past session_end ties.",
     )
 
+    # Shape: ScannerExperimentTargetingSerializer. The scanner's live link to the experiment it
+    # watches, updated as targeting changes and cleared on removal; not creation provenance. Not
+    # version-tracked and never read by scanning: the compiled `query` is what scans. The frontend
+    # uses it to rebuild the friendly targeting editor and the experiment page uses it to list the
+    # scanners watching that experiment (the query itself only stores flag keys, so the experiment
+    # association is not recoverable from it).
+    experiment_targeting = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="The experiment this scanner's targeting watches, if any.",
+    )
+
     # Shape: feedback_themes.build_feedback_themes. Not version-tracked: themes describe the
     # ratings, not the scanner's behavior.
     feedback_themes = models.JSONField(
