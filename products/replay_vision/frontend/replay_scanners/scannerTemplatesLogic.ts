@@ -105,7 +105,7 @@ export const scannerTemplatesLogic = kea<scannerTemplatesLogicType>([
                 for (;;) {
                     const response = await visionScannerTemplatesList(String(teamId), { limit, offset })
                     templates.push(...response.results)
-                    if (response.results.length < limit) {
+                    if (!response.next) {
                         break
                     }
                     offset += limit

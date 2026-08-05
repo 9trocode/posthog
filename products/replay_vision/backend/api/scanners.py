@@ -1132,32 +1132,17 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
             "model": scanner.model,
             "emits_signals": scanner.emits_signals,
         }
-        template = ReplayScannerTemplate.objects.filter(
-            team_id=self.team_id,
+        # update_or_create absorbs the concurrent-first-save race; created_by is pinned to
+        # whoever saved first and later re-saves only refresh the snapshot fields.
+        template, created = ReplayScannerTemplate.objects.update_or_create(
             source_scanner=scanner,
-        ).first()
-        created = template is None
-        try:
-            if template is None:
-                template = ReplayScannerTemplate.objects.create(
-                    team=self.team,
-                    source_scanner=scanner,
-                    created_by=cast(User, request.user),
-                    **template_values,
-                )
-            else:
-                for field, value in template_values.items():
-                    setattr(template, field, value)
-                template.save(update_fields=[*template_values.keys(), "updated_at"])
-        except IntegrityError:
-            # A concurrent save_as_template for the same scanner won the race to create the row; update it.
-            template = ReplayScannerTemplate.objects.filter(team_id=self.team_id, source_scanner=scanner).first()
-            if template is None:
-                raise
-            for field, value in template_values.items():
-                setattr(template, field, value)
-            template.save(update_fields=[*template_values.keys(), "updated_at"])
-            created = False
+            defaults=template_values,
+            create_defaults={
+                **template_values,
+                "team": self.team,
+                "created_by": cast(User, request.user),
+            },
+        )
 
         report_user_action(
             cast(User, request.user),

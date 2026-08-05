@@ -887,7 +887,7 @@ class TestScannerEstimatePersistence(_VisionAPITestCase):
 class TestReplayScannerTemplateViewSet(_VisionAPITestCase):
     @property
     def templates_url(self) -> str:
-        return f"/api/environments/{self.team.id}/vision/scanner_templates/"
+        return f"/api/projects/{self.team.id}/vision/scanner_templates/"
 
     def test_save_as_template_snapshots_and_refreshes_scanner_configuration(self) -> None:
         scanner = self._create_scanner(
@@ -953,6 +953,8 @@ class TestReplayScannerTemplateViewSet(_VisionAPITestCase):
         self.assertEqual([template["id"] for template in response.json()["results"]], [str(own_template.id)])
         response = self.client.delete(f"{self.templates_url}{other_template.id}/")
         self.assertEqual(response.status_code, 404)
+        response = self.client.delete(f"{self.templates_url}not-a-uuid/")
+        self.assertEqual(response.status_code, 404)
         response = self.client.delete(f"{self.templates_url}{own_template.id}/")
         self.assertEqual(response.status_code, 204)
         self.assertFalse(ReplayScannerTemplate.objects.for_team(self.team.id).filter(id=own_template.id).exists())
@@ -962,14 +964,17 @@ class TestReplayScannerTemplateViewSet(_VisionAPITestCase):
         hidden = self._create_scanner(name="hidden")
         self.assertEqual(self.client.post(f"{self.scanners_url}{visible.id}/save_as_template/").status_code, 201)
         self.assertEqual(self.client.post(f"{self.scanners_url}{hidden.id}/save_as_template/").status_code, 201)
-        ReplayScannerTemplate.objects.for_team(self.team.id).create(
-            team=self.team,
-            source_scanner=None,
-            name="orphan",
-            scanner_type=ScannerType.MONITOR,
-            scanner_config={"prompt": "p"},
-            model=ScannerModel.GEMINI_3_6_FLASH,
-        )
+        teammate = User.objects.create_and_join(self.team.organization, "teammate@example.com", "pw")
+        for name, created_by in (("own orphan", self.user), ("teammate orphan", teammate)):
+            ReplayScannerTemplate.objects.for_team(self.team.id).create(
+                team=self.team,
+                source_scanner=None,
+                created_by=created_by,
+                name=name,
+                scanner_type=ScannerType.MONITOR,
+                scanner_config={"prompt": "p"},
+                model=ScannerModel.GEMINI_3_6_FLASH,
+            )
         with patch(
             "posthog.rbac.user_access_control.UserAccessControl.filter_queryset_by_access_level",
             side_effect=lambda qs, **_: qs.exclude(pk=hidden.pk),
@@ -977,7 +982,23 @@ class TestReplayScannerTemplateViewSet(_VisionAPITestCase):
             response = self.client.get(self.templates_url)
         self.assertEqual(response.status_code, 200, response.json())
         names = {template["name"] for template in response.json()["results"]}
-        self.assertEqual(names, {"visible", "orphan"})
+        # Orphaned templates stay visible to their creator only: the deleted source scanner may
+        # have been access-restricted, and deletion must not widen who can read its prompt.
+        self.assertEqual(names, {"visible", "own orphan"})
+
+    def test_delete_requires_edit_access_on_the_source_scanner(self) -> None:
+        scanner = self._create_scanner(name="restricted")
+        self.assertEqual(self.client.post(f"{self.scanners_url}{scanner.id}/save_as_template/").status_code, 201)
+        template = ReplayScannerTemplate.objects.for_team(self.team.id).get(source_scanner=scanner)
+
+        with patch(
+            "posthog.rbac.user_access_control.UserAccessControl.check_access_level_for_object",
+            return_value=False,
+        ):
+            response = self.client.delete(f"{self.templates_url}{template.id}/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(ReplayScannerTemplate.objects.for_team(self.team.id).filter(id=template.id).exists())
 
     def test_reusing_a_deleted_scanners_name_does_not_block_template_save(self) -> None:
         first = self._create_scanner(name="Checkout")

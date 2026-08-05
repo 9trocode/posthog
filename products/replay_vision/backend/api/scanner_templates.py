@@ -1,11 +1,12 @@
 from typing import Any
+from uuid import UUID
 
 from django.db.models import Q, QuerySet
 from django.shortcuts import get_object_or_404
 
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import mixins, serializers, viewsets
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.request import Request
 
 from posthog.schema import RecordingsQuery
@@ -139,6 +140,8 @@ class ReplayScannerTemplateViewSet(
     scope_object = "replay_scanner"
     permission_classes = [ReplayVisionEnabledPermission]
     serializer_class = ReplayScannerTemplateSerializer
+    # `objects` is fail-closed and has no team context at import time; `safely_get_queryset`
+    # re-scopes through the manager once the request's team scope is set.
     queryset = ReplayScannerTemplate.objects.unscoped()
     http_method_names = ["get", "delete", "head", "options"]
 
@@ -159,21 +162,37 @@ class ReplayScannerTemplateViewSet(
     def safely_get_queryset(self, queryset: QuerySet[ReplayScannerTemplate]) -> QuerySet[ReplayScannerTemplate]:
         # A template exposes its source scanner's prompt and recording filters, so gate it by that
         # scanner's object-level access. Orphaned templates (source scanner deleted) have no scanner
-        # left to check against and stay team-visible.
+        # left to check against, so only their creator keeps seeing them: the scanner may have been
+        # access-restricted, and deletion must not widen who can read its prompt.
         accessible_scanner_ids = self.user_access_control.filter_queryset_by_access_level(
             ReplayScanner.objects.filter(team_id=self.team_id)
         ).values_list("id", flat=True)
+        # The scoped manager resolves the request's canonical team, so environment URLs
+        # can't diverge from where the rows are stored (unlike a manual team_id filter).
         return (
-            queryset.filter(team_id=self.team_id)
-            .filter(Q(source_scanner_id__in=accessible_scanner_ids) | Q(source_scanner_id__isnull=True))
+            ReplayScannerTemplate.objects.all()
+            .filter(
+                Q(source_scanner_id__in=accessible_scanner_ids)
+                | Q(source_scanner_id__isnull=True, created_by=self.request.user)
+            )
             .select_related("created_by")
             .order_by("name", "id")
         )
 
     def dangerously_get_object(self) -> ReplayScannerTemplate:
-        return get_object_or_404(self.get_queryset(), id=self.kwargs["pk"])
+        try:
+            template_id = UUID(self.kwargs["pk"])
+        except ValueError:
+            raise NotFound()
+        return get_object_or_404(self.get_queryset(), id=template_id)
 
     def perform_destroy(self, instance: ReplayScannerTemplate) -> None:
+        # Deleting a template destroys it for the whole team, so a scanner-linked template
+        # additionally requires edit access on that scanner, not just the resource-wide level.
+        if instance.source_scanner is not None and not self.user_access_control.check_access_level_for_object(
+            instance.source_scanner, "editor"
+        ):
+            raise PermissionDenied("Deleting this template requires edit access to its source scanner.")
         template_id = str(instance.id)
         super().perform_destroy(instance)
         report_user_action(
