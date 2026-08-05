@@ -320,10 +320,10 @@ tools:
             monthly credit spend and `vision-quota-retrieve` to check the org's remaining budget — an enabled scanner
             sweeps matching recordings every 5 minutes, and creation itself does not check quota, so a too-broad scanner
             can exhaust the monthly budget on its first sweeps. Set `credit_limit` to cap what this one scanner can
-            spend per billing period, so it cannot starve the org's other scanners. The scanner stops scanning once
-            the credits left cannot cover another observation, and resumes when the period resets. To get notified
-            about what the scanner finds (a Slack alert or a scheduled summary), create a vision action bound to it
-            with `vision-actions-create`.
+            spend per billing period, so it cannot starve the org's other scanners. The scanner stops scanning once the
+            credits left cannot cover another observation, and resumes when the period resets. To get notified about
+            what the scanner finds (a Slack alert or a scheduled summary), create a vision action bound to it with
+            `vision-actions-create`.
         exclude_params:
             - id
             - scanner_version
