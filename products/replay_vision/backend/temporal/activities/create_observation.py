@@ -109,6 +109,23 @@ def _create_observation(inputs: CreateObservationInputs) -> CreateObservationOut
                 if locked is not None and locked.credit_limit is not None:
                     scanner_budget = compute_scanner_budget(scanner)
                     if scanner_budget.blocked:
+                        # A retried activity's own first insert counts as in-flight spend here, so
+                        # near the cap it would refuse its own row and strand it PENDING forever.
+                        # Resolve the existing row exactly as the UniqueViolation path below does.
+                        existing = ReplayObservation.objects.filter(
+                            scanner_id=inputs.scanner_id, session_id=inputs.session_id
+                        ).first()
+                        if existing is not None:
+                            existing_snapshot = ScannerSnapshot.load_for(existing.id, existing.scanner_snapshot)
+                            reclaimed = (
+                                existing.workflow_id == inputs.workflow_id
+                                and existing.status == ObservationStatus.PENDING
+                            )
+                            return CreateObservationOutput(
+                                observation_id=existing.id,
+                                was_created=reclaimed,
+                                scanner_type=existing_snapshot.scanner_type,
+                            )
                         record_quota_exhausted_skip(scanner.scanner_type, "scanner")
                         activity.logger.info(
                             "Skipping observation: scanner credit limit reached",

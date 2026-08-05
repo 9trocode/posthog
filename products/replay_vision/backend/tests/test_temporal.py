@@ -560,7 +560,9 @@ class TestCreateObservationActivity:
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join()
+            # A lock regression must fail the test, not hang the suite.
+            thread.join(timeout=30)
+        assert not any(thread.is_alive() for thread in threads)
 
         assert sorted(created.values()) == [False, True]
         assert ReplayObservation.objects.filter(scanner=scanner, status=ObservationStatus.PENDING).count() == 1
@@ -591,10 +593,88 @@ class TestCreateObservationActivity:
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join()
+            thread.join(timeout=30)
+        assert not any(thread.is_alive() for thread in threads)
 
         assert sorted(created.values()) == [True, True]
         assert ReplayObservation.objects.filter(scanner=scanner, status=ObservationStatus.PENDING).count() == 2
+
+    def test_concurrent_admissions_for_two_capped_scanners_do_not_serialize_each_other(self) -> None:
+        # The admission lock is per scanner row: two different capped scanners on one team must both
+        # admit their own observation, with no cross-scanner budget bleed or lock coupling.
+        credits = observation_credits_for_model(ScannerModel.GEMINI_3_6_FLASH.value)
+        scanner_a = _make_scanner(credit_limit=credits)
+        scanner_b = ReplayScanner.objects.create(
+            team=scanner_a.team,
+            name="capped-sibling",
+            scanner_type=ScannerType.MONITOR,
+            scanner_config={"prompt": "p"},
+            model=ScannerModel.GEMINI_3_6_FLASH,
+            credit_limit=credits,
+        )
+        barrier = threading.Barrier(2)
+        created: dict[str, bool] = {}
+
+        def admit(scanner: ReplayScanner, session_id: str) -> None:
+            barrier.wait()
+            try:
+                created[session_id] = create_observation_activity(
+                    CreateObservationInputs(
+                        scanner_id=scanner.id,
+                        team_id=scanner.team_id,
+                        session_id=session_id,
+                        triggered_by=ObservationTrigger.SCHEDULE,
+                        triggered_by_user_id=None,
+                        workflow_id=f"wf-{session_id}",
+                    )
+                ).was_created
+            finally:
+                connections.close_all()
+
+        threads = [
+            threading.Thread(target=admit, args=(scanner_a, "sibling-a")),
+            threading.Thread(target=admit, args=(scanner_b, "sibling-b")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        assert not any(thread.is_alive() for thread in threads)
+
+        assert created == {"sibling-a": True, "sibling-b": True}
+
+    def test_retry_near_the_cap_reclaims_its_own_pending_row(self) -> None:
+        # A Temporal retry whose first attempt committed the insert but lost the result must get its
+        # row back: that row's own reservation fills the budget, so a plain refusal would strand it
+        # PENDING forever while the workflow gives up.
+        credits = observation_credits_for_model(ScannerModel.GEMINI_3_6_FLASH.value)
+        scanner = _make_scanner(credit_limit=credits)
+        first_attempt = create_observation_activity(
+            CreateObservationInputs(
+                scanner_id=scanner.id,
+                team_id=scanner.team_id,
+                session_id="sess-retry",
+                triggered_by=ObservationTrigger.SCHEDULE,
+                triggered_by_user_id=None,
+                workflow_id="wf-retry",
+            )
+        )
+        assert first_attempt.was_created is True
+
+        second_attempt = create_observation_activity(
+            CreateObservationInputs(
+                scanner_id=scanner.id,
+                team_id=scanner.team_id,
+                session_id="sess-retry",
+                triggered_by=ObservationTrigger.SCHEDULE,
+                triggered_by_user_id=None,
+                workflow_id="wf-retry",
+            )
+        )
+
+        assert second_attempt.observation_id == first_attempt.observation_id
+        assert second_attempt.was_created is True
+        assert ReplayObservation.objects.filter(scanner=scanner).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)

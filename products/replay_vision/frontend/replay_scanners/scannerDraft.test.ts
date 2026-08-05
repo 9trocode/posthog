@@ -27,4 +27,17 @@ describe('scannerDraft', () => {
         localStorage.setItem(STORAGE_KEY, typeof tampered === 'string' ? tampered : JSON.stringify(tampered))
         expect(readScannerDraft(readTeamId)?.name ?? null).toBe(expectRestored ? 'Drafted scanner' : null)
     })
+
+    it('keeps the credit limit toggle on across the round trip while the amount is still empty', () => {
+        // JSON cannot carry the NaN sentinel; without the marker the toggle silently comes back off.
+        const scanner = { ...newScanner(null), credit_limit: NaN }
+        writeScannerDraft(1, scanner)
+        expect(Number.isNaN(readScannerDraft(1)?.credit_limit as number)).toBe(true)
+    })
+
+    it('restores a concrete credit limit as-is', () => {
+        const scanner = { ...newScanner(null), credit_limit: 500 }
+        writeScannerDraft(1, scanner)
+        expect(readScannerDraft(1)?.credit_limit).toBe(500)
+    })
 })

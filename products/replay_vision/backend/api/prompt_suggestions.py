@@ -417,6 +417,11 @@ class ReplayScannerPromptSuggestionViewSet(
         # both see "not in flight", and the second stub save moves `started_at`, which re-keys the usage
         # receipts of the first run's still-settling sessions and charges them twice.
         with transaction.atomic():
+            # A capped scanner's budget reads must serialize with the admission gate's row lock, or a
+            # test racing sweep admissions can jointly overshoot the cap. Scanner before suggestion,
+            # matching apply's lock order.
+            if scanner.credit_limit is not None:
+                ReplayScanner.objects.select_for_update().filter(team_id=self.team_id, pk=scanner.id).only("pk").first()
             suggestion = ReplayScannerPromptSuggestion.objects.select_for_update().get(
                 team_id=self.team_id, id=suggestion.id
             )
