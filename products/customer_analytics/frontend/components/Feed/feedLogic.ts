@@ -3,9 +3,10 @@ import { loaders } from 'kea-loaders'
 
 import api, { CountedPaginatedResponse } from 'lib/api'
 import { lemonToast } from 'lib/lemon-ui/LemonToast/LemonToast'
-import { SignalReport, SignalReportStatus } from 'scenes/inbox/types'
-import { DismissalReasonValue } from 'scenes/inbox/utils/dismissalReasons'
 import { userLogic } from 'scenes/userLogic'
+
+import { SignalReport, SignalReportStatus } from 'products/signals/frontend/inbox/types'
+import { DismissalReasonValue } from 'products/signals/frontend/inbox/utils/dismissalReasons'
 
 import type { UserType } from '../../../../../frontend/src/types'
 

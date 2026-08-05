@@ -2,10 +2,11 @@ import { useActions, useValues } from 'kea'
 
 import { LemonCheckbox, LemonSelect, LemonSkeleton } from '@posthog/lemon-ui'
 
-import { STATUS_LABELS } from 'scenes/inbox/components/badges/SignalReportStatusBadge'
-import { ReportCard } from 'scenes/inbox/components/cards/ReportCard'
-import { SignalReportStatus } from 'scenes/inbox/types'
 import { urls } from 'scenes/urls'
+
+import { STATUS_LABELS } from 'products/signals/frontend/inbox/components/badges/SignalReportStatusBadge'
+import { ReportCard } from 'products/signals/frontend/inbox/components/cards/ReportCard'
+import { SignalReportStatus } from 'products/signals/frontend/inbox/types'
 
 import { feedLogic } from './feedLogic'
 
