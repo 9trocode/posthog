@@ -1,9 +1,29 @@
 import { CLIENT_ID, OAUTH_SCOPES, POSTHOG_HOST, REDIRECT_URI } from "./config";
 
+// Tokens live in localStorage so the session survives closing the tab; the
+// site itself is employee-gated. Verifier/state are per-login-attempt only.
 const TOKEN_KEY = "announcements-admin:token";
 const EXPIRY_KEY = "announcements-admin:token-expiry";
+const REFRESH_KEY = "announcements-admin:refresh-token";
 const VERIFIER_KEY = "announcements-admin:verifier";
 const STATE_KEY = "announcements-admin:state";
+
+interface TokenResponse {
+  access_token: string;
+  expires_in?: number;
+  refresh_token?: string;
+}
+
+function storeTokens(data: TokenResponse): void {
+  localStorage.setItem(TOKEN_KEY, data.access_token);
+  localStorage.setItem(
+    EXPIRY_KEY,
+    String(Date.now() + (data.expires_in ?? 3600) * 1000),
+  );
+  if (data.refresh_token) {
+    localStorage.setItem(REFRESH_KEY, data.refresh_token);
+  }
+}
 
 function randomString(bytes: number): string {
   const values = crypto.getRandomValues(new Uint8Array(bytes));
@@ -26,15 +46,43 @@ async function sha256Base64Url(input: string): Promise<string> {
 }
 
 export function getToken(): string | null {
-  const token = sessionStorage.getItem(TOKEN_KEY);
-  const expiry = Number(sessionStorage.getItem(EXPIRY_KEY) ?? 0);
+  const token = localStorage.getItem(TOKEN_KEY);
+  const expiry = Number(localStorage.getItem(EXPIRY_KEY) ?? 0);
   if (!token || Date.now() >= expiry) return null;
   return token;
 }
 
+/**
+ * Valid access token, or one silently renewed from the stored refresh token.
+ * Null means a fresh login is needed.
+ */
+export async function restoreSession(): Promise<string | null> {
+  const token = getToken();
+  if (token) return token;
+  const refreshToken = localStorage.getItem(REFRESH_KEY);
+  if (!refreshToken) return null;
+
+  const response = await fetch(`${POSTHOG_HOST}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CLIENT_ID,
+    }),
+  });
+  if (!response.ok) {
+    logout();
+    return null;
+  }
+  storeTokens((await response.json()) as TokenResponse);
+  return getToken();
+}
+
 export function logout(): void {
-  sessionStorage.removeItem(TOKEN_KEY);
-  sessionStorage.removeItem(EXPIRY_KEY);
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(EXPIRY_KEY);
+  localStorage.removeItem(REFRESH_KEY);
 }
 
 export async function beginLogin(): Promise<void> {
@@ -86,15 +134,7 @@ export async function handleCallback(): Promise<boolean> {
   if (!response.ok) {
     throw new Error(`Token exchange failed (${response.status})`);
   }
-  const data = (await response.json()) as {
-    access_token: string;
-    expires_in?: number;
-  };
-  sessionStorage.setItem(TOKEN_KEY, data.access_token);
-  sessionStorage.setItem(
-    EXPIRY_KEY,
-    String(Date.now() + (data.expires_in ?? 3600) * 1000),
-  );
+  storeTokens((await response.json()) as TokenResponse);
   window.history.replaceState(null, "", "/");
   return true;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { type FlagRecord, fetchFlag } from "./api";
 import { Editor } from "./Editor";
-import { beginLogin, getToken, handleCallback, logout } from "./oauth";
+import { beginLogin, handleCallback, logout, restoreSession } from "./oauth";
 
 type State =
   | { phase: "booting" }
@@ -21,7 +21,7 @@ export function App() {
         setState({ phase: "signed-out", error: String(error) });
         return;
       }
-      const token = getToken();
+      const token = await restoreSession();
       setState(token ? { phase: "loading", token } : { phase: "signed-out" });
     })();
   }, []);

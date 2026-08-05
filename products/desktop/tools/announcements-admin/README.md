@@ -13,7 +13,8 @@ Live (employee-gated): https://desktop-announcements-admin.hosthog.dev
 [client ID metadata document](public/.well-known/oauth-client-metadata.json)
 (the `client_id` is that document's URL, so no OAuth app registration and no
 API keys). The document is the one public path on the otherwise employee-gated
-site; tokens live in `sessionStorage` with `feature_flag:read/write` scope.
+site; tokens live in `localStorage` with `feature_flag:read/write` scope and
+renew silently from the refresh token, so login persists across visits.
 
 The deploy origin is baked into `src/config.ts` and the metadata document, so
 the OAuth flow only works on the deployed site — `pnpm dev` renders the UI but
