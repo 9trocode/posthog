@@ -4,7 +4,7 @@ import builderHog from "./assets/hedgehogs/builder-hog-03.png";
 import explorerHog from "./assets/hedgehogs/explorer-hog.png";
 import happyHog from "./assets/hedgehogs/happy-hog.png";
 import loopHog from "./assets/hedgehogs/loop-hog.svg";
-import { BAND_COLORS, hoggieCatalog, hoggieSrcBySlug } from "./hoggies";
+import { BAND_COLORS, hoggieCatalog } from "./hoggies";
 import { type EditableItem, kindDefaultHedgehog } from "./items";
 
 // The app-bundled default hedgehogs are not in the brand catalog; render them
@@ -16,11 +16,9 @@ const APP_BUNDLED_SRC: Record<string, string> = {
   loop: loopHog,
 };
 
-/** Bundled and catalog names render locally; anything else tries the CDN. */
+/** App-bundled defaults render locally; everything else comes off the CDN. */
 function hoggieSrc(slug: string): string {
-  return (
-    APP_BUNDLED_SRC[slug] ?? hoggieSrcBySlug.get(slug) ?? hoggiePngUrl(slug)
-  );
+  return APP_BUNDLED_SRC[slug] ?? hoggiePngUrl(slug);
 }
 
 type Patch = Partial<EditableItem>;
