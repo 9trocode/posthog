@@ -31,8 +31,9 @@ Shared with the app: `@posthog/shared/announcements`
 ```bash
 pnpm --filter @posthog/shared build
 pnpm --filter @posthog/announcements-admin build
-cd tools/announcements-admin/dist && zip -r ../site.zip . && cd -
-# publish site.zip to the HostHog slug `desktop-announcements-admin`
-# (MCP `publish` tool or `hosthog publish`), then ensure the metadata document
-# is ungated: add_public_path /.well-known/oauth-client-metadata.json
+# HostHog defaults the target slug to the zip name, so name it after the slug.
+cd tools/announcements-admin/dist && zip -r ../desktop-announcements-admin.zip . && cd -
+# publish desktop-announcements-admin.zip (MCP `publish` tool or `hosthog
+# publish`), then ensure the metadata document is ungated:
+# add_public_path /.well-known/oauth-client-metadata.json
 ```
