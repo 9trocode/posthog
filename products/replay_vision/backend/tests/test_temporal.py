@@ -514,16 +514,18 @@ class TestCreateObservationActivity:
         scanner = _make_scanner(credit_limit=limit)
         seed_scanner_spend(scanner, already_spent_credits)
 
-        result = create_observation_activity(
-            CreateObservationInputs(
-                scanner_id=scanner.id,
-                team_id=scanner.team_id,
-                session_id="sess-scanner-limit",
-                triggered_by=ObservationTrigger.SCHEDULE,
-                triggered_by_user_id=None,
-                workflow_id="wf-scanner-limit",
+        # This test isolates the scanner gate; keep the unsynced-org fallback quota out of the way.
+        with patch("products.replay_vision.backend.quota.MONTHLY_CREDIT_QUOTA", 1_000_000):
+            result = create_observation_activity(
+                CreateObservationInputs(
+                    scanner_id=scanner.id,
+                    team_id=scanner.team_id,
+                    session_id="sess-scanner-limit",
+                    triggered_by=ObservationTrigger.SCHEDULE,
+                    triggered_by_user_id=None,
+                    workflow_id="wf-scanner-limit",
+                )
             )
-        )
 
         assert result.was_created is expect_created
         exists = ReplayObservation.objects.filter(scanner=scanner, session_id="sess-scanner-limit").exists()
