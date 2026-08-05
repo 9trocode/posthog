@@ -47,7 +47,13 @@ class _MCPGatewayAgentThrottle(SimpleRateThrottle):
         principal = request.auth
         if not isinstance(principal, GatewayAgentPrincipal):
             return None
-        return self.cache_format % {"scope": self.scope, "ident": principal.account.id}
+        # The rate is sized for one person's traffic, so the key includes the
+        # credential owner: keyed on the shared agent account alone, one
+        # member's burst would throttle every teammate using the same agent.
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": f"{principal.account.id}:{principal.credential_owner_id}",
+        }
 
 
 class MCPGatewayAgentBurstThrottle(_MCPGatewayAgentThrottle):

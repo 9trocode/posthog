@@ -1699,14 +1699,18 @@ class TestMCPServiceAccountAPI(APIBaseTest):
             ),
         ]
     )
-    def test_agent_gateway_rate_limits_are_scoped_per_service_account(
+    def test_agent_gateway_rate_limits_are_scoped_per_account_and_credential_owner(
         self, _name: str, method: str, url: str, allowed_status: int
     ) -> None:
         accounts = sync_built_in_agents(self.team)
         primary_account = next(account for account in accounts if account.handle == "posthog-scout")
         secondary_account = next(account for account in accounts if account.handle == "posthog-support")
+        other_member = User.objects.create_and_join(self.organization, "other-throttle@posthog.com", "password")
         primary_client = self._agent_client(primary_account)
         secondary_client = self._agent_client(secondary_account)
+        other_owner_client = self._agent_client(
+            primary_account, self._agent_token(primary_account, credential_owner_id=other_member.id)
+        )
         cache.clear()
         self.addCleanup(cache.clear)
 
@@ -1723,10 +1727,12 @@ class TestMCPServiceAccountAPI(APIBaseTest):
             first_response = primary_client.generic(method, url, REMOTE_ADDR="192.0.2.1")
             throttled_response = primary_client.generic(method, url, REMOTE_ADDR="192.0.2.2")
             secondary_response = secondary_client.generic(method, url, REMOTE_ADDR="192.0.2.1")
+            other_owner_response = other_owner_client.generic(method, url, REMOTE_ADDR="192.0.2.1")
 
         assert first_response.status_code == allowed_status
         assert throttled_response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
         assert secondary_response.status_code == allowed_status
+        assert other_owner_response.status_code == allowed_status
 
     @parameterized.expand(
         [
