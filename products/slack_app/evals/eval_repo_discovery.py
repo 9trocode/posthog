@@ -24,27 +24,42 @@ To run (expect a few minutes — one sandbox per case):
 from __future__ import annotations
 
 import asyncio
-
-from asgiref.sync import sync_to_async
+import contextlib
+from collections.abc import AsyncIterator
 
 from products.posthog_ai.eval_harness.config import BaseEvalCase
 from products.posthog_ai.eval_harness.harness.context import EvalContext
 from products.posthog_ai.eval_harness.harness.requirements import SuiteKind
 from products.posthog_ai.eval_harness.one_shot import OneShotPublicEval
-from products.slack_app.evals.scorers import (
-    REPO_SELECTION_KEY,
-    SelectedExpectedRepository,
-    SelectionOutcomeMatch,
-    SelectionStageMatch,
-)
+from products.slack_app.evals.scorers import REPO_SELECTION_KEY, SelectedExpectedRepository, SelectionOutcomeMatch
 from products.slack_app.evals.seeders import seed_github_repos
 
 SUITE_KIND = SuiteKind.SANDBOXED
 
 
+@contextlib.asynccontextmanager
+async def _sandbox_slot(ctx: EvalContext) -> AsyncIterator[None]:
+    """Hold the run's sandbox limiter, if this run booted one.
+
+    `sandbox_slots` is `None` only when no selected suite required sandbox infrastructure,
+    which cannot happen while this suite is selected — but a suite reaching for another
+    suite kind's limiter should degrade rather than crash if that ever changes.
+    """
+    if ctx.sandbox_slots is None:
+        yield
+        return
+    async with ctx.sandbox_slots:
+        yield
+
+
 def _finds(repository: str | None = None) -> dict:
-    """The agent is expected to name a repository; `repository=None` grades only that it did."""
-    spec: dict[str, str] = {"stage": "agent", "outcome": "found"}
+    """The agent is expected to name a repository; `repository=None` grades only that it did.
+
+    No expected stage: every case here is past the cascade and the gate by construction, so
+    grading the stage would only confirm this module's own constant. `eval_repo_selection`
+    is where the stage genuinely varies.
+    """
+    spec: dict[str, str] = {"outcome": "found"}
     if repository:
         spec["repository"] = repository
     return {REPO_SELECTION_KEY: spec}
@@ -102,59 +117,76 @@ CASES = [
 
 
 async def eval_repo_discovery(ctx: EvalContext) -> None:
+    if ctx.demo_data is None:
+        raise RuntimeError("eval_repo_discovery requires demo data; check SUITE_KIND")
+
+    # One team for the suite rather than one per case. Every case reads the same fixture
+    # catalogue and writes nothing, and a demo clone is a four-table ClickHouse copy plus
+    # taxonomy inference — paying that eight times over for identical, unread event data
+    # would dominate the suite's runtime. Cloning here also keeps the wait out of each
+    # case's own timeout budget, which the one-shot runner starts before the task fn.
+    async with ctx.team_setup_slots:
+        team = await asyncio.to_thread(ctx.demo_data.make_context, "repo-discovery")
+        await asyncio.to_thread(seed_github_repos, team.team_id)
+
     async def task(case: BaseEvalCase, task_ctx: EvalContext) -> dict:
-        from products.tasks.backend.facade import api as tasks_facade
-        from products.tasks.backend.facade.repo_selection import (
+        # Kept off the module's import path: `harness/discovery.py` imports every
+        # `eval_*.py` on every run, including `--list`, and this pulls in products/tasks.
+        from products.tasks.backend.facade import api as tasks_facade  # noqa: PLC0415
+        from products.tasks.backend.facade.repo_selection import (  # noqa: PLC0415
             RepoSelectionRejectedError,
             RepoSelectionUnavailableError,
             select_repository,
         )
 
-        if task_ctx.demo_data is None:
-            raise RuntimeError("eval_repo_discovery requires demo data; check SUITE_KIND")
-
-        # Team cloning and seeding are bounded by the same semaphore the sandboxed runner
-        # uses, so a wide fan-out can't put every case's ClickHouse copy in flight at once.
-        async with task_ctx.team_setup_slots:
-            sandbox_context = await asyncio.to_thread(task_ctx.demo_data.make_context, case.name)
-            await sync_to_async(seed_github_repos, thread_sensitive=False)(sandbox_context.team_id)
-
         thread = [case.prompt, *(case.metadata or {}).get("thread", [])]
         context_block = "\n".join(f"tester: {line}" for line in thread)
 
         try:
-            result = await select_repository(
-                team_id=sandbox_context.team_id,
-                user_id=sandbox_context.user_id,
-                context=context_block,
-                origin_product=tasks_facade.TaskOriginProduct.SLACK,
-            )
+            # `select_repository` spends a real sandbox, so it takes the sandbox limiter
+            # rather than only the one-shot one — otherwise `--max-sandboxes` is accepted
+            # and ignored, and a wide fan-out outruns the memory the operator allowed for.
+            async with _sandbox_slot(task_ctx):
+                result = await select_repository(
+                    team_id=team.team_id,
+                    user_id=team.user_id,
+                    context=context_block,
+                    origin_product=tasks_facade.TaskOriginProduct.SLACK,
+                    # Without these the run silently uses the agent-server default while
+                    # the experiment is stamped with `ctx.agent_model`.
+                    model=task_ctx.agent_model,
+                    runtime_adapter=task_ctx.agent_runtime,
+                    reasoning_effort=task_ctx.reasoning_effort,
+                )
         except RepoSelectionRejectedError as error:
             # The agent named something outside the candidate list. Distinct from "no
             # plausible candidate": the workflow falls back to the picker either way, but
             # only this one means the model made a repository up.
             return {
-                "stage": "agent",
                 "outcome": "rejected",
                 "repository": None,
-                "detail": f"hallucinated {getattr(error, 'returned_repository', '?')}",
-                "last_message": "agent → rejected",
+                "detail": f"hallucinated {error.returned_repository}",
+                "last_message": f"agent → rejected: {error.returned_repository}",
             }
         except RepoSelectionUnavailableError as error:
-            return {"stage": "agent", "outcome": "unavailable", "repository": None, "detail": str(error)}
+            return {
+                "outcome": "unavailable",
+                "repository": None,
+                "detail": str(error),
+                "last_message": f"agent → unavailable: {error}",
+            }
         except Exception as error:
-            return {"stage": "agent", "outcome": "error", "error": f"{type(error).__name__}: {error}"}
+            detail = f"{type(error).__name__}: {error}"
+            return {"outcome": "error", "error": detail, "last_message": f"agent → error: {detail}"}
 
         if result.repository is None:
             return {
-                "stage": "agent",
                 "outcome": "no_match",
                 "repository": None,
                 "detail": result.reason,
                 "last_message": f"agent → no_match: {result.reason}",
             }
         return {
-            "stage": "agent",
             "outcome": "found",
             "repository": result.repository,
             # The reason is the quality signal a score can't carry: it should cite tree
@@ -166,7 +198,7 @@ async def eval_repo_discovery(ctx: EvalContext) -> None:
     await OneShotPublicEval(
         experiment_name="slack-app-repo-discovery",
         cases=CASES,
-        scorers=[SelectionStageMatch(), SelectionOutcomeMatch(), SelectedExpectedRepository()],
+        scorers=[SelectionOutcomeMatch(), SelectedExpectedRepository()],
         task=task,
         ctx=ctx,
     )

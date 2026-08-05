@@ -187,8 +187,8 @@ def _light_cache_payload() -> list[dict[str, Any]]:
     ]
 
 
-def seed_github_repos(team_id: int) -> dict[str, Any]:
-    """Connect the fixture repositories to `team_id` and return what scorers need.
+def seed_github_repos(team_id: int) -> None:
+    """Connect the fixture repositories to `team_id`.
 
     Idempotent per team: the light cache is overwritten and each heavy row upserted, so a
     re-run refreshes the TTL rather than duplicating rows.
@@ -229,5 +229,3 @@ def seed_github_repos(team_id: int) -> dict[str, Any]:
                 "tree_truncated": False,
             },
         )
-
-    return {"integration_id": integration.id, "repositories": list(REPO_NAMES)}

@@ -6,10 +6,12 @@ from products.slack_app.evals.scorers import (
     FOLLOWUP_KEY,
     MODEL_OVERRIDE_KEY,
     REPO_SELECTION_KEY,
+    FollowupRoutingMatch,
     ModelOverrideMatch,
     NoDroppedFollowup,
     NoUnaskedOverride,
     SelectedExpectedRepository,
+    SelectionOutcomeMatch,
     SelectionStageMatch,
 )
 
@@ -116,38 +118,68 @@ class TestNoDroppedFollowup:
         )
 
 
-class TestSelectionStageMatch:
-    """Which stage answered is half the result: reaching the right repository through the
-    agent when the cascade should have caught it means every such mention now costs a sandbox."""
+class TestExpectedFieldMatch:
+    """The skip/fail protocol every field scorer shares.
+
+    Tested once on the base rather than per subclass — the subclasses declare a field name
+    and nothing else, so a per-subclass copy of these cases would only re-test the base.
+    The boundary that matters is skip-vs-fail: a scorer that skips where it should fail
+    silently inflates its own average.
+    """
 
     @parameterized.expand(
         [
-            ("right_stage", {"stage": "cascade", "outcome": "auto"}, 1.0),
-            ("escalated_too_far", {"stage": "agent", "outcome": "found"}, 0.0),
+            ("stage_right", SelectionStageMatch, {"stage": "cascade"}, {"stage": "cascade"}, 1.0),
+            ("stage_wrong", SelectionStageMatch, {"stage": "agent"}, {"stage": "cascade"}, 0.0),
+            ("outcome_right", SelectionOutcomeMatch, {"outcome": "no_repo"}, {"outcome": "no_repo"}, 1.0),
+            ("outcome_wrong", SelectionOutcomeMatch, {"outcome": "found"}, {"outcome": "no_repo"}, 0.0),
+            (
+                "repository_right",
+                SelectedExpectedRepository,
+                {"repository": "hedgebox/hedgebox-api"},
+                {"repository": "hedgebox/hedgebox-api"},
+                1.0,
+            ),
+            (
+                "repository_wrong",
+                SelectedExpectedRepository,
+                {"repository": "hedgebox/hedgebox-www"},
+                {"repository": "hedgebox/hedgebox-api"},
+                0.0,
+            ),
+            (
+                "repository_none",
+                SelectedExpectedRepository,
+                {"repository": None},
+                {"repository": "hedgebox/hedgebox-api"},
+                0.0,
+            ),
         ]
     )
-    def test_scores(self, _name, output, want):
-        expected = {REPO_SELECTION_KEY: {"stage": "cascade", "outcome": "auto"}}
-        assert SelectionStageMatch().eval(output=output, expected=expected).score == want
+    def test_scores(self, _name, scorer_cls, output, want, expected_score):
+        expected = {REPO_SELECTION_KEY: want}
+        assert scorer_cls().eval(output=output, expected=expected).score == expected_score
 
-    def test_skips_when_the_case_declares_no_stage(self):
-        assert SelectionStageMatch().eval(output={"stage": "agent"}, expected={}).score is None
-
-
-class TestSelectedExpectedRepository:
     @parameterized.expand(
         [
-            ("picked_it", {"repository": "hedgebox/hedgebox-api"}, 1.0),
-            ("picked_another", {"repository": "hedgebox/hedgebox-www"}, 0.0),
-            ("picked_nothing", {"repository": None}, 0.0),
+            # The Haiku gate's no-code decisions have no right repository, and scoring them
+            # 0 would report the gate working correctly as a selection failure.
+            ("no_repository_expected", SelectedExpectedRepository, {"stage": "haiku", "outcome": "no_repo"}),
+            ("no_stage_expected", SelectionStageMatch, {"outcome": "found"}),
+            ("nothing_expected", SelectionOutcomeMatch, {}),
         ]
     )
-    def test_scores(self, _name, output, want):
-        expected = {REPO_SELECTION_KEY: {"stage": "agent", "outcome": "found", "repository": "hedgebox/hedgebox-api"}}
-        assert SelectedExpectedRepository().eval(output=output, expected=expected).score == want
+    def test_skips_fields_the_case_does_not_declare(self, _name, scorer_cls, want):
+        expected = {REPO_SELECTION_KEY: want}
+        assert scorer_cls().eval(output={"stage": "agent", "repository": None}, expected=expected).score is None
 
-    def test_skips_cases_that_never_reach_a_repository(self):
-        # The Haiku gate's no-code decisions have no right answer here, and scoring them 0
-        # would report the gate working correctly as a selection failure.
-        expected = {REPO_SELECTION_KEY: {"stage": "haiku", "outcome": "no_repo"}}
-        assert SelectedExpectedRepository().eval(output={"repository": None}, expected=expected).score is None
+    def test_an_expectation_of_false_is_graded_not_skipped(self):
+        # Opting in by presence, not truthiness: the follow-up suite's chatter cases expect
+        # `False`, and a truthiness check would skip every one of them.
+        expected = {FOLLOWUP_KEY: {"agent_directed": False}}
+        assert FollowupRoutingMatch().eval(output={"agent_directed": False}, expected=expected).score == 1.0
+        assert FollowupRoutingMatch().eval(output={"agent_directed": True}, expected=expected).score == 0.0
+
+    def test_an_errored_call_fails_rather_than_skipping(self):
+        expected = {REPO_SELECTION_KEY: {"outcome": "found"}}
+        assert SelectionOutcomeMatch().eval(output={"error": "boom"}, expected=expected).score == 0.0

@@ -226,6 +226,53 @@ class NoUnaskedOverride(Scorer):
 
 
 # ---------------------------------------------------------------------------
+# Field-by-field expectations
+# ---------------------------------------------------------------------------
+
+
+class ExpectedFieldMatch(Scorer):
+    """Compare one field of a task's output against the same field of its expectation.
+
+    Most classifier suites grade a handful of independent decisions per case, and each of
+    those checks wants the same three-part policy: skip when the case doesn't state that
+    field, fail when the call errored, otherwise compare. Subclasses declare which field
+    they read and what to call the resulting score, and carry the docstring explaining why
+    that field is worth its own number.
+
+    Opting in is by *presence* of the field, not truthiness, so a case can legitimately
+    expect ``False`` or ``None``.
+    """
+
+    expectation_key: str
+    field: str
+    score_name: str
+    skip_reason: str
+
+    def _name(self) -> str:
+        return self.score_name
+
+    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
+        want = (expected or {}).get(self.expectation_key) or {}
+        if self.field not in want:
+            return Score(name=self._name(), score=None, metadata={"reason": self.skip_reason})
+        if output and output.get("error"):
+            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
+
+        got = (output or {}).get(self.field)
+        return Score(
+            name=self._name(),
+            score=1.0 if got == want[self.field] else 0.0,
+            metadata={
+                f"expected_{self.field}": want[self.field],
+                f"actual_{self.field}": got,
+                # Why the stage decided what it did — a repo name, a rejection reason, a
+                # crash. Absent on suites that don't produce one.
+                "detail": (output or {}).get("detail"),
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # Repository selection
 # ---------------------------------------------------------------------------
 
@@ -236,7 +283,7 @@ class NoUnaskedOverride(Scorer):
 REPO_SELECTION_KEY = "repo_selection"
 
 
-class SelectionStageMatch(Scorer):
+class SelectionStageMatch(ExpectedFieldMatch):
     """Did selection end at the stage it should have?
 
     The stage carries the cost: the whole point of the cascade and the Haiku gate is that
@@ -244,25 +291,13 @@ class SelectionStageMatch(Scorer):
     the wrong stage is a regression in everything but the answer.
     """
 
-    def _name(self) -> str:
-        return "selection_stage"
-
-    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
-        want = (expected or {}).get(REPO_SELECTION_KEY)
-        if want is None or not want.get("stage"):
-            return Score(name=self._name(), score=None, metadata={"reason": "Case declares no expected stage"})
-        if output and output.get("error"):
-            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
-
-        got = (output or {}).get("stage")
-        return Score(
-            name=self._name(),
-            score=1.0 if got == want["stage"] else 0.0,
-            metadata={"expected_stage": want["stage"], "actual_stage": got},
-        )
+    expectation_key = REPO_SELECTION_KEY
+    field = "stage"
+    score_name = "selection_stage"
+    skip_reason = "Case declares no expected stage"
 
 
-class SelectionOutcomeMatch(Scorer):
+class SelectionOutcomeMatch(ExpectedFieldMatch):
     """Did the stage reach the outcome it should have?
 
     Kept separate from the stage so a failure says which half moved. `no_match`, a
@@ -270,29 +305,13 @@ class SelectionOutcomeMatch(Scorer):
     differently downstream, so they are never collapsed into "not found".
     """
 
-    def _name(self) -> str:
-        return "selection_outcome"
-
-    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
-        want = (expected or {}).get(REPO_SELECTION_KEY)
-        if want is None or not want.get("outcome"):
-            return Score(name=self._name(), score=None, metadata={"reason": "Case declares no expected outcome"})
-        if output and output.get("error"):
-            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
-
-        got = (output or {}).get("outcome")
-        return Score(
-            name=self._name(),
-            score=1.0 if got == want["outcome"] else 0.0,
-            metadata={
-                "expected_outcome": want["outcome"],
-                "actual_outcome": got,
-                "detail": (output or {}).get("detail"),
-            },
-        )
+    expectation_key = REPO_SELECTION_KEY
+    field = "outcome"
+    score_name = "selection_outcome"
+    skip_reason = "Case declares no expected outcome"
 
 
-class SelectedExpectedRepository(Scorer):
+class SelectedExpectedRepository(ExpectedFieldMatch):
     """Of the repositories on offer, did it pick the right one?
 
     Only meaningful against the fixture catalogue in ``seeders.py``: the repositories are
@@ -301,27 +320,10 @@ class SelectedExpectedRepository(Scorer):
     defensible read.
     """
 
-    def _name(self) -> str:
-        return "selected_expected_repository"
-
-    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
-        want = (expected or {}).get(REPO_SELECTION_KEY) or {}
-        wanted_repo = want.get("repository")
-        if not wanted_repo:
-            return Score(name=self._name(), score=None, metadata={"reason": "Case declares no expected repository"})
-        if output and output.get("error"):
-            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
-
-        got = (output or {}).get("repository")
-        return Score(
-            name=self._name(),
-            score=1.0 if got == wanted_repo else 0.0,
-            metadata={
-                "expected_repository": wanted_repo,
-                "actual_repository": got,
-                "reason": (output or {}).get("detail"),
-            },
-        )
+    expectation_key = REPO_SELECTION_KEY
+    field = "repository"
+    score_name = "selected_expected_repository"
+    skip_reason = "Case declares no expected repository"
 
 
 # ---------------------------------------------------------------------------
@@ -331,25 +333,13 @@ class SelectedExpectedRepository(Scorer):
 FOLLOWUP_KEY = "followup_routing"
 
 
-class FollowupRoutingMatch(Scorer):
+class FollowupRoutingMatch(ExpectedFieldMatch):
     """Did the classifier route the reply the way a person in the thread would?"""
 
-    def _name(self) -> str:
-        return FOLLOWUP_KEY
-
-    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
-        want = (expected or {}).get(FOLLOWUP_KEY)
-        if want is None or "agent_directed" not in want:
-            return Score(name=self._name(), score=None, metadata={"reason": "No expectation for this case"})
-        if output and output.get("error"):
-            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
-
-        got = (output or {}).get("agent_directed")
-        return Score(
-            name=self._name(),
-            score=1.0 if got == want["agent_directed"] else 0.0,
-            metadata={"expected": want["agent_directed"], "actual": got},
-        )
+    expectation_key = FOLLOWUP_KEY
+    field = "agent_directed"
+    score_name = FOLLOWUP_KEY
+    skip_reason = "No expectation for this case"
 
 
 class NoDroppedFollowup(Scorer):

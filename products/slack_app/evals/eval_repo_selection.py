@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 
+from posthog.git import extract_explicit_repo
 from posthog.temporal.ai.slack_app.activities.classifiers import classify_task_needs_repo
 
 from products.posthog_ai.eval_harness.config import BaseEvalCase
@@ -96,29 +97,15 @@ CASES = [
 ]
 
 
-def _extract_explicit_repo(text: str, candidates: tuple[str, ...]) -> str | None:
-    """The cascade's short-circuit: does the text name a connected repo outright?
-
-    Mirrors the production cascade's matching on both the full `owner/repo` and the bare
-    repo name, which is how people actually write them in Slack.
-    """
-    lowered = text.lower()
-    for full_name in candidates:
-        if full_name.lower() in lowered:
-            return full_name
-        if full_name.split("/", 1)[1].lower() in lowered:
-            return full_name
-    return None
-
-
 async def eval_repo_selection(ctx: EvalContext) -> None:
     async def task(case: BaseEvalCase, task_ctx: EvalContext) -> dict:
-        explicit = _extract_explicit_repo(case.prompt, REPO_NAMES)
+        # The production matcher, not a copy of it: it tokenizes rather than substring-
+        # matching, so a paraphrase of it here would grade a cascade that doesn't ship.
+        explicit = extract_explicit_repo(case.prompt, list(REPO_NAMES))
         if explicit:
             return {
                 "stage": "cascade",
                 "outcome": "auto",
-                "repository": explicit,
                 "detail": explicit,
                 "last_message": f"cascade → {explicit}",
             }
@@ -132,13 +119,7 @@ async def eval_repo_selection(ctx: EvalContext) -> None:
             return {"stage": "haiku", "outcome": "error", "error": f"{type(error).__name__}: {error}"}
 
         outcome = "needs_agent" if needs_repo else "no_repo"
-        return {
-            "stage": "haiku",
-            "outcome": outcome,
-            "repository": None,
-            "detail": None,
-            "last_message": f"haiku → {outcome}",
-        }
+        return {"stage": "haiku", "outcome": outcome, "last_message": f"haiku → {outcome}"}
 
     await OneShotPublicEval(
         experiment_name="slack-app-repo-selection",
