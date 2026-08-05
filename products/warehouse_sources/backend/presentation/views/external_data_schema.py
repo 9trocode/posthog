@@ -1594,6 +1594,7 @@ class ExternalDataSchemaViewset(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
                     status=ExternalDataJob.Status.FAILED,
                     logger=logger,
                     latest_error="Sync cancelled by user",
+                    counts_towards_failure_streak=False,
                 )
             return Response(status=status.HTTP_200_OK)
 
@@ -1605,6 +1606,7 @@ class ExternalDataSchemaViewset(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
             status=ExternalDataJob.Status.FAILED,
             logger=logger,
             latest_error="Sync cancelled by user",
+            counts_towards_failure_streak=False,
         )
         if model.status != ExternalDataJob.Status.FAILED:
             # The job reached a different terminal state concurrently (e.g. Completed).
