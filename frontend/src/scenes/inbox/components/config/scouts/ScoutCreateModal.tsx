@@ -21,6 +21,7 @@ import {
     SCOUT_DAILY_AT_SCHEDULE_MODE,
     SIGNALS_SCOUT_SKILL_PREFIX,
 } from '../../../utils/scoutRunsWindow'
+import { ScoutMcpServersPicker } from './ScoutMcpServersPicker'
 import { ScoutSlackDestination } from './ScoutSlackDestination'
 
 export interface ScoutCreateModalProps {
@@ -197,6 +198,8 @@ export function ScoutCreateModal({ isOpen, onClose, initialValues, onCreated }: 
                             )}
                         </LemonField>
                     </div>
+
+                    <ScoutMcpServersPicker />
                 </div>
             </Form>
         </LemonModal>

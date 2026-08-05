@@ -21,6 +21,7 @@ import {
     SCOUT_DAILY_AT_SCHEDULE_MODE,
     timeToDailyCron,
 } from '../../../utils/scoutRunsWindow'
+import { ScoutMcpServersPicker } from './ScoutMcpServersPicker'
 import { ScoutSlackDestination } from './ScoutSlackDestination'
 
 interface ScoutConfigControlsProps {
@@ -184,6 +185,7 @@ export function ScoutConfigForm({
                 onChange={(outputDestinations) => onUpdate(config.id, { output_destinations: outputDestinations })}
                 disabledReason={controlsDisabledReason}
             />
+            <ScoutMcpServersPicker compact />
             {/* Only custom scouts are deletable. A canonical scout would be re-seeded from disk after
                 deletion (and couldn't be re-added from the UI), so its terminal action stays disable. */}
             {onDelete && config.scout_origin === 'custom' ? (
