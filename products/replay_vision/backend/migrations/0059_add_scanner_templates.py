@@ -65,7 +65,7 @@ class Migration(migrations.Migration):
                     models.CharField(
                         choices=[
                             ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
-                            ("gemini-3-flash-preview", "Gemini 3 Flash (preview)"),
+                            ("gemini-3-flash-preview", "Gemini 3 Flash"),
                             ("gemini-3.6-flash", "Gemini 3.6 Flash"),
                         ],
                         max_length=64,
