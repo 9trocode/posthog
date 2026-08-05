@@ -62,6 +62,9 @@ import type { NotificationTarget } from "@posthog/platform/notifications";
 import { z } from "zod";
 
 export const deepLinkRouter = router({
+  // In-app surfaces (announcement CTAs) dispatch posthog-code:// urls through
+  // the same main-process handler OS-delivered links use — no OS round-trip,
+  // no browser bounce, and dev builds (posthog-code-dev scheme) stay in-app.
   open: publicProcedure
     .input(z.object({ url: z.string() }))
     .mutation(({ ctx, input }) =>

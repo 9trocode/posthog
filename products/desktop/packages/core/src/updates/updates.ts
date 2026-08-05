@@ -31,8 +31,6 @@ import {
 
 import { isVersionNewer } from "./version";
 
-export { isVersionNewer } from "./version";
-
 type CheckSource = "user" | "periodic";
 type UpdateState =
   | "idle"
