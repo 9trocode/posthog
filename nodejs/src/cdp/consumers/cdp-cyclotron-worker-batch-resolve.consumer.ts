@@ -1,6 +1,7 @@
 import { DateTime } from 'luxon'
 import { Counter } from 'prom-client'
 
+import { HogFlow } from '~/cdp/schema/hogflow'
 import { InternalFetchService } from '~/common/services/internal-fetch'
 import { instrumentFn } from '~/common/tracing/tracing-utils'
 import { logger, serializeError } from '~/common/utils/logger'
@@ -17,7 +18,7 @@ import {
 } from '../services/hogflows/batch-resolver.types'
 import { HogFlowBatchPersonQueryService } from '../services/hogflows/hogflow-batch-person-query.service'
 import { invocationToV2JobInit } from '../services/job-queue/job-queue-postgres-v2'
-import { CyclotronJobInvocation } from '../types'
+import { CyclotronJobInvocationHogFlow } from '../types'
 import {
     convertAccountBatchHogFlowRequestToHogFunctionInvocationGlobals,
     convertBatchHogFlowRequestToHogFunctionInvocationGlobals,
@@ -263,33 +264,51 @@ export class CdpCyclotronWorkerBatchResolve extends CdpConsumerBase<PluginsServe
         const pageTruncated = eligibleIds.length < page.ids.length
 
         const defaultVariables = mergeDefaultVariables(hogFlow.variables, state.variables)
-        const children: CyclotronV2JobInit[] = eligibleIds.map((id) =>
-            invocationToV2JobInit(
-                isAccountAudience
-                    ? buildAccountHogFlowInvocation({
-                          siteUrl: this.config.SITE_URL,
-                          parentRunId: state.batchJobId,
-                          team,
-                          hogFlowId: hogFlow.id,
-                          externalId: id,
-                          groupType: page.accountGroupType ?? '',
-                          defaultVariables,
-                      })
-                    : buildHogFlowInvocation({
-                          siteUrl: this.config.SITE_URL,
-                          parentRunId: state.batchJobId,
-                          team,
-                          hogFlowId: hogFlow.id,
-                          personId: id,
-                          defaultVariables,
-                      })
-            )
+        const builtInvocations: CyclotronJobInvocationHogFlow[] = eligibleIds.map((id) =>
+            isAccountAudience
+                ? buildAccountHogFlowInvocation({
+                      siteUrl: this.config.SITE_URL,
+                      parentRunId: state.batchJobId,
+                      team,
+                      hogFlow,
+                      externalId: id,
+                      groupType: page.accountGroupType ?? '',
+                      defaultVariables,
+                  })
+                : buildHogFlowInvocation({
+                      siteUrl: this.config.SITE_URL,
+                      parentRunId: state.batchJobId,
+                      team,
+                      hogFlow,
+                      personId: id,
+                      defaultVariables,
+                  })
         )
+
+        // Batch-built invocations skip the event-triggered pipeline entirely, so
+        // trigger_masking has to be applied here explicitly — otherwise a workflow
+        // with a masking TTL re-enrolls the same audience on every scheduled run.
+        const { masked, notMasked } = await this.hogMasker.filterByMasking(builtInvocations)
+
+        if (masked.length) {
+            this.hogFunctionMonitoringService.queueAppMetrics(
+                masked.map((item) => ({
+                    team_id: item.teamId,
+                    app_source_id: item.functionId,
+                    metric_kind: 'other',
+                    metric_name: 'masked',
+                    count: 1,
+                })),
+                'hog_flow'
+            )
+        }
+
+        const children: CyclotronV2JobInit[] = notMasked.map((invocation) => invocationToV2JobInit(invocation))
 
         const newState: BatchResolverState = {
             ...state,
             cursor: page.cursor,
-            totalEnqueued: state.totalEnqueued + children.length,
+            totalEnqueued: state.totalEnqueued + eligibleIds.length,
             pagesProcessed: state.pagesProcessed + 1,
             attempts: 0, // reset on successful page commit
         }
@@ -314,7 +333,7 @@ export class CdpCyclotronWorkerBatchResolve extends CdpConsumerBase<PluginsServe
 
         logger.info(
             '📝',
-            `${this.name} - processed page for batch ${state.batchJobId}: ${children.length} ${isAccountAudience ? 'accounts' : 'persons'} (${newState.totalEnqueued} total, ${newState.pagesProcessed} pages)`
+            `${this.name} - processed page for batch ${state.batchJobId}: ${children.length} ${isAccountAudience ? 'accounts' : 'persons'} enqueued, ${masked.length} masked (${newState.totalEnqueued} total resolved, ${newState.pagesProcessed} pages)`
         )
     }
 
@@ -471,11 +490,11 @@ export function buildAccountHogFlowInvocation(params: {
     siteUrl: string
     parentRunId: string
     team: Team
-    hogFlowId: string
+    hogFlow: HogFlow
     externalId: string
     groupType: string
     defaultVariables: Record<string, unknown>
-}): CyclotronJobInvocation {
+}): CyclotronJobInvocationHogFlow {
     const invocationGlobals = convertAccountBatchHogFlowRequestToHogFunctionInvocationGlobals({
         team: params.team,
         externalId: params.externalId,
@@ -494,13 +513,14 @@ export function buildAccountHogFlowInvocation(params: {
             variables: params.defaultVariables,
         } as any,
         teamId: params.team.id,
-        functionId: params.hogFlowId,
+        functionId: params.hogFlow.id,
+        hogFlow: params.hogFlow,
         parentRunId: params.parentRunId,
         filterGlobals,
         queue: 'hogflow' as const,
         queuePriority: 1,
         queueScheduledAt: DateTime.now(),
-    } as CyclotronJobInvocation
+    } as CyclotronJobInvocationHogFlow
 }
 
 // Mirrors `createHogFlowInvocation` from the legacy Kafka consumer so children
@@ -509,10 +529,10 @@ function buildHogFlowInvocation(params: {
     siteUrl: string
     parentRunId: string
     team: Team
-    hogFlowId: string
+    hogFlow: HogFlow
     personId: string
     defaultVariables: Record<string, unknown>
-}): CyclotronJobInvocation {
+}): CyclotronJobInvocationHogFlow {
     const invocationGlobals = convertBatchHogFlowRequestToHogFunctionInvocationGlobals({
         team: params.team,
         personId: params.personId,
@@ -530,12 +550,13 @@ function buildHogFlowInvocation(params: {
             variables: params.defaultVariables,
         } as any,
         teamId: params.team.id,
-        functionId: params.hogFlowId,
+        functionId: params.hogFlow.id,
+        hogFlow: params.hogFlow,
         parentRunId: params.parentRunId,
         person: invocationGlobals.person as any,
         filterGlobals,
         queue: 'hogflow' as const,
         queuePriority: 1,
         queueScheduledAt: DateTime.now(),
-    } as CyclotronJobInvocation
+    } as CyclotronJobInvocationHogFlow
 }
