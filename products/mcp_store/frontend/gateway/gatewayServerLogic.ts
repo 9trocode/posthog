@@ -152,6 +152,11 @@ export interface gatewayServerLogicMeta {
     __keaTypeGenInternalSelectorTypes: {
         server: (servers: MCPGatewayServerApi[], arg: any) => MCPGatewayServerApi | null
         breadcrumbs: (server: MCPGatewayServerApi | null) => Breadcrumb[]
+        agentSharesByAccountId: (
+            server: MCPGatewayServerApi | null,
+            serviceAccounts: MCPServiceAccountApi[],
+            currentUserId: number | null
+        ) => Record<string, AgentServerShare>
         policyCounts: (toolPolicies: ResolvedToolPolicyApi[]) => Record<MCPToolApprovalStateEnumApi, number>
         availableScopes: (
             server: MCPGatewayServerApi | null,
@@ -160,11 +165,6 @@ export interface gatewayServerLogicMeta {
             canManageAgentAccess: boolean
         ) => PolicyScope[]
         scopeIsResolving: (requestedAgentScopeId: string | null, scope: PolicyScope) => boolean
-        agentSharesByAccountId: (
-            server: MCPGatewayServerApi | null,
-            serviceAccounts: MCPServiceAccountApi[],
-            currentUserId: number | null
-        ) => Record<string, AgentServerShare>
     }
 }
 

@@ -356,14 +356,14 @@ export interface mcpGatewayLogicActions {
     performConnectionComplete: () => {
         value: true
     }
-    removeServer: (serverId: string) => {
-        serverId: string
-    }
     removeAllAgentServerShares: (
         accountId: string,
         serverId: string
     ) => {
         accountId: string
+        serverId: string
+    }
+    removeServer: (serverId: string) => {
         serverId: string
     }
     setAgentServerAccess: (
