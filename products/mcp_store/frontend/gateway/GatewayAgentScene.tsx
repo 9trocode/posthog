@@ -29,6 +29,7 @@ export function GatewayAgentScene(): JSX.Element {
         agentServerAccessLoadingKeys,
         allServers,
         allServersLoading,
+        sharedByYouCount,
         sharedServerIds,
         sharesByServerId,
         recentCalls,
@@ -77,7 +78,7 @@ export function GatewayAgentScene(): JSX.Element {
 
             <div className="flex flex-col gap-2">
                 <h3 className="mb-0">
-                    Shared servers{!allServersLoading && ` · ${sharedServerIds.size} of ${allServers.length}`}
+                    Shared servers{!allServersLoading && ` · you share ${sharedByYouCount} of ${allServers.length}`}
                 </h3>
                 <div className="text-sm text-secondary">
                     Sharing is personal. {account.name} uses your connection only when it runs for you.
