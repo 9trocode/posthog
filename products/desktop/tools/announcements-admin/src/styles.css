@@ -570,17 +570,22 @@ select:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 56px;
+  height: 64px;
   margin: -14px -14px 10px;
   border-radius: 8px 8px 0 0;
-  font-size: 22px;
   overflow: hidden;
 }
 
-.pv-hero img {
+.pv-hero-cover {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.pv-hog {
+  height: 48px;
+  width: auto;
+  object-fit: contain;
 }
 
 .pv-btn {

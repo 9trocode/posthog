@@ -1,5 +1,17 @@
+import type { HERO_HEDGEHOGS } from "@posthog/shared/announcements";
 import { useEffect, useState } from "react";
+import builderHog from "./assets/hedgehogs/builder-hog-03.png";
+import explorerHog from "./assets/hedgehogs/explorer-hog.png";
+import happyHog from "./assets/hedgehogs/happy-hog.png";
+import loopHog from "./assets/hedgehogs/loop-hog.svg";
 import type { EditableItem } from "./items";
+
+const HEDGEHOG_SRC: Record<(typeof HERO_HEDGEHOGS)[number], string> = {
+  builder: builderHog,
+  explorer: explorerHog,
+  happy: happyHog,
+  loop: loopHog,
+};
 
 function firstLine(body: string): string {
   return body.split("\n")[0] || "Body text appears here";
@@ -33,16 +45,22 @@ function HeroBand({ item }: { item: EditableItem }) {
     if (!item.heroImageUrl) return null;
     return (
       <div className="pv-hero">
-        <img src={item.heroImageUrl} alt="" />
+        <img className="pv-hero-cover" src={item.heroImageUrl} alt="" />
       </div>
     );
   }
+  const hedgehog =
+    item.heroType === "hedgehog"
+      ? item.heroHedgehog
+      : item.kind === "required-update"
+        ? "builder"
+        : "happy";
   const color =
     (item.heroType === "hedgehog" && item.heroColor) ||
     (item.kind === "required-update" ? "#f54e00" : "#2f80fa");
   return (
     <div className="pv-hero" style={{ backgroundColor: color }} aria-hidden>
-      🦔
+      <img className="pv-hog" src={HEDGEHOG_SRC[hedgehog]} alt="" />
     </div>
   );
 }
