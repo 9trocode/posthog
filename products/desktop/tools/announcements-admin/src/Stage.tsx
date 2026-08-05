@@ -447,6 +447,7 @@ export function Stage({
   const isAnnouncement = item.kind === "announcement";
   const canToggleState = isAnnouncement && item.minVersion !== "";
   const [viewStale, setViewStale] = useState(false);
+  const [previewDark, setPreviewDark] = useState(false);
   useEffect(() => {
     if (!canToggleState) setViewStale(false);
   }, [canToggleState]);
@@ -532,9 +533,25 @@ export function Stage({
             </button>
           </fieldset>
         )}
+        <fieldset className="seg" aria-label="Preview theme">
+          <button
+            type="button"
+            className={segCls(!previewDark)}
+            onClick={() => setPreviewDark(false)}
+          >
+            light
+          </button>
+          <button
+            type="button"
+            className={segCls(previewDark)}
+            onClick={() => setPreviewDark(true)}
+          >
+            dark
+          </button>
+        </fieldset>
       </div>
 
-      <div className="st-frame">
+      <div className={previewDark ? "st-frame st-dark" : "st-frame"}>
         <div className="st-titlebar" aria-hidden>
           <span className="st-dot" />
           <span className="st-dot" />
