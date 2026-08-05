@@ -1,86 +1,30 @@
-import type { Announcement } from "@posthog/shared/announcements";
 import { announcementsPayloadSchema } from "@posthog/shared/announcements";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { type FlagRecord, readPayload, savePayload } from "./api";
 import { POSTHOG_HOST, PROJECT_ID } from "./config";
+import {
+  blankItem,
+  type EditableItem,
+  isoToLocalInput,
+  localInputToIso,
+  toEditable,
+  toPayloadItem,
+} from "./items";
+import { Preview } from "./Preview";
 
-interface EditableItem {
-  kind: "announcement" | "required-update";
-  id: string;
-  title: string;
-  body: string;
-  startsAt: string;
-  endsAt: string;
-  style: "banner" | "modal";
-  minVersion: string;
-  ctaLabel: string;
-  ctaUrl: string;
-}
-
-function blankItem(kind: EditableItem["kind"]): EditableItem {
-  return {
-    kind,
-    id: "",
-    title: "",
-    body: "",
-    startsAt: "",
-    endsAt: "",
-    style: "banner",
-    minVersion: "",
-    ctaLabel: "",
-    ctaUrl: "",
-  };
-}
-
-function toEditable(items: Announcement[]): EditableItem[] {
-  return items.map((item) => ({
-    ...blankItem(item.kind),
-    id: item.id,
-    title: item.title,
-    body: item.body,
-    startsAt: item.startsAt ?? "",
-    endsAt: item.endsAt ?? "",
-    style: item.kind === "announcement" ? item.style : "banner",
-    minVersion: item.minVersion ?? "",
-    ctaLabel: item.kind === "announcement" ? (item.cta?.label ?? "") : "",
-    ctaUrl: item.kind === "announcement" ? (item.cta?.url ?? "") : "",
-  }));
-}
-
-function toPayloadItem(item: EditableItem): Record<string, unknown> {
-  const base: Record<string, unknown> = {
-    kind: item.kind,
-    id: item.id,
-    title: item.title,
-    body: item.body,
-  };
-  if (item.startsAt) base.startsAt = item.startsAt;
-  if (item.endsAt) base.endsAt = item.endsAt;
-  if (item.kind === "required-update") {
-    base.minVersion = item.minVersion;
-    return base;
-  }
-  base.style = item.style;
-  if (item.minVersion) base.minVersion = item.minVersion;
-  if (item.ctaLabel || item.ctaUrl) {
-    base.cta = { label: item.ctaLabel, url: item.ctaUrl };
-  }
-  return base;
-}
-
-function isoToLocalInput(iso: string): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function localInputToIso(value: string): string {
-  if (!value) return "";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+function rolloutLabel(flag: FlagRecord): { text: string; live: boolean } {
+  if (!flag.active) return { text: "flag disabled", live: false };
+  const groups = flag.filters.groups as
+    | { rollout_percentage?: number | null }[]
+    | undefined;
+  const percent = Math.max(
+    0,
+    ...(groups ?? []).map((g) => g.rollout_percentage ?? 100),
+  );
+  return percent > 0
+    ? { text: `${percent}% on air`, live: true }
+    : { text: "0% · dark", live: false };
 }
 
 export function Editor({
@@ -100,10 +44,15 @@ export function Editor({
   }, [flag]);
 
   const [items, setItems] = useState<EditableItem[]>(initial ?? []);
+  const [selected, setSelected] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [published, setPublished] = useState(false);
   const [jsonDraft, setJsonDraft] = useState<string | null>(null);
+
+  const flagUrl = `${POSTHOG_HOST}/project/${PROJECT_ID}/feature_flags/${flag.id}`;
+  const rollout = rolloutLabel(flag);
+  const selectedItem = items[Math.min(selected, items.length - 1)] ?? null;
 
   const payloadJson = useMemo(
     () => JSON.stringify({ announcements: items.map(toPayloadItem) }, null, 2),
@@ -114,7 +63,7 @@ export function Editor({
     setItems((prev) =>
       prev.map((item, i) => (i === index ? { ...item, ...patch } : item)),
     );
-    setSavedAt(null);
+    setPublished(false);
   };
 
   const move = (index: number, delta: number) => {
@@ -125,12 +74,20 @@ export function Editor({
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
-    setSavedAt(null);
+    setSelected(Math.max(0, Math.min(index + delta, items.length - 1)));
+    setPublished(false);
   };
 
   const remove = (index: number) => {
     setItems((prev) => prev.filter((_, i) => i !== index));
-    setSavedAt(null);
+    setSelected((prev) => Math.max(0, prev > index ? prev - 1 : prev));
+    setPublished(false);
+  };
+
+  const add = (kind: EditableItem["kind"]) => {
+    setItems((prev) => [...prev, blankItem(kind)]);
+    setSelected(items.length);
+    setPublished(false);
   };
 
   const applyJson = () => {
@@ -149,7 +106,7 @@ export function Editor({
     }
   };
 
-  const save = async () => {
+  const publish = async () => {
     const parsed = announcementsPayloadSchema.safeParse({
       announcements: items.map(toPayloadItem),
     });
@@ -165,7 +122,7 @@ export function Editor({
     setSaving(true);
     try {
       onFlagUpdated(await savePayload(token, flag, parsed.data));
-      setSavedAt(Date.now());
+      setPublished(true);
     } catch (error) {
       setErrors([String(error)]);
     } finally {
@@ -175,16 +132,12 @@ export function Editor({
 
   if (initial === null) {
     return (
-      <div className="panel">
-        <p className="error">
+      <div className="console">
+        <p className="errors">
           The current flag payload does not match the announcements schema. Fix
-          it in{" "}
-          <a
-            href={`${POSTHOG_HOST}/project/${PROJECT_ID}/feature_flags/${flag.id}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            PostHog
+          it on{" "}
+          <a href={flagUrl} target="_blank" rel="noreferrer">
+            the flag
           </a>{" "}
           and reload.
         </p>
@@ -193,190 +146,263 @@ export function Editor({
   }
 
   return (
-    <div className="editor">
-      <header>
+    <div className="console">
+      <header className="masthead">
         <div>
-          <h1>PostHog Desktop announcements</h1>
-          <p className="muted">
-            Order is priority — the first eligible item shows. Rollout stays
-            managed on{" "}
-            <a
-              href={`${POSTHOG_HOST}/project/${PROJECT_ID}/feature_flags/${flag.id}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              the flag
-            </a>
-            {flag.active ? "" : " (currently disabled)"}.
-          </p>
+          <span className="eyebrow">PostHog Desktop · internal</span>
+          <h1>Announcements</h1>
         </div>
-        <button type="button" className="ghost" onClick={onLogout}>
-          Log out
-        </button>
+        <div className="masthead-status">
+          <a
+            className="flag-chip"
+            href={flagUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            posthog-desktop-announcements
+          </a>
+          <span className={rollout.live ? "pill pill-live" : "pill"}>
+            <span className="pill-dot" aria-hidden />
+            {rollout.text}
+          </span>
+          <button type="button" className="btn btn-ghost" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
       </header>
 
-      {items.map((item, index) => (
-        <section className="panel" key={`${index}-${item.kind}`}>
-          <div className="panel-head">
-            <strong>
-              {item.kind === "required-update"
-                ? "Required update"
-                : "Announcement"}
-            </strong>
-            <span className="spacer" />
-            <button type="button" onClick={() => move(index, -1)}>
-              ↑
-            </button>
-            <button type="button" onClick={() => move(index, 1)}>
-              ↓
-            </button>
-            <button type="button" onClick={() => remove(index)}>
-              Remove
-            </button>
-          </div>
-          <div className="grid">
-            <label>
-              id (dismissal key)
-              <input
-                value={item.id}
-                onChange={(e) => update(index, { id: e.target.value })}
-              />
-            </label>
-            <label>
-              title
-              <input
-                value={item.title}
-                onChange={(e) => update(index, { title: e.target.value })}
-              />
-            </label>
-          </div>
-          <label>
-            body (markdown; banners show the first line)
-            <textarea
-              rows={3}
-              value={item.body}
-              onChange={(e) => update(index, { body: e.target.value })}
-            />
-          </label>
-          <div className="grid">
-            <label>
-              starts at (optional)
-              <input
-                type="datetime-local"
-                value={isoToLocalInput(item.startsAt)}
-                onChange={(e) =>
-                  update(index, { startsAt: localInputToIso(e.target.value) })
-                }
-              />
-            </label>
-            <label>
-              ends at (optional)
-              <input
-                type="datetime-local"
-                value={isoToLocalInput(item.endsAt)}
-                onChange={(e) =>
-                  update(index, { endsAt: localInputToIso(e.target.value) })
-                }
-              />
-            </label>
-            <label>
-              min version{" "}
-              {item.kind === "required-update"
-                ? "(required — apps below it are blocked)"
-                : "(optional — stale apps get an Update button)"}
-              <input
-                placeholder="1.42.0"
-                value={item.minVersion}
-                onChange={(e) => update(index, { minVersion: e.target.value })}
-              />
-            </label>
-            {item.kind === "announcement" && (
-              <label>
-                style
-                <select
-                  value={item.style}
-                  onChange={(e) =>
-                    update(index, {
-                      style: e.target.value as EditableItem["style"],
-                    })
+      <div className="cols">
+        <main className="queue">
+          <p className="queue-note">
+            Order is priority — the app shows the first eligible item only.
+          </p>
+
+          {items.map((item, index) => (
+            <section
+              className={index === selected ? "card card-selected" : "card"}
+              key={`${index}-${item.kind}`}
+              onFocusCapture={() => setSelected(index)}
+              onPointerDown={() => setSelected(index)}
+            >
+              <div className="card-head">
+                <span className="card-index">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <span
+                  className={
+                    item.kind === "required-update"
+                      ? "kind-tag kind-update"
+                      : "kind-tag"
                   }
                 >
-                  <option value="banner">banner</option>
-                  <option value="modal">modal</option>
-                </select>
-              </label>
-            )}
-          </div>
-          {item.kind === "announcement" && (
-            <div className="grid">
+                  {item.kind === "required-update"
+                    ? "Required update"
+                    : "Announcement"}
+                </span>
+                <span className="spacer" />
+                <button
+                  type="button"
+                  className="btn btn-icon"
+                  aria-label="Move up"
+                  onClick={() => move(index, -1)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-icon"
+                  aria-label="Move down"
+                  onClick={() => move(index, 1)}
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => remove(index)}
+                >
+                  Remove
+                </button>
+              </div>
+
+              <div className="grid">
+                <label>
+                  id — dismissal key
+                  <input
+                    className="mono"
+                    placeholder="loops-launch"
+                    value={item.id}
+                    onChange={(e) => update(index, { id: e.target.value })}
+                  />
+                </label>
+                <label>
+                  title
+                  <input
+                    placeholder="Introducing…"
+                    value={item.title}
+                    onChange={(e) => update(index, { title: e.target.value })}
+                  />
+                </label>
+              </div>
+
               <label>
-                cta label (optional)
-                <input
-                  value={item.ctaLabel}
-                  onChange={(e) => update(index, { ctaLabel: e.target.value })}
+                body — markdown; banners show the first line
+                <textarea
+                  rows={3}
+                  value={item.body}
+                  onChange={(e) => update(index, { body: e.target.value })}
                 />
               </label>
-              <label>
-                cta url (https://… or posthog-code://…)
-                <input
-                  value={item.ctaUrl}
-                  onChange={(e) => update(index, { ctaUrl: e.target.value })}
-                />
-              </label>
-            </div>
-          )}
-        </section>
-      ))}
 
-      <div className="row">
-        <button
-          type="button"
-          onClick={() =>
-            setItems((prev) => [...prev, blankItem("announcement")])
-          }
-        >
-          Add announcement
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            setItems((prev) => [...prev, blankItem("required-update")])
-          }
-        >
-          Add required update
-        </button>
-      </div>
+              <div className="grid">
+                <label>
+                  starts — optional
+                  <input
+                    type="datetime-local"
+                    className="mono"
+                    value={isoToLocalInput(item.startsAt)}
+                    onChange={(e) =>
+                      update(index, {
+                        startsAt: localInputToIso(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  ends — optional
+                  <input
+                    type="datetime-local"
+                    className="mono"
+                    value={isoToLocalInput(item.endsAt)}
+                    onChange={(e) =>
+                      update(index, { endsAt: localInputToIso(e.target.value) })
+                    }
+                  />
+                </label>
+                <label>
+                  min version{" "}
+                  {item.kind === "required-update"
+                    ? "— blocks older apps"
+                    : "— optional update nudge"}
+                  <input
+                    className="mono"
+                    placeholder="1.42.0"
+                    value={item.minVersion}
+                    onChange={(e) =>
+                      update(index, { minVersion: e.target.value })
+                    }
+                  />
+                </label>
+                {item.kind === "announcement" && (
+                  <label>
+                    style
+                    <select
+                      value={item.style}
+                      onChange={(e) =>
+                        update(index, {
+                          style: e.target.value as EditableItem["style"],
+                        })
+                      }
+                    >
+                      <option value="banner">banner</option>
+                      <option value="modal">modal</option>
+                    </select>
+                  </label>
+                )}
+              </div>
 
-      <details>
-        <summary>Raw JSON</summary>
-        <textarea
-          rows={14}
-          value={jsonDraft ?? payloadJson}
-          onChange={(e) => setJsonDraft(e.target.value)}
-        />
-        <button type="button" disabled={jsonDraft === null} onClick={applyJson}>
-          Apply JSON
-        </button>
-      </details>
-
-      {errors.length > 0 && (
-        <ul className="error">
-          {errors.map((error) => (
-            <li key={error}>{error}</li>
+              {item.kind === "announcement" && (
+                <div className="grid">
+                  <label>
+                    button label — optional
+                    <input
+                      placeholder="Learn more"
+                      value={item.ctaLabel}
+                      onChange={(e) =>
+                        update(index, { ctaLabel: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    button link — https:// or posthog-code://
+                    <input
+                      className="mono"
+                      placeholder="posthog-code://loop"
+                      value={item.ctaUrl}
+                      onChange={(e) =>
+                        update(index, { ctaUrl: e.target.value })
+                      }
+                    />
+                  </label>
+                </div>
+              )}
+            </section>
           ))}
-        </ul>
-      )}
 
-      <div className="row">
-        <button
-          type="button"
-          className="primary"
-          disabled={saving}
-          onClick={() => void save()}
-        >
-          {saving ? "Publishing…" : "Publish payload"}
-        </button>
-        {savedAt !== null && <span className="muted">Published ✓</span>}
+          <div className="row">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => add("announcement")}
+            >
+              + Announcement
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => add("required-update")}
+            >
+              + Required update
+            </button>
+          </div>
+
+          <details className="json">
+            <summary>Raw JSON</summary>
+            <textarea
+              rows={14}
+              className="mono"
+              value={jsonDraft ?? payloadJson}
+              onChange={(e) => setJsonDraft(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn"
+              disabled={jsonDraft === null}
+              onClick={applyJson}
+            >
+              Apply JSON
+            </button>
+          </details>
+
+          {errors.length > 0 && (
+            <ul className="errors">
+              {errors.map((error) => (
+                <li key={error}>{error}</li>
+              ))}
+            </ul>
+          )}
+
+          <div className="row publish-row">
+            <button
+              type="button"
+              className="btn btn-publish"
+              disabled={saving}
+              onClick={() => void publish()}
+            >
+              {saving ? "Publishing…" : "Publish"}
+            </button>
+            <span className="publish-note">
+              {published
+                ? "Published — live wherever the flag is rolled out."
+                : "Writes the flag payload. Rollout % is unchanged."}
+            </span>
+          </div>
+        </main>
+
+        <aside className="side">
+          <span className="eyebrow">In-app preview</span>
+          <Preview item={selectedItem} />
+        </aside>
       </div>
     </div>
   );

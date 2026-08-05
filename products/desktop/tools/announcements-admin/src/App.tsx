@@ -41,18 +41,20 @@ export function App() {
   switch (state.phase) {
     case "booting":
     case "loading":
-      return <p className="muted center">Loading…</p>;
+      return <p className="gate-note">Loading…</p>;
     case "signed-out":
       return (
-        <div className="center login">
-          <h1>PostHog Desktop announcements</h1>
-          <p className="muted">
-            Edits the <code>posthog-desktop-announcements</code> flag payload.
+        <div className="gate">
+          <span className="eyebrow">PostHog Desktop · internal</span>
+          <h1>Announcements</h1>
+          <p>
+            Compose and publish in-app announcements. Everything here edits one
+            thing: the <code>posthog-desktop-announcements</code> flag payload.
           </p>
-          {state.error && <p className="error">{state.error}</p>}
+          {state.error && <p className="errors">{state.error}</p>}
           <button
             type="button"
-            className="primary"
+            className="btn btn-publish"
             onClick={() => void beginLogin()}
           >
             Log in with PostHog
@@ -61,9 +63,9 @@ export function App() {
       );
     case "error":
       return (
-        <div className="center login">
-          <p className="error">{state.message}</p>
-          <button type="button" onClick={handleLogout}>
+        <div className="gate">
+          <p className="errors">{state.message}</p>
+          <button type="button" className="btn" onClick={handleLogout}>
             Start over
           </button>
         </div>
