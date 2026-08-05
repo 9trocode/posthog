@@ -30,7 +30,7 @@ export const useAnnouncementsStore = create<AnnouncementsState>()(
       setHasHydrated: (hydrated) => set({ _hasHydrated: hydrated }),
     }),
     {
-      name: "posthog-code-announcements-dismissed",
+      name: "posthog-desktop-announcements-dismissed",
       storage: electronStorage,
       partialize: (state) => ({ dismissedIds: state.dismissedIds }),
       onRehydrateStorage: () => (state) => {

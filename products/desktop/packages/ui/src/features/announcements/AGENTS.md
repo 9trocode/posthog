@@ -1,7 +1,7 @@
 # Remote in-app announcements
 
 Broad in-app announcements are **remote content, not code**. They live in the
-JSON payload of the `posthog-code-announcements` feature flag (PostHog project
+JSON payload of the `posthog-desktop-announcements` feature flag (PostHog project
 2) and render through this feature. Publishing, changing, or retiring an
 announcement means editing that flag payload — never adding a component.
 
@@ -60,9 +60,9 @@ Dev builds expose `window.posthog` in the renderer devtools:
 
 ```js
 posthog.featureFlags.overrideFeatureFlags({
-  flags: { "posthog-code-announcements": true },
+  flags: { "posthog-desktop-announcements": true },
   payloads: {
-    "posthog-code-announcements": {
+    "posthog-desktop-announcements": {
       announcements: [
         { kind: "announcement", id: "test-1", title: "Hello", body: "It works." },
       ],

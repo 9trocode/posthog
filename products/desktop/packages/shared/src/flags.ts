@@ -53,4 +53,4 @@ export const STAGED_UPDATES_FLAG = "posthog-desktop-staged-updates";
  * All broad announcements go through this — do not add ad-hoc promo
  * surfaces (see packages/ui/src/features/announcements/AGENTS.md).
  */
-export const ANNOUNCEMENTS_FLAG = "posthog-code-announcements";
+export const ANNOUNCEMENTS_FLAG = "posthog-desktop-announcements";
