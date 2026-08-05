@@ -40,10 +40,18 @@ export function Editor({
 }) {
   const initial = useMemo(() => {
     const parsed = announcementsPayloadSchema.safeParse(readPayload(flag));
-    return parsed.success ? toEditable(parsed.data.announcements) : null;
+    return parsed.success
+      ? {
+          items: toEditable(parsed.data.announcements),
+          suppressChangelog: parsed.data.suppressChangelog,
+        }
+      : null;
   }, [flag]);
 
-  const [items, setItems] = useState<EditableItem[]>(initial ?? []);
+  const [items, setItems] = useState<EditableItem[]>(initial?.items ?? []);
+  const [suppressChangelog, setSuppressChangelog] = useState(
+    initial?.suppressChangelog ?? true,
+  );
   const [selected, setSelected] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -55,8 +63,13 @@ export function Editor({
   const selectedItem = items[Math.min(selected, items.length - 1)] ?? null;
 
   const payloadJson = useMemo(
-    () => JSON.stringify({ announcements: items.map(toPayloadItem) }, null, 2),
-    [items],
+    () =>
+      JSON.stringify(
+        { announcements: items.map(toPayloadItem), suppressChangelog },
+        null,
+        2,
+      ),
+    [items, suppressChangelog],
   );
 
   const update = (index: number, patch: Partial<EditableItem>) => {
@@ -95,6 +108,7 @@ export function Editor({
     try {
       const parsed = announcementsPayloadSchema.parse(JSON.parse(jsonDraft));
       setItems(toEditable(parsed.announcements));
+      setSuppressChangelog(parsed.suppressChangelog);
       setJsonDraft(null);
       setErrors([]);
     } catch (error) {
@@ -109,6 +123,7 @@ export function Editor({
   const publish = async () => {
     const parsed = announcementsPayloadSchema.safeParse({
       announcements: items.map(toPayloadItem),
+      suppressChangelog,
     });
     if (!parsed.success) {
       setErrors(
@@ -175,7 +190,20 @@ export function Editor({
         <main className="queue">
           <p className="queue-note">
             Order is priority — the app shows the first eligible item only.
+            Dismissing one reveals the next.
           </p>
+          <label className="check policy">
+            <input
+              type="checkbox"
+              checked={suppressChangelog}
+              onChange={(e) => {
+                setSuppressChangelog(e.target.checked);
+                setPublished(false);
+              }}
+            />
+            an on-stage announcement cancels the What's New changelog — uncheck
+            to show both back to back
+          </label>
 
           {items.map((item, index) => (
             <section

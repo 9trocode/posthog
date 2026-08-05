@@ -85,7 +85,22 @@ export const announcementsEnvelopeSchema = z.object({
 /** Strict payload shape — what authoring tools validate before publishing. */
 export const announcementsPayloadSchema = z.object({
   announcements: z.array(announcementSchema),
+  /**
+   * An on-stage announcement cancels the auto-opened What's New changelog.
+   * Set false to defer it instead, showing both back to back.
+   */
+  suppressChangelog: z.boolean().default(true),
 });
+
+const changelogInterplaySchema = z.object({
+  suppressChangelog: z.boolean().default(true),
+});
+
+/** Tolerant read of the payload's changelog policy — garbage means default. */
+export function readSuppressChangelog(payload: unknown): boolean {
+  const result = changelogInterplaySchema.safeParse(payload);
+  return result.success ? result.data.suppressChangelog : true;
+}
 
 export type Announcement = z.infer<typeof announcementSchema>;
 export type AnnouncementsPayload = z.infer<typeof announcementsPayloadSchema>;

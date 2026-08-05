@@ -49,11 +49,15 @@ AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
 ## Precedence
 
 One announcement at a time: the first unmet `required-update` in payload
-order, else the first eligible `announcement`. While any announcement is
-visible the What's New changelog defers (`useAnnouncementVisible` gate in
-`WhatsNewModal`), and a blocking announcement suppresses
-`UpdateAvailableModal`. The billing announcement predates this system and
-wins over both.
+order, else the first eligible `announcement`. Dismissing one immediately
+reveals the next eligible item, so overlapping announcements show back to
+back in payload order.
+
+While an announcement is on stage, the What's New changelog auto-open is
+**cancelled** by default; set `suppressChangelog: false` at the top level of
+the payload to defer it instead so it shows once the announcement clears. A
+blocking announcement also suppresses `UpdateAvailableModal`. The billing
+announcement predates this system and wins over both.
 
 ## CTA rules
 

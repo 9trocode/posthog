@@ -278,6 +278,10 @@ select:disabled {
   accent-color: var(--signal);
 }
 
+.policy {
+  margin-bottom: 14px;
+}
+
 /* ── buttons ───────────────────────────────────────────── */
 
 .btn {

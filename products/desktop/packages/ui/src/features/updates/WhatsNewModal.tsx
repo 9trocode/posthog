@@ -1,6 +1,7 @@
 import { X } from "@phosphor-icons/react";
 import { useHostTRPC } from "@posthog/host-router/react";
 import { useAnnouncementVisible } from "@posthog/ui/features/announcements/useAnnouncementVisible";
+import { useSuppressChangelog } from "@posthog/ui/features/announcements/useSuppressChangelog";
 import { useBillingAnnouncementVisible } from "@posthog/ui/features/billing/useBillingAnnouncementVisible";
 import { ReleaseNotesSections } from "@posthog/ui/features/updates/ReleaseNotesSections";
 import {
@@ -19,6 +20,7 @@ import {
   Text,
 } from "@radix-ui/themes";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 function ChangelogSkeleton() {
   return (
@@ -48,6 +50,14 @@ export function WhatsNewModal() {
   // stage alone — the post-update auto-open waits here until they clear.
   const billingAnnouncementVisible = useBillingAnnouncementVisible();
   const announcementVisible = useAnnouncementVisible();
+  const suppressChangelog = useSuppressChangelog();
+
+  // By default an on-stage announcement cancels the pending auto-open
+  // outright; suppressChangelog: false in the payload defers it instead, so
+  // the changelog shows once the announcement clears.
+  useEffect(() => {
+    if (isOpen && announcementVisible && suppressChangelog) close();
+  }, [isOpen, announcementVisible, suppressChangelog, close]);
   const prefetchForActiveUpdate = useHasActiveUpdate();
   const hostTRPC = useHostTRPC();
   const { data: currentVersion, isError: isVersionError } = useQuery(
