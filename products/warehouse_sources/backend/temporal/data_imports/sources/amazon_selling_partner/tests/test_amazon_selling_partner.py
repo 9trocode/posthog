@@ -10,11 +10,11 @@ from unittest import mock
 import requests
 
 from products.warehouse_sources.backend.temporal.data_imports.sources.amazon_selling_partner.amazon_selling_partner import (
+    MARKETPLACE_ID_MAX_LENGTH,
+    MAX_MARKETPLACE_IDS,
     AmazonSellingPartnerReportError,
     AmazonSellingPartnerResumeConfig,
     AmazonSellingPartnerRetryableError,
-    MAX_MARKETPLACE_ID_LENGTH,
-    MAX_MARKETPLACE_IDS,
     SellingPartnerClient,
     _base_url,
     _extract_next_token,
@@ -140,7 +140,7 @@ class TestHelpers:
         [
             "A1,../../etc/passwd",
             "A1,A2;DROP",
-            "A1," + "B" * (MAX_MARKETPLACE_ID_LENGTH + 1),
+            "A1," + "B" * (MARKETPLACE_ID_MAX_LENGTH + 1),
         ],
     )
     def test_parse_marketplace_ids_rejects_malformed_ids(self, raw: str) -> None:

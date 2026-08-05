@@ -1,6 +1,6 @@
+import re
 import gzip
 import json
-import re
 import time
 import dataclasses
 from collections.abc import Iterator
@@ -12,7 +12,6 @@ from structlog.types import FilteringBoundLogger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 from urllib3.util import Retry
 
-from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import SourceResponse
 from products.warehouse_sources.backend.temporal.data_imports.sources.amazon_selling_partner.oauth import (
     AccessTokenProvider,
 )
@@ -22,6 +21,7 @@ from products.warehouse_sources.backend.temporal.data_imports.sources.amazon_sel
 )
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.http import make_tracked_session
 from products.warehouse_sources.backend.temporal.data_imports.sources.common.resumable import ResumableSourceManager
+from products.warehouse_sources.backend.temporal.data_imports.sources.common.typings import SourceResponse
 
 SP_API_HOSTS = {
     "na": "https://sellingpartnerapi-na.amazon.com",
@@ -48,7 +48,7 @@ REPORT_PENDING_STATUSES = frozenset({"IN_QUEUE", "IN_PROGRESS"})
 # Amazon marketplace IDs are short alphanumeric tokens (e.g. ATVPDKIKX0DER) and there are
 # roughly twenty of them worldwide; both bounds are sanity limits on operator input.
 MAX_MARKETPLACE_IDS = 50
-MAX_MARKETPLACE_ID_LENGTH = 32
+MARKETPLACE_ID_MAX_LENGTH = 32
 MARKETPLACE_ID_PATTERN = re.compile(r"[A-Za-z0-9]+")
 
 
@@ -97,9 +97,9 @@ def parse_marketplace_ids(raw: str) -> list[str]:
         value = chunk.strip()
         if not value or value in seen:
             continue
-        if len(value) > MAX_MARKETPLACE_ID_LENGTH or not MARKETPLACE_ID_PATTERN.fullmatch(value):
+        if len(value) > MARKETPLACE_ID_MAX_LENGTH or not MARKETPLACE_ID_PATTERN.fullmatch(value):
             raise ValueError(
-                f"Invalid Amazon marketplace ID: {value[:MAX_MARKETPLACE_ID_LENGTH]!r}. "
+                f"Invalid Amazon marketplace ID: {value[:MARKETPLACE_ID_MAX_LENGTH]!r}. "
                 "Marketplace IDs are alphanumeric, like ATVPDKIKX0DER."
             )
         if len(ordered) >= MAX_MARKETPLACE_IDS:
