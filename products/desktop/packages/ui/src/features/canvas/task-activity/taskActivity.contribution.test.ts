@@ -46,6 +46,7 @@ describe("TaskActivityContribution", () => {
       taskTitle: "Channel task",
       activityKind: "awaiting_input",
       activityAt: "2026-07-27T10:00:00Z",
+      isUnread: true,
     });
 
     const cached = queryClient.getQueryData<InfiniteData<TaskActivityPage>>([
@@ -64,12 +65,63 @@ describe("TaskActivityContribution", () => {
     });
   });
 
+  it("replaces an unread row with a read one when the activity was already seen", () => {
+    queryClient.setQueryDefaults(["task-activity"], {
+      meta: AUTH_SCOPED_QUERY_META,
+    });
+    queryClient.setQueryData<InfiniteData<TaskActivityPage>>(
+      ["task-activity"],
+      {
+        pages: [
+          {
+            results: [
+              {
+                id: "activity-1",
+                task_id: "task-1",
+                task_title: "Channel task",
+                activity_at: "2026-07-27T09:00:00Z",
+                activity_kind: "awaiting_input",
+                snippet: "",
+                is_unread: true,
+              },
+            ],
+            unread_count: 1,
+          },
+        ],
+        pageParams: [undefined],
+      },
+    );
+
+    activityListener?.({
+      taskId: "task-1",
+      taskTitle: "Channel task",
+      activityKind: "completed",
+      activityAt: "2026-07-27T10:00:00Z",
+      isUnread: false,
+    });
+
+    const cached = queryClient.getQueryData<InfiniteData<TaskActivityPage>>([
+      "task-activity",
+    ]);
+    expect(cached?.pages[0]).toMatchObject({
+      unread_count: 0,
+      results: [
+        {
+          task_id: "task-1",
+          activity_kind: "completed",
+          is_unread: false,
+        },
+      ],
+    });
+  });
+
   it("does not recreate activity data after the authenticated query is removed", () => {
     activityListener?.({
       taskId: "task-1",
       taskTitle: "Previous user's task",
       activityKind: "completed",
       activityAt: "2026-07-27T10:00:00Z",
+      isUnread: true,
     });
 
     expect(queryClient.getQueryData(["task-activity"])).toBeUndefined();

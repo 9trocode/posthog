@@ -7,6 +7,7 @@ import { useSetHeaderContent } from "../../../hooks/useSetHeaderContent";
 import { logger } from "../../../shell/logger";
 import { ChannelBreadcrumb } from "../../canvas/components/ChannelBreadcrumb";
 import { CopyThreadLinkButton } from "../../canvas/components/CopyThreadLinkButton";
+import { useMarkTaskActivityReadOnOpen } from "../../canvas/hooks/useMarkTaskActivityReadOnOpen";
 import {
   LazyCloudReviewPage as CloudReviewPage,
   LazyReviewPage as ReviewPage,
@@ -75,6 +76,7 @@ export function TaskDetail({
 
   useBlurOnEscape();
   useWorkspaceEvents(taskId);
+  useMarkTaskActivityReadOnOpen(taskId);
 
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const isEditingTitle = editingTaskId === taskId;
