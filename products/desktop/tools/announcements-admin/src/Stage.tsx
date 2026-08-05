@@ -233,6 +233,81 @@ function HoggiePicker({
   );
 }
 
+function ColorPicker({
+  item,
+  onChange,
+}: {
+  item: EditableItem;
+  onChange: OnChange;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = BAND_COLORS.find((color) => color.hex === item.heroColor);
+  // A hex outside the presets can only come in via Raw JSON — show it as is.
+  const label = item.heroColor ? (selected?.name ?? item.heroColor) : "default";
+  const pick = (hex: string) => {
+    onChange({ heroType: "hedgehog", heroColor: hex });
+    setOpen(false);
+  };
+
+  return (
+    <div className="hog-pick">
+      <button
+        type="button"
+        className="hog-current"
+        title="Band color"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span
+          className="swatch"
+          style={{ background: item.heroColor || defaultColor(item.kind) }}
+          aria-hidden
+        />
+        <span>{label}</span>
+        <span aria-hidden>▾</span>
+      </button>
+      {open && (
+        <div className="hog-panel color-panel">
+          <button
+            type="button"
+            className={
+              item.heroColor === ""
+                ? "color-cell color-cell-active"
+                : "color-cell"
+            }
+            onClick={() => pick("")}
+          >
+            <span
+              className="swatch"
+              style={{ background: defaultColor(item.kind) }}
+              aria-hidden
+            />
+            <span>default</span>
+          </button>
+          {BAND_COLORS.map((color) => (
+            <button
+              key={color.hex}
+              type="button"
+              className={
+                item.heroColor === color.hex
+                  ? "color-cell color-cell-active"
+                  : "color-cell"
+              }
+              onClick={() => pick(color.hex)}
+            >
+              <span
+                className="swatch"
+                style={{ background: color.hex }}
+                aria-hidden
+              />
+              <span>{color.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PrimaryAction({
   item,
   stale,
@@ -410,35 +485,7 @@ export function Stage({
         {!isBanner && (
           <div className="hero-tools">
             <HoggiePicker item={item} onChange={onChange} />
-            <fieldset className="swatches" aria-label="Band color">
-              <button
-                type="button"
-                aria-label="Default band color"
-                title="Default"
-                className={item.heroColor ? "swatch" : "swatch swatch-active"}
-                style={{ background: defaultColor(item.kind) }}
-                onClick={() =>
-                  onChange({ heroType: "hedgehog", heroColor: "" })
-                }
-              />
-              {BAND_COLORS.map((color) => (
-                <button
-                  key={color.hex}
-                  type="button"
-                  aria-label={`Band color ${color.name}`}
-                  title={color.name}
-                  className={
-                    item.heroColor === color.hex
-                      ? "swatch swatch-active"
-                      : "swatch"
-                  }
-                  style={{ background: color.hex }}
-                  onClick={() =>
-                    onChange({ heroType: "hedgehog", heroColor: color.hex })
-                  }
-                />
-              ))}
-            </fieldset>
+            <ColorPicker item={item} onChange={onChange} />
             <button
               type="button"
               className={

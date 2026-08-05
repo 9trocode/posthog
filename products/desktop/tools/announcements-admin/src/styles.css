@@ -432,31 +432,50 @@ h1 {
   margin: 12px 0;
 }
 
-.swatches {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  margin: 0;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--card);
-}
-
 .swatch {
   width: 15px;
   height: 15px;
-  padding: 0;
+  flex-shrink: 0;
   border: 1px solid rgb(25 26 23 / 0.18);
   border-radius: 50%;
-  cursor: pointer;
 }
 
-.swatch-active {
-  box-shadow:
-    0 0 0 2px var(--card),
-    0 0 0 3.5px var(--ink);
+.color-panel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  width: 330px;
+}
+
+.color-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--moss);
+}
+
+.color-cell:hover {
+  background: var(--paper);
+  border-color: var(--line);
+}
+
+.color-cell-active {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.color-cell span:last-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .chip {
