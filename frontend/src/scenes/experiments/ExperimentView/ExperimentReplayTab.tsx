@@ -191,6 +191,8 @@ export function ExperimentReplayTab({ experiment }: { experiment: Experiment }):
         scannerCrossSellClicked,
     } = useActions(logic)
     const replayVisionEnabled = useFeatureFlag('REPLAY_VISION')
+    const experimentsEntrypointEnabled = useFeatureFlag('VISION_ENTRYPOINT_EXPERIMENTS')
+    const scannerCrossSellEnabled = replayVisionEnabled && experimentsEntrypointEnabled
 
     if (!isLaunched(experiment)) {
         return <LemonBanner type="info">Launch the experiment to see recordings of participants.</LemonBanner>
@@ -236,7 +238,7 @@ export function ExperimentReplayTab({ experiment }: { experiment: Experiment }):
                     {EXPOSURE_FALLBACK_NOTICE}
                 </LemonBanner>
             )}
-            {replayVisionEnabled && (
+            {scannerCrossSellEnabled && (
                 <LemonBanner
                     type="info"
                     className="mb-2"
