@@ -1261,6 +1261,14 @@ class SignalScoutConfig(ModelActivityMixin, TeamScopedRootMixin, UUIDModel):
     # config columns. A Slack destination is active only when both its integration and channel
     # are present; the UI may persist the integration first while the user chooses a channel.
     output_destinations = models.JSONField(default=dict, db_default={})
+    # MCP gateway servers (UUIDs as strings) this scout's runs may mount from the creator's
+    # personal MCP Store grants. Selection is per scout: the runner snapshots it onto the task,
+    # and provisioning filters the creator's personal-scope grants to this list — empty mounts
+    # none of them. Teammates' team-scoped grants are not gated here; a team share backs every
+    # agent run in the project by design. Stale or unknown ids simply never match a grant.
+    # Deliberately NOT excluded from activity logging — changing which external tools a scout
+    # reaches is a security-relevant change, like `network_access`.
+    mcp_gateway_server_ids = models.JSONField(default=list, db_default=[])
     # Optional five-field cron expression anchoring runs to wall-clock slots (e.g. "30 9 * * *",
     # "0 9,17 * * *", "0 9 * * 1-5"). Takes precedence over the rolling `run_interval_minutes`
     # when set. The coordinator evaluates it in `team.timezone`, so scheduled times follow

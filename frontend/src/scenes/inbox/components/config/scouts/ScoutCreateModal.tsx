@@ -137,7 +137,15 @@ export function ScoutCreateModal({ isOpen, onClose, initialValues, onCreated }: 
                         />
                     </LemonField>
 
-                    <ScoutMcpServersPicker />
+                    <LemonField name="config.mcp_gateway_server_ids">
+                        {({ value, onChange }) => (
+                            <ScoutMcpServersPicker
+                                selectedServerIds={value ?? []}
+                                onChange={onChange}
+                                disabledReason={isScoutCreateFormSubmitting ? 'Creating the scout' : undefined}
+                            />
+                        )}
+                    </LemonField>
 
                     <div className="flex flex-col gap-3 border-t border-primary pt-4">
                         <span className="font-medium text-sm">Run settings</span>

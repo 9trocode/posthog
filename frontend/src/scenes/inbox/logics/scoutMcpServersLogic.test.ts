@@ -193,7 +193,7 @@ describe('scoutMcpServersLogic', () => {
         expect(logic.values.connectedGatewayServers.map(({ id }) => id)).toEqual(['linear-id', 'notion-id'])
     })
 
-    it('shares and unshares with the scope of the existing grant and adopts the returned account', async () => {
+    it('creates a personal grant only for servers without one and adopts the returned account', async () => {
         const accessBodies: ServiceAccountAccessUpdateApi[] = []
         const teamNotion = server('notion-id', 'Notion', 'ready', YOU, 'team')
         let scoutAccount = account('scout', [teamNotion])
@@ -207,10 +207,10 @@ describe('scoutMcpServersLogic', () => {
                 '/api/projects/:team_id/mcp_gateway/service_accounts/:id/access/': async ({ request }) => {
                     const body = (await request.json()) as ServiceAccountAccessUpdateApi
                     accessBodies.push(body)
-                    const grants = body.enabled
-                        ? [...scoutAccount.servers, server(body.gateway_server_id, 'Linear', 'ready')]
-                        : scoutAccount.servers.filter(({ id }) => id !== body.gateway_server_id)
-                    scoutAccount = account('scout', [...grants])
+                    scoutAccount = account('scout', [
+                        ...scoutAccount.servers,
+                        server(body.gateway_server_id, 'Linear', 'ready'),
+                    ])
                     return [200, scoutAccount]
                 },
             },
@@ -220,18 +220,16 @@ describe('scoutMcpServersLogic', () => {
         logic.mount()
         await expectLogic(logic).toFinishAllListeners()
 
-        // A fresh share defaults to personal scope; removing a team share must keep sending
-        // its scope so the endpoint's personal default can't demote anything.
-        logic.actions.setScoutServerShared('linear-id', true)
+        // Selecting a server for a scout ensures the creator's grant exists. Re-ensuring an
+        // already-granted server must not touch the grant: an access call with the default
+        // scope would silently demote an existing team share back to personal.
+        logic.actions.ensureScoutServerShared('linear-id')
         await expectLogic(logic).toFinishAllListeners()
-        logic.actions.setScoutServerShared('notion-id', false)
+        logic.actions.ensureScoutServerShared('notion-id')
         await expectLogic(logic).toFinishAllListeners()
 
-        expect(accessBodies).toEqual([
-            { gateway_server_id: 'linear-id', enabled: true, scope: 'personal' },
-            { gateway_server_id: 'notion-id', enabled: false, scope: 'team' },
-        ])
-        expect(logic.values.scoutSharedServerIds).toEqual(new Set(['linear-id']))
+        expect(accessBodies).toEqual([{ gateway_server_id: 'linear-id', enabled: true, scope: 'personal' }])
+        expect(logic.values.scoutSharedServerIds).toEqual(new Set(['linear-id', 'notion-id']))
         expect(logic.values.serverShareLoadingIds).toEqual(new Set())
     })
 })

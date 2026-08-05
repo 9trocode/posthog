@@ -185,7 +185,14 @@ export function ScoutConfigForm({
                 onChange={(outputDestinations) => onUpdate(config.id, { output_destinations: outputDestinations })}
                 disabledReason={controlsDisabledReason}
             />
-            <ScoutMcpServersPicker compact />
+            <ScoutMcpServersPicker
+                compact
+                selectedServerIds={[...(config.mcp_gateway_server_ids ?? [])]}
+                onChange={(serverIds) => onUpdate(config.id, { mcp_gateway_server_ids: serverIds })}
+                // Editable while the scout is disabled, like network access: the selection must be
+                // settable BEFORE the enable or the first run races out with the wrong toolset.
+                disabledReason={updating ? 'Saving scout settings' : undefined}
+            />
             {/* Only custom scouts are deletable. A canonical scout would be re-seeded from disk after
                 deletion (and couldn't be re-added from the UI), so its terminal action stays disable. */}
             {onDelete && config.scout_origin === 'custom' ? (

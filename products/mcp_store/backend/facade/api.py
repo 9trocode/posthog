@@ -139,6 +139,7 @@ def _mounts_for_agent_run(
     team_id: int,
     agent_account: MCPServiceAccount,
     credential_owner_id: int | None,
+    allowed_gateway_server_ids: list[str] | None = None,
 ) -> list[tuple[MCPServiceAccountServerAccess, MCPServerInstallation]]:
     """The (grant, credential) pairs this run mounts.
 
@@ -158,7 +159,15 @@ def _mounts_for_agent_run(
     agent catalog lists every reachable grant and the proxy's `credential_owner`
     query parameter lets a run name a teammate's team share instead. Selection
     is confined to the grants the run already reaches, so it never escalates.
+
+    `allowed_gateway_server_ids` narrows the personal-scope grants to the listed
+    servers (a scout's per-scout selection; personal grants are always the
+    owner's). It applies before precedence, so deselecting a server the owner
+    also holds doesn't suppress a teammate's team share of it — team-scoped
+    grants back every run of the agent and are never gated by the list. None
+    leaves personal grants unfiltered; an empty list mounts none of them.
     """
+    allowed = {str(server_id) for server_id in allowed_gateway_server_ids or []}
     rows = (
         MCPServiceAccountServerAccess.objects.for_team(team_id)
         .filter(service_account=agent_account)
@@ -171,6 +180,12 @@ def _mounts_for_agent_run(
         list
     )
     for access in rows:
+        if (
+            allowed_gateway_server_ids is not None
+            and access.scope == "personal"
+            and str(access.gateway_server_id) not in allowed
+        ):
+            continue
         # Same resolution the gateway proxy and the API serializers use, so a
         # grant whose credential drifted off its team, server, or owner is
         # dropped here too instead of being mounted into the sandbox.
@@ -265,6 +280,7 @@ def get_installations_for_sandbox(
     task_origin: str | None = None,
     task_agent_key: str | None = None,
     credential_owner_id: int | None = None,
+    allowed_gateway_server_ids: list[str] | None = None,
 ) -> list[ActiveInstallationInfo]:
     """Return MCP installations for sandbox agent use.
 
@@ -284,6 +300,10 @@ def get_installations_for_sandbox(
     is provided. When the user has a ready personal installation for the same
     URL as a shared one, only the personal one is returned — the user acts as
     themselves rather than through the shared credential.
+
+    ``allowed_gateway_server_ids`` narrows the credential owner's personal-scope
+    grants to the listed gateway servers (a scout's per-scout selection); see
+    ``_mounts_for_agent_run``. It only applies on the agent path.
     """
     try:
         base_queryset = MCPServerInstallation.objects.filter(team_id=team_id, is_enabled=True).select_related(
@@ -312,7 +332,9 @@ def get_installations_for_sandbox(
         agent_mounts: list[tuple[MCPServiceAccountServerAccess, MCPServerInstallation]] = []
         if agent_key is not None:
             if agent_account is not None:
-                agent_mounts = _mounts_for_agent_run(team_id, agent_account, credential_owner_id)
+                agent_mounts = _mounts_for_agent_run(
+                    team_id, agent_account, credential_owner_id, allowed_gateway_server_ids
+                )
         else:
             shared_queryset = base_queryset.filter(scope="shared")
             shared_queryset = shared_queryset.filter(

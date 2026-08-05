@@ -18,21 +18,26 @@ import { scoutMcpServersLogic } from '../../../logics/scoutMcpServersLogic'
 const MAX_VISIBLE_SERVERS = 2
 
 interface ScoutMcpServersPickerProps {
+    /** Gateway server ids selected for this scout (`mcp_gateway_server_ids`). */
+    selectedServerIds: string[]
+    onChange: (serverIds: string[]) => void
     /** Compact rows matching the inline scout settings form; the default suits the create dialog. */
     compact?: boolean
+    disabledReason?: string
 }
 
 /**
- * The user's connected MCP servers, each with a switch sharing it with the Scout agent.
- * A grant is per member and per agent, not per scout: scout runs mount their creator's
- * grants, so sharing here applies to every scout the user creates.
+ * Per-scout selection of the user's connected MCP servers, persisted as the scout config's
+ * `mcp_gateway_server_ids`. Selecting a server also shares the user's connection with the
+ * Scout agent when it isn't shared yet — the grant makes the connection mountable, the
+ * selection decides which scouts mount it.
  */
-export function ScoutMcpServersPicker({ compact = false }: ScoutMcpServersPickerProps): JSX.Element | null {
+export function ScoutMcpServersPicker(props: ScoutMcpServersPickerProps): JSX.Element | null {
     const { featureFlags } = useValues(featureFlagLogic)
     if (!featureFlags[FEATURE_FLAGS.MCP_SERVERS]) {
         return null
     }
-    return compact ? <CompactPicker /> : <FullPicker />
+    return props.compact ? <CompactPicker {...props} /> : <FullPicker {...props} />
 }
 
 function connectionIssue(connection: GatewayYourConnectionApi): { label: string; tagType: LemonTagType } | null {
@@ -54,65 +59,78 @@ interface PickerState {
     shareDisabledReason: string | undefined
     showAll: boolean
     setShowAll: (showAll: boolean) => void
+    toggleServer: (serverId: string, selected: boolean) => void
     visibleServers: MCPGatewayServerApi[]
 }
 
-function usePickerState(): PickerState {
+function usePickerState({ selectedServerIds, onChange, disabledReason }: ScoutMcpServersPickerProps): PickerState {
     const [showAll, setShowAll] = useState(false)
     const { connectedGatewayServers, gatewayServersLoading, scoutAccount, scoutServersLoading } =
         useValues(scoutMcpServersLogic)
+    const { ensureScoutServerShared } = useActions(scoutMcpServersLogic)
 
     const initialLoading =
         (gatewayServersLoading && connectedGatewayServers.length === 0) ||
         (scoutServersLoading && scoutAccount === null)
     const visibleServers = showAll ? connectedGatewayServers : connectedGatewayServers.slice(0, MAX_VISIBLE_SERVERS)
+    const toggleServer = (serverId: string, selected: boolean): void => {
+        if (selected) {
+            // The scout can only mount a selected server once the user's connection is shared
+            // with the Scout agent; create that (personal) grant on first selection.
+            ensureScoutServerShared(serverId)
+        }
+        onChange(selected ? [...selectedServerIds, serverId] : selectedServerIds.filter((id) => id !== serverId))
+    }
     return {
         hiddenCount: connectedGatewayServers.length - visibleServers.length,
         initialLoading,
         shareDisabledReason:
-            scoutAccount === null && !scoutServersLoading ? 'Scout MCP access is unavailable' : undefined,
+            disabledReason ??
+            (scoutAccount === null && !scoutServersLoading ? 'Scout MCP access is unavailable' : undefined),
         showAll,
         setShowAll,
+        toggleServer,
         visibleServers,
     }
 }
 
-function ShareSwitch({
+function SelectSwitch({
     server,
     size,
-    disabledReason,
+    state,
+    selectedServerIds,
 }: {
     server: MCPGatewayServerApi
     size?: 'small'
-    disabledReason: string | undefined
+    state: PickerState
+    selectedServerIds: string[]
 }): JSX.Element {
-    const { scoutSharedServerIds, serverShareLoadingIds } = useValues(scoutMcpServersLogic)
-    const { setScoutServerShared } = useActions(scoutMcpServersLogic)
+    const { serverShareLoadingIds } = useValues(scoutMcpServersLogic)
     return (
         <LemonSwitch
             size={size}
-            checked={scoutSharedServerIds.has(server.id)}
+            checked={selectedServerIds.includes(server.id)}
             loading={serverShareLoadingIds.has(server.id)}
-            disabledReason={serverShareLoadingIds.has(server.id) ? 'Saving' : disabledReason}
-            onChange={(checked) => setScoutServerShared(server.id, checked)}
-            aria-label={`Share ${server.name} with your scouts`}
+            disabledReason={serverShareLoadingIds.has(server.id) ? 'Saving' : state.shareDisabledReason}
+            onChange={(checked) => state.toggleServer(server.id, checked)}
+            aria-label={`Let this scout use ${server.name}`}
         />
     )
 }
 
-function FullPicker(): JSX.Element {
+function FullPicker(props: ScoutMcpServersPickerProps): JSX.Element {
     useMountedLogic(scoutMcpServersLogic)
     const { scoutAccount, teammateScoutServers } = useValues(scoutMcpServersLogic)
-    const { hiddenCount, initialLoading, shareDisabledReason, visibleServers, setShowAll, showAll } = usePickerState()
+    const state = usePickerState(props)
 
     let body: JSX.Element
-    if (initialLoading) {
+    if (state.initialLoading) {
         body = (
             <div className="flex items-center gap-2 rounded border border-dashed px-3 py-4 text-sm text-secondary">
                 <Spinner /> Loading your MCP servers...
             </div>
         )
-    } else if (visibleServers.length === 0) {
+    } else if (state.visibleServers.length === 0) {
         body = (
             <div className="flex items-start gap-3 rounded border border-dashed px-3 py-3">
                 <IconServer className="size-5 shrink-0 mt-0.5 text-secondary" />
@@ -128,7 +146,7 @@ function FullPicker(): JSX.Element {
         body = (
             <div className="rounded border bg-bg-light overflow-hidden">
                 <div className="divide-y">
-                    {visibleServers.map((server) => {
+                    {state.visibleServers.map((server) => {
                         const issue = server.your_connection && connectionIssue(server.your_connection)
                         return (
                             <div key={server.id} className="flex items-center gap-3 px-3 py-2.5">
@@ -144,22 +162,28 @@ function FullPicker(): JSX.Element {
                                         {issue.label}
                                     </LemonTag>
                                 )}
-                                <ShareSwitch server={server} disabledReason={shareDisabledReason} />
+                                <SelectSwitch
+                                    server={server}
+                                    state={state}
+                                    selectedServerIds={props.selectedServerIds}
+                                />
                             </div>
                         )
                     })}
                 </div>
-                {!showAll && hiddenCount > 0 && (
+                {!state.showAll && state.hiddenCount > 0 && (
                     <button
                         type="button"
-                        onClick={() => setShowAll(true)}
-                        className="w-full border-t px-3 py-2 text-left text-xs text-secondary transition-colors hover:bg-bg-3000 hover:text-default"
+                        onClick={() => state.setShowAll(true)}
+                        className="w-full border-t border-primary px-3 py-2 text-left text-xs text-secondary transition-colors hover:bg-bg-3000 hover:text-default"
                     >
-                        See {hiddenCount} more
+                        See {state.hiddenCount} more
                     </button>
                 )}
                 {scoutAccount?.status === 'paused' && (
-                    <div className="border-t px-3 py-2 text-xs text-secondary">Scout MCP access is paused.</div>
+                    <div className="border-t border-primary px-3 py-2 text-xs text-secondary">
+                        Scout MCP access is paused.
+                    </div>
                 )}
                 <Link
                     to={urls.mcpGateway()}
@@ -177,13 +201,13 @@ function FullPicker(): JSX.Element {
             <div className="flex flex-col gap-0.5">
                 <span className="font-medium text-sm">MCP servers</span>
                 <p className="text-xs text-secondary mb-0">
-                    Servers you share are available to every scout you create.
+                    Choose which of your connected MCP servers this scout can use.
                 </p>
             </div>
             {body}
             {teammateScoutServers.length > 0 && (
                 <span className="text-xs text-muted">
-                    Your scouts can also use {pluralize(teammateScoutServers.length, 'server')} teammates shared to the
+                    This scout can also use {pluralize(teammateScoutServers.length, 'server')} teammates shared to the
                     team.
                 </span>
             )}
@@ -191,43 +215,48 @@ function FullPicker(): JSX.Element {
     )
 }
 
-function CompactPicker(): JSX.Element {
+function CompactPicker(props: ScoutMcpServersPickerProps): JSX.Element {
     useMountedLogic(scoutMcpServersLogic)
-    const { hiddenCount, initialLoading, shareDisabledReason, visibleServers, setShowAll, showAll } = usePickerState()
+    const state = usePickerState(props)
 
     return (
         <div className="flex flex-col gap-2 border-t border-primary pt-2">
             <div className="flex flex-col min-w-0">
                 <span className="text-xs text-default">MCP servers</span>
                 <span className="text-[11.5px] text-muted">
-                    Shared servers apply to every scout you create.{' '}
+                    Choose which of your connected MCP servers this scout can use.{' '}
                     <Link to={urls.mcpGateway()}>Manage MCP servers</Link>
                 </span>
             </div>
-            {initialLoading ? (
+            {state.initialLoading ? (
                 <span className="flex items-center gap-2 text-[11.5px] text-muted">
                     <Spinner /> Loading your MCP servers...
                 </span>
-            ) : visibleServers.length === 0 ? (
+            ) : state.visibleServers.length === 0 ? (
                 <span className="text-[11.5px] text-muted">
                     <Link to={urls.mcpGateway()}>Connect an MCP server</Link> to give your scouts external tools.
                 </span>
             ) : (
                 <div className="flex flex-col gap-1.5">
-                    {visibleServers.map((server) => (
+                    {state.visibleServers.map((server) => (
                         <div key={server.id} className="flex items-center gap-2">
                             <ServerIcon iconDomain={server.icon_domain} serverUrl={server.url} size={20} />
                             <span className="min-w-0 flex-1 truncate text-xs text-default">{server.name}</span>
-                            <ShareSwitch server={server} size="small" disabledReason={shareDisabledReason} />
+                            <SelectSwitch
+                                server={server}
+                                size="small"
+                                state={state}
+                                selectedServerIds={props.selectedServerIds}
+                            />
                         </div>
                     ))}
-                    {!showAll && hiddenCount > 0 && (
+                    {!state.showAll && state.hiddenCount > 0 && (
                         <button
                             type="button"
-                            onClick={() => setShowAll(true)}
+                            onClick={() => state.setShowAll(true)}
                             className="w-fit text-left text-[11.5px] text-muted transition-colors hover:text-default"
                         >
-                            See {hiddenCount} more
+                            See {state.hiddenCount} more
                         </button>
                     )}
                 </div>

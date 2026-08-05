@@ -518,6 +518,7 @@ def get_user_mcp_server_configs(
     origin_product: str | None = None,
     task_agent_key: str | None = None,
     credential_owner_id: int | None = None,
+    allowed_gateway_server_ids: list[str] | None = None,
 ) -> list[McpServerConfig]:
     """Fetch MCP Store installations for sandbox use and return configs.
 
@@ -539,6 +540,12 @@ def get_user_mcp_server_configs(
     those installations. Without it, an unattended loop run would mount every shared team connector
     rather than only the ones its owner chose.
 
+    ``allowed_gateway_server_ids`` is the built-in agent counterpart (a scout's per-scout
+    selection, from ``Task.mcp_gateway_server_allowlist``): it narrows the credential owner's
+    personal grants to the listed gateway servers before mounting. ``None`` leaves them
+    unfiltered; an empty list mounts none of them. Members' team-scoped grants are not gated
+    by it — a team share backs every run of the agent.
+
     The `x-posthog-mcp-consumer` header is set on every config so the agent's
     identity propagates through the MCP Store proxy to whichever upstream MCP
     the user installed. The PostHog MCP needs this to resolve single-exec mode
@@ -554,6 +561,7 @@ def get_user_mcp_server_configs(
         task_origin=origin_product,
         task_agent_key=task_agent_key,
         credential_owner_id=credential_owner_id,
+        allowed_gateway_server_ids=allowed_gateway_server_ids,
     )
     if allowed_installation_ids is not None:
         allowed = {str(i) for i in allowed_installation_ids}

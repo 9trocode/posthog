@@ -426,6 +426,8 @@ export const signalsScoutCreateBodyConfigOneOutputDestinationsOneSlackOneChannel
 
 export const signalsScoutCreateBodyConfigOneRunCronScheduleMax = 100
 
+export const signalsScoutCreateBodyConfigOneMcpGatewayServerIdsMax = 100
+
 export const SignalsScoutCreateBody = /* @__PURE__ */ zod
     .object({
         name: zod
@@ -528,6 +530,13 @@ export const SignalsScoutCreateBody = /* @__PURE__ */ zod
                     .describe(
                         "Optional five-field cron expression, e.g. '30 9 \* \* \*' (daily at 09:30), '0 9,17 \* \* \*' (twice daily), or '0 9 \* \* 1-5' (weekday mornings). Evaluated in the project timezone. Takes precedence over `run_interval_minutes`; occurrences must be at least 30 minutes apart."
                     ),
+                mcp_gateway_server_ids: zod
+                    .array(zod.string())
+                    .max(signalsScoutCreateBodyConfigOneMcpGatewayServerIdsMax)
+                    .optional()
+                    .describe(
+                        "MCP gateway servers (by id) this scout's runs may use, chosen from the connections its creator shared with the Scout agent. Selection is per scout: an empty list mounts none of the creator's connections. Connections teammates shared to the whole team are not gated by this list. Applies from the scout's next run."
+                    ),
             })
             .describe('Schedule, enablement, and delivery options accepted while creating a scout.')
             .optional()
@@ -567,6 +576,8 @@ export const signalsScoutConfigCreateBodyRunIntervalMinutesMax = 43200
 export const signalsScoutConfigCreateBodyOutputDestinationsOneSlackOneChannelMax = 255
 
 export const signalsScoutConfigCreateBodyRunCronScheduleMax = 100
+
+export const signalsScoutConfigCreateBodyMcpGatewayServerIdsMax = 100
 
 export const signalsScoutConfigCreateBodySkillNameMax = 200
 
@@ -633,6 +644,13 @@ export const SignalsScoutConfigCreateBody = /* @__PURE__ */ zod
             .describe(
                 "Optional five-field cron expression, e.g. '30 9 \* \* \*' (daily at 09:30), '0 9,17 \* \* \*' (twice daily), or '0 9 \* \* 1-5' (weekday mornings). Evaluated in the project timezone. Takes precedence over `run_interval_minutes`; occurrences must be at least 30 minutes apart."
             ),
+        mcp_gateway_server_ids: zod
+            .array(zod.string())
+            .max(signalsScoutConfigCreateBodyMcpGatewayServerIdsMax)
+            .optional()
+            .describe(
+                "MCP gateway servers (by id) this scout's runs may use, chosen from the connections its creator shared with the Scout agent. Selection is per scout: an empty list mounts none of the creator's connections. Connections teammates shared to the whole team are not gated by this list. Applies from the scout's next run."
+            ),
         skill_name: zod
             .string()
             .max(signalsScoutConfigCreateBodySkillNameMax)
@@ -663,6 +681,8 @@ export const signalsScoutConfigUpdateBodyRunIntervalMinutesMax = 43200
 export const signalsScoutConfigUpdateBodyRunCronScheduleMax = 100
 
 export const signalsScoutConfigUpdateBodyOutputDestinationsOneSlackOneChannelMax = 255
+
+export const signalsScoutConfigUpdateBodyMcpGatewayServerIdsMax = 100
 
 export const SignalsScoutConfigUpdateBody = /* @__PURE__ */ zod
     .object({
@@ -733,6 +753,13 @@ export const SignalsScoutConfigUpdateBody = /* @__PURE__ */ zod
             .optional()
             .describe(
                 'Exempt this scout from the inactivity sweep, meaning both the `ignored` pause and the `no_output` quiet warning. Set it on watchdog scouts whose value is staying quiet.'
+            ),
+        mcp_gateway_server_ids: zod
+            .array(zod.string())
+            .max(signalsScoutConfigUpdateBodyMcpGatewayServerIdsMax)
+            .optional()
+            .describe(
+                "MCP gateway servers (by id) this scout's runs may use, chosen from the connections its creator shared with the Scout agent. Selection is per scout: an empty list mounts none of the creator's connections. Connections teammates shared to the whole team are not gated by this list. Applies from the scout's next run."
             ),
     })
     .describe('Editable schedule, enablement, and emit posture for one scout config.')

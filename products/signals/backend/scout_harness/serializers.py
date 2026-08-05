@@ -10,6 +10,7 @@ shape and Python shape stay in lockstep.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from django.utils import timezone
 
@@ -1876,6 +1877,33 @@ def _validate_output_destinations(value: dict, context: dict) -> dict:
     return {"slack": slack}
 
 
+# One scout should never need anywhere near this many external tools; the cap only bounds
+# abuse of the JSON column.
+MAX_SCOUT_MCP_GATEWAY_SERVERS = 100
+
+_MCP_GATEWAY_SERVER_IDS_HELP = (
+    "MCP gateway servers (by id) this scout's runs may use, chosen from the connections its "
+    "creator shared with the Scout agent. Selection is per scout: an empty list mounts none "
+    "of the creator's connections. Connections teammates shared to the whole team are not "
+    "gated by this list. Applies from the scout's next run."
+)
+
+
+def _mcp_gateway_server_ids_field(*, read_only: bool = False) -> serializers.ListField:
+    return serializers.ListField(
+        child=serializers.UUIDField(),
+        read_only=read_only,
+        required=False,
+        max_length=MAX_SCOUT_MCP_GATEWAY_SERVERS,
+        help_text=_MCP_GATEWAY_SERVER_IDS_HELP,
+    )
+
+
+def _normalize_mcp_gateway_server_ids(value: list[UUID]) -> list[str]:
+    # The JSON column stores canonical strings — UUID instances aren't JSON-serializable.
+    return [str(server_id) for server_id in value]
+
+
 class SignalScoutConfigSerializer(serializers.ModelSerializer):
     """Read shape for a per-(team, skill) scout config.
 
@@ -1996,6 +2024,7 @@ class SignalScoutConfigSerializer(serializers.ModelSerializer):
             "sweep paused, so the sweep never overrules a person twice."
         ),
     )
+    mcp_gateway_server_ids = _mcp_gateway_server_ids_field(read_only=True)
 
     @extend_schema_field(OpenApiTypes.STR)
     def get_description(self, obj: SignalScoutConfig) -> str:
@@ -2026,6 +2055,7 @@ class SignalScoutConfigSerializer(serializers.ModelSerializer):
             "run_cron_schedule",
             "output_destinations",
             "network_access",
+            "mcp_gateway_server_ids",
             "last_run_at",
             "consecutive_failure_count",
             "status_changed_at",
@@ -2154,12 +2184,16 @@ class SignalScoutConfigUpdateSerializer(serializers.ModelSerializer):
             "`no_output` quiet warning. Set it on watchdog scouts whose value is staying quiet."
         ),
     )
+    mcp_gateway_server_ids = _mcp_gateway_server_ids_field()
 
     def validate_run_cron_schedule(self, value: str | None) -> str | None:
         return _validate_run_cron_schedule(value) if value is not None else None
 
     def validate_output_destinations(self, value: dict) -> dict:
         return _validate_output_destinations(value, self.context)
+
+    def validate_mcp_gateway_server_ids(self, value: list[UUID]) -> list[str]:
+        return _normalize_mcp_gateway_server_ids(value)
 
     def update(self, instance: SignalScoutConfig, validated_data: dict) -> SignalScoutConfig:
         # Re-anchor the coordinator's cron due-check only when the schedule actually changes —
@@ -2236,6 +2270,7 @@ class SignalScoutConfigUpdateSerializer(serializers.ModelSerializer):
             "output_destinations",
             "network_access",
             "auto_pause_exempt",
+            "mcp_gateway_server_ids",
         ]
 
 
@@ -2292,6 +2327,8 @@ class SignalScoutConfigOptionsSerializer(serializers.Serializer):
         ),
     )
 
+    mcp_gateway_server_ids = _mcp_gateway_server_ids_field()
+
     def validate_run_cron_schedule(self, value: str | None) -> str | None:
         return _validate_run_cron_schedule(value) if value is not None else None
 
@@ -2301,6 +2338,9 @@ class SignalScoutConfigOptionsSerializer(serializers.Serializer):
             team = context.get("team")
             context = {**context, "project_id": getattr(team, "project_id", None)}
         return _validate_output_destinations(value, context)
+
+    def validate_mcp_gateway_server_ids(self, value: list[UUID]) -> list[str]:
+        return _normalize_mcp_gateway_server_ids(value)
 
 
 class SignalScoutConfigCreateSerializer(SignalScoutConfigOptionsSerializer):

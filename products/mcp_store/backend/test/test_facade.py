@@ -435,6 +435,58 @@ class TestGetInstallationsForSandbox(BaseTest):
         assert principal is not None
         assert principal.credential_owner_id is None
 
+    def test_per_scout_allowlist_gates_personal_grants_but_not_team_shares(self) -> None:
+        account = self._support_agent()
+        teammate = User.objects.create_and_join(self.organization, "teammate@posthog.com", "password")
+        picked_server = self._create_gateway_server(name="Picked", url="https://picked.example.com/mcp")
+        dropped_server = self._create_gateway_server(name="Dropped", url="https://dropped.example.com/mcp")
+        team_server = self._create_gateway_server(name="Team", url="https://team.example.com/mcp")
+        picked = self._create_installation(gateway_server=picked_server, url=picked_server.url)
+        dropped = self._create_installation(gateway_server=dropped_server, url=dropped_server.url)
+        team_shared = self._create_installation(user=teammate, gateway_server=team_server, url=team_server.url)
+        self._grant(account, picked_server, user=self.user, installation=picked)
+        self._grant(account, dropped_server, user=self.user, installation=dropped)
+        self._grant(account, team_server, user=teammate, installation=team_shared, scope="team")
+
+        def resolve(allowed: list[str] | None) -> set[str]:
+            return {
+                result.id
+                for result in get_installations_for_sandbox(
+                    self.team.id,
+                    task_origin="support_reply",
+                    task_agent_key="support",
+                    credential_owner_id=self.user.id,
+                    allowed_gateway_server_ids=allowed,
+                )
+            }
+
+        assert resolve([str(picked_server.id)]) == {str(picked.id), str(team_shared.id)}
+        # An empty selection mounts none of the owner's grants; a teammate's team share
+        # backs every run of the agent, so it still mounts.
+        assert resolve([]) == {str(team_shared.id)}
+        assert resolve(None) == {str(picked.id), str(dropped.id), str(team_shared.id)}
+
+    def test_deselecting_an_owner_grant_falls_back_to_a_teammates_team_share_of_the_same_server(self) -> None:
+        # The allowlist applies before per-server precedence: a deselected owner grant must
+        # behave as if absent, not suppress the teammate's team share and mount nothing.
+        account = self._support_agent()
+        teammate = User.objects.create_and_join(self.organization, "teammate@posthog.com", "password")
+        server = self._create_gateway_server(name="Shared server", url="https://shared.example.com/mcp")
+        own = self._create_installation(gateway_server=server, url=server.url)
+        teammate_installation = self._create_installation(user=teammate, gateway_server=server, url=server.url)
+        self._grant(account, server, user=self.user, installation=own)
+        self._grant(account, server, user=teammate, installation=teammate_installation, scope="team")
+
+        results = get_installations_for_sandbox(
+            self.team.id,
+            task_origin="support_reply",
+            task_agent_key="support",
+            credential_owner_id=self.user.id,
+            allowed_gateway_server_ids=[],
+        )
+
+        assert [result.id for result in results] == [str(teammate_installation.id)]
+
     def test_owner_credential_wins_over_a_teammates_team_share_of_the_same_server(self) -> None:
         account = self._support_agent()
         teammate = User.objects.create_and_join(self.organization, "teammate@posthog.com", "password")

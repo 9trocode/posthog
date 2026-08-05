@@ -1,10 +1,23 @@
 import type { Meta, StoryObj } from '@storybook/react'
+import { useState } from 'react'
 
 import { FEATURE_FLAGS } from 'lib/constants'
 
 import { mswDecorator } from '~/mocks/browser'
 
 import { ScoutMcpServersPicker } from './ScoutMcpServersPicker'
+
+/** Stories drive the picker like its call sites do: selection state lives outside. */
+function ControlledPicker({ compact }: { compact?: boolean }): JSX.Element {
+    const [selectedServerIds, setSelectedServerIds] = useState<string[]>(['linear-id'])
+    return (
+        <ScoutMcpServersPicker
+            compact={compact}
+            selectedServerIds={selectedServerIds}
+            onChange={setSelectedServerIds}
+        />
+    )
+}
 
 const YOU = { id: 179, uuid: 'you-uuid', email: 'you@posthog.com', hedgehog_config: null }
 const TEAMMATE = { id: 2, uuid: 'mate-uuid', email: 'mate@posthog.com', hedgehog_config: null }
@@ -120,7 +133,7 @@ type Story = StoryObj<typeof ScoutMcpServersPicker>
 export const CreateDialogVariant: Story = {
     render: () => (
         <div className="max-w-2xl p-4">
-            <ScoutMcpServersPicker />
+            <ControlledPicker />
         </div>
     ),
 }
@@ -128,7 +141,7 @@ export const CreateDialogVariant: Story = {
 export const ScoutSettingsVariant: Story = {
     render: () => (
         <div className="max-w-md p-4">
-            <ScoutMcpServersPicker compact />
+            <ControlledPicker compact />
         </div>
     ),
 }

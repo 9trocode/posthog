@@ -871,7 +871,10 @@ async def test_run_delegates_the_scout_creator_as_mcp_credential_owner(ateam, ae
             User.objects.create(email=f"scout-owner-{random.randint(1, 99999)}@example.com") if with_creator else None
         )
         SignalScoutConfig.objects.unscoped().create(
-            team_id=ateam.id, skill_name="signals-scout-errors", created_by=creator
+            team_id=ateam.id,
+            skill_name="signals-scout-errors",
+            created_by=creator,
+            mcp_gateway_server_ids=["11111111-1111-1111-1111-111111111111"],
         )
         return creator.id if creator is not None else None
 
@@ -898,6 +901,7 @@ async def test_run_delegates_the_scout_creator_as_mcp_credential_owner(ateam, ae
 
     assert captured["mcp_builtin_agent_key"] == "scout"
     assert captured["mcp_credential_owner_id"] == owner_id
+    assert captured["mcp_gateway_server_ids"] == ["11111111-1111-1111-1111-111111111111"]
 
 
 @pytest.mark.asyncio
