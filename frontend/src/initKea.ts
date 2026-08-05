@@ -40,6 +40,9 @@ const ERROR_FILTER_ALLOW_LIST = [
     'loadExistingSubscription', // Background eligibility check for the dashboard subscribe nudge
     'loadFreeTierSubscriptionCount', // Background free-tier limit check for the dashboard subscribe nudge
     'sendNudgeNotification', // Background delivery request for the dashboard subscribe nudge
+    'loadReportDiff', // Inbox report detail renders `reportDiffError` in the "Files changed" panel
+    'loadPrChecks', // Inbox report detail renders `prChecksError` in the "CI checks" section
+    'loadPrComments', // Inbox report detail renders `prCommentsError` in the "Comments" section
 ]
 
 /*
