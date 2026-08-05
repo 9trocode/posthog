@@ -21,6 +21,9 @@ export function useActiveAnnouncement(): ActiveAnnouncement | null {
     hostTRPC.os.getAppVersion.queryOptions(),
   );
   const dismissedIds = useAnnouncementsStore((state) => state.dismissedIds);
+  const handledThisSession = useAnnouncementsStore(
+    (state) => state.handledThisSession,
+  );
   const hasHydrated = useAnnouncementsStore((state) => state._hasHydrated);
   const [now, setNow] = useState(() => Date.now());
 
@@ -35,8 +38,9 @@ export function useActiveAnnouncement(): ActiveAnnouncement | null {
         now,
         appVersion: appVersion ?? null,
         dismissedIds: dismissedSet,
+        handledThisSession,
       }),
-    [payload, now, appVersion, dismissedSet],
+    [payload, now, appVersion, dismissedSet, handledThisSession],
   );
 
   // A scheduled item can cross its startsAt/endsAt while the app sits open;

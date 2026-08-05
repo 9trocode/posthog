@@ -1,24 +1,25 @@
-import { assets as hoggieCatalog } from "@posthog/brand/hoggies/metadata";
-import { HERO_HEDGEHOGS, hoggiePngUrl } from "@posthog/shared/announcements";
+import { hoggiePngUrl } from "@posthog/shared/announcements";
 import { useEffect, useMemo, useState } from "react";
 import builderHog from "./assets/hedgehogs/builder-hog-03.png";
 import explorerHog from "./assets/hedgehogs/explorer-hog.png";
 import happyHog from "./assets/hedgehogs/happy-hog.png";
 import loopHog from "./assets/hedgehogs/loop-hog.svg";
-import type { EditableItem } from "./items";
+import { BAND_COLORS, hoggieCatalog, hoggieSrcBySlug } from "./hoggies";
+import { type EditableItem, kindDefaultHedgehog } from "./items";
 
-const HEDGEHOG_SRC: Record<(typeof HERO_HEDGEHOGS)[number], string> = {
+// The app-bundled default hedgehogs are not in the brand catalog; render them
+// from the same local copies the app uses.
+const APP_BUNDLED_SRC: Record<string, string> = {
   builder: builderHog,
   explorer: explorerHog,
   happy: happyHog,
   loop: loopHog,
 };
 
-/** Bundled names render from local assets; catalog slugs from the brand CDN. */
+/** Bundled and catalog names render locally; anything else tries the CDN. */
 function hoggieSrc(slug: string): string {
   return (
-    (HEDGEHOG_SRC as Record<string, string | undefined>)[slug] ??
-    hoggiePngUrl(slug)
+    APP_BUNDLED_SRC[slug] ?? hoggieSrcBySlug.get(slug) ?? hoggiePngUrl(slug)
   );
 }
 
@@ -146,26 +147,16 @@ function HoggiePicker({
   const active = item.heroType === "hedgehog";
 
   const results = useMemo(() => {
-    const bundled = HERO_HEDGEHOGS.map((slug) => ({
-      slug: slug as string,
-      name: `${slug} · built-in`,
-      tags: [] as string[],
-    }));
-    const catalog = hoggieCatalog.map((a) => ({
-      slug: a.slug,
-      name: a.name,
-      tags: a.tags ?? [],
-    }));
-    const all = [...bundled, ...catalog];
     const q = query.trim().toLowerCase();
-    if (!q) return all;
-    return all.filter(
+    if (!q) return hoggieCatalog;
+    return hoggieCatalog.filter(
       (h) =>
         h.name.toLowerCase().includes(q) ||
         h.slug.includes(q) ||
         h.tags.some((t) => t.toLowerCase().includes(q)),
     );
   }, [query]);
+  const defaultSlug = kindDefaultHedgehog(item.kind);
 
   return (
     <div className="hog-pick">
@@ -187,11 +178,34 @@ function HoggiePicker({
           <input
             className="hog-search mono"
             aria-label="Search hoggies"
-            placeholder={`Search ${HERO_HEDGEHOGS.length + hoggieCatalog.length} hoggies…`}
+            placeholder={`Search ${hoggieCatalog.length} hoggies…`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           <div className="hog-grid">
+            {query.trim() === "" && (
+              <button
+                type="button"
+                title="The app default — renders without any network"
+                className={
+                  active && item.heroHedgehog === defaultSlug
+                    ? "hog-cell hog-cell-active"
+                    : "hog-cell"
+                }
+                onClick={() => {
+                  onChange({ heroType: "hedgehog", heroHedgehog: defaultSlug });
+                  setOpen(false);
+                }}
+              >
+                <img
+                  src={hoggieSrc(defaultSlug)}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                />
+                <span>Default</span>
+              </button>
+            )}
             {results.map((h) => (
               <button
                 key={h.slug}
@@ -207,7 +221,7 @@ function HoggiePicker({
                   setOpen(false);
                 }}
               >
-                <img src={hoggieSrc(h.slug)} alt="" loading="lazy" />
+                <img src={h.src} alt="" loading="lazy" decoding="async" />
                 <span>{h.name}</span>
               </button>
             ))}
@@ -398,16 +412,35 @@ export function Stage({
         {!isBanner && (
           <div className="hero-tools">
             <HoggiePicker item={item} onChange={onChange} />
-            <input
-              type="color"
-              className="hog-color"
-              aria-label="Band color"
-              title="Band color"
-              value={item.heroColor || defaultColor(item.kind)}
-              onChange={(e) =>
-                onChange({ heroType: "hedgehog", heroColor: e.target.value })
-              }
-            />
+            <fieldset className="swatches" aria-label="Band color">
+              <button
+                type="button"
+                aria-label="Default band color"
+                title="Default"
+                className={item.heroColor ? "swatch" : "swatch swatch-active"}
+                style={{ background: defaultColor(item.kind) }}
+                onClick={() =>
+                  onChange({ heroType: "hedgehog", heroColor: "" })
+                }
+              />
+              {BAND_COLORS.map((color) => (
+                <button
+                  key={color.hex}
+                  type="button"
+                  aria-label={`Band color ${color.name}`}
+                  title={color.name}
+                  className={
+                    item.heroColor === color.hex
+                      ? "swatch swatch-active"
+                      : "swatch"
+                  }
+                  style={{ background: color.hex }}
+                  onClick={() =>
+                    onChange({ heroType: "hedgehog", heroColor: color.hex })
+                  }
+                />
+              ))}
+            </fieldset>
             <button
               type="button"
               className={

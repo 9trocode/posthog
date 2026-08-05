@@ -432,14 +432,31 @@ h1 {
   margin: 12px 0;
 }
 
-.hog-color {
-  width: 34px;
+.swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 34px;
-  padding: 3px;
+  margin: 0;
+  padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--card);
+}
+
+.swatch {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid rgb(25 26 23 / 0.18);
+  border-radius: 50%;
   cursor: pointer;
+}
+
+.swatch-active {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 3.5px var(--ink);
 }
 
 .chip {
@@ -937,6 +954,65 @@ textarea {
   font-size: 13px;
   margin: 14px 0 0;
   padding-left: 18px;
+}
+
+/* ── publish confirmation ──────────────────────────────── */
+
+.confirm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(25 26 23 / 0.5);
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 940px;
+  max-width: 100%;
+  max-height: 90vh;
+  padding: 20px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 8px 8px 0 rgb(25 26 23 / 0.35);
+}
+
+.confirm h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+.confirm-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.confirm-diff {
+  flex: 1;
+  min-height: 0;
+  margin-top: 0;
+  overflow-y: auto;
+}
+
+.confirm .errors {
+  margin: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* ── login gate ────────────────────────────────────────── */

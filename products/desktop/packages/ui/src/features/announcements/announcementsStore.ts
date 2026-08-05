@@ -7,6 +7,10 @@ import { persist } from "zustand/middleware";
 
 interface AnnouncementsState {
   dismissedIds: Record<string, true>;
+  // One announcement per app session: dismissing or acknowledging anything
+  // parks the remaining announcements until the next launch. In-memory only —
+  // partialize keeps it out of storage so a relaunch resets it.
+  handledThisSession: boolean;
   // Hydration is async (Electron storage over IPC); announcements must not
   // flash for users whose persisted dismissals haven't been read back yet.
   _hasHydrated: boolean;
@@ -18,12 +22,14 @@ export const useAnnouncementsStore = create<AnnouncementsState>()(
   persist(
     (set) => ({
       dismissedIds: {},
+      handledThisSession: false,
       _hasHydrated: false,
       // Flushed immediately: the debounced write could otherwise be lost if
       // the window closes right after the click, resurrecting the announcement.
       dismiss: (id) => {
         set((state) => ({
           dismissedIds: { ...state.dismissedIds, [id]: true },
+          handledThisSession: true,
         }));
         void flushRendererStateWrites();
       },

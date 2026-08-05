@@ -32,10 +32,13 @@ AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
   via `hero` — `{ "hedgehog": "<slug>", "color": "#rrggbb" }`,
   `{ "imageUrl": "https://…" }`, or `{ "none": true }` for a plain modal.
   The slug is a bundled name (`builder`, `explorer`, `happy`, `loop` — local
-  assets, no network) or any hoggie slug from
-  [PostHog/brand](https://brand.posthog.com/hoggies), loaded from a CDN copy
-  pinned to the package release (`hoggiePngUrl`) with a fallback to the
-  default hedgehog when unreachable. Banners never render a hero.
+  assets, no network) or any hoggie PNG file name from
+  [PostHog/brand](https://brand.posthog.com/hoggies) — variants are
+  file-name-suffixed (`wizard-3`, `dadd-ai-1`), so the metadata slug alone is
+  not always a valid name; the admin editor's picker lists exactly the valid
+  ones. Non-bundled names load from a CDN copy pinned to the package release
+  (`hoggiePngUrl`) with a fallback to the default hedgehog when unreachable.
+  Banners never render a hero.
 
 ## The two kinds
 
@@ -57,10 +60,12 @@ AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
 
 ## Precedence
 
-One announcement at a time: the first unmet `required-update` in payload
-order, else the first eligible `announcement`. Dismissing one immediately
-reveals the next eligible item, so overlapping announcements show back to
-back in payload order.
+One announcement per app session: the first unmet `required-update` in
+payload order, else the first eligible `announcement`. Dismissing or
+acknowledging one retires announcements for the rest of the session — the
+next eligible item waits for the next launch, so overlapping announcements
+never show back to back. Required updates are exempt: one still blocks even
+after an announcement was handled in the same session.
 
 While an announcement is on stage, the What's New changelog auto-open is
 **cancelled** by default; set `suppressChangelog: false` at the top level of

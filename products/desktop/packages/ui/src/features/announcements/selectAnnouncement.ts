@@ -18,6 +18,12 @@ export interface SelectAnnouncementInput {
   /** null = version unknown (web host, query unresolved) — nothing is shown. */
   appVersion: string | null;
   dismissedIds: ReadonlySet<string>;
+  /**
+   * An announcement was already dismissed or acknowledged this session — the
+   * rest wait for the next launch. Required-updates are exempt: they block
+   * regardless.
+   */
+  handledThisSession?: boolean;
 }
 
 export interface SelectAnnouncementResult {
@@ -53,7 +59,13 @@ function isInWindow(announcement: Announcement, now: number): boolean {
 export function selectAnnouncement(
   input: SelectAnnouncementInput,
 ): SelectAnnouncementResult {
-  const { payload, now, appVersion, dismissedIds } = input;
+  const {
+    payload,
+    now,
+    appVersion,
+    dismissedIds,
+    handledThisSession = false,
+  } = input;
 
   if (appVersion === null) return none();
   if (payload === undefined || payload === null) return none();
@@ -89,10 +101,12 @@ export function selectAnnouncement(
     };
   }
 
-  const announcement = eligible.find(
-    (item): item is Extract<Announcement, { kind: "announcement" }> =>
-      item.kind === "announcement" && !dismissedIds.has(item.id),
-  );
+  const announcement = handledThisSession
+    ? undefined
+    : eligible.find(
+        (item): item is Extract<Announcement, { kind: "announcement" }> =>
+          item.kind === "announcement" && !dismissedIds.has(item.id),
+      );
   if (announcement) {
     return {
       active: {

@@ -1,6 +1,6 @@
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { announcementsPayloadSchema } from "@posthog/shared/announcements";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { type FlagRecord, readPayload, savePayload } from "./api";
 import { POSTHOG_HOST, PROJECT_ID } from "./config";
@@ -58,6 +58,83 @@ function factsFor(item: EditableItem): string {
   return parts.join(" ");
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  title: "title",
+  body: "body",
+  style: "style",
+  hero: "hero",
+  cta: "button",
+  requiresAck: "blocking",
+  ackLabel: "ack label",
+  minVersion: "min version",
+  startsAt: "schedule",
+  endsAt: "schedule",
+};
+
+function itemLabel(item: EditableItem): string {
+  return item.title || item.id || "untitled";
+}
+
+function surfaceLabel(item: EditableItem): string {
+  if (item.kind === "required-update") return "required update";
+  return item.requiresAck ? "blocking modal" : item.style;
+}
+
+/** Plain-English bullets for the publish confirmation, keyed on item ids. */
+function describeChanges(
+  before: EditableItem[],
+  after: EditableItem[],
+  beforeSuppress: boolean,
+  afterSuppress: boolean,
+): string[] {
+  const beforeById = new Map(
+    before.filter((item) => item.id).map((item) => [item.id, item]),
+  );
+  const afterIds = new Set(
+    after.map((item) => item.id).filter((id) => id !== ""),
+  );
+  const lines: string[] = [];
+  for (const item of after) {
+    if (!item.id || !beforeById.has(item.id)) {
+      lines.push(`Added "${itemLabel(item)}" (${surfaceLabel(item)})`);
+    }
+  }
+  for (const item of before) {
+    if (!afterIds.has(item.id)) lines.push(`Removed "${itemLabel(item)}"`);
+  }
+  for (const item of after) {
+    const prev = item.id ? beforeById.get(item.id) : undefined;
+    if (!prev) continue;
+    const a = toPayloadItem(prev);
+    const b = toPayloadItem(item);
+    const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+      .filter((key) => JSON.stringify(a[key]) !== JSON.stringify(b[key]))
+      .map((key) => FIELD_LABELS[key] ?? key);
+    if (changed.length > 0) {
+      lines.push(
+        `Edited "${itemLabel(item)}" — ${[...new Set(changed)].join(", ")}`,
+      );
+    }
+  }
+  const beforeOrder = before
+    .map((item) => item.id)
+    .filter((id) => afterIds.has(id));
+  const afterOrder = after
+    .map((item) => item.id)
+    .filter((id) => beforeById.has(id));
+  if (beforeOrder.join("\n") !== afterOrder.join("\n")) {
+    lines.push("Reordered — the top item shows first");
+  }
+  if (beforeSuppress !== afterSuppress) {
+    lines.push(
+      afterSuppress
+        ? "What's New: now muted while an announcement shows"
+        : "What's New: now allowed once announcements clear",
+    );
+  }
+  return lines;
+}
+
 export function Editor({
   token,
   flag,
@@ -87,6 +164,7 @@ export function Editor({
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [published, setPublished] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [jsonDraft, setJsonDraft] = useState<string | null>(null);
 
   const flagUrl = `${POSTHOG_HOST}/project/${PROJECT_ID}/feature_flags/${flag.id}`;
@@ -121,6 +199,28 @@ export function Editor({
     [initial],
   );
   const dirty = liveJson !== payloadJson;
+
+  const changes = useMemo(
+    () =>
+      initial === null
+        ? []
+        : describeChanges(
+            initial.items,
+            items,
+            initial.suppressChangelog,
+            suppressChangelog,
+          ),
+    [initial, items, suppressChangelog],
+  );
+
+  useEffect(() => {
+    if (!confirming) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) setConfirming(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirming, saving]);
 
   const update = (index: number, patch: Partial<EditableItem>) => {
     setItems((prev) =>
@@ -170,7 +270,9 @@ export function Editor({
     }
   };
 
-  const publish = async () => {
+  // Publishing is two steps: validate and open the review modal, then write
+  // the flag only from the modal's confirm button.
+  const requestPublish = () => {
     const parsed = announcementsPayloadSchema.safeParse({
       announcements: items.map(toPayloadItem),
       suppressChangelog,
@@ -184,9 +286,19 @@ export function Editor({
       return;
     }
     setErrors([]);
+    setConfirming(true);
+  };
+
+  const confirmPublish = async () => {
+    const parsed = announcementsPayloadSchema.safeParse({
+      announcements: items.map(toPayloadItem),
+      suppressChangelog,
+    });
+    if (!parsed.success) return;
     setSaving(true);
     try {
       onFlagUpdated(await savePayload(token, flag, parsed.data));
+      setConfirming(false);
       setPublished(true);
     } catch (error) {
       setErrors([String(error)]);
@@ -313,7 +425,7 @@ export function Editor({
             </button>
           </div>
           <p className="rail-note">
-            Top item shows first; dismissing one reveals the next.
+            Top item shows first — one announcement per app session.
           </p>
           <label
             className="check rail-policy"
@@ -417,20 +529,7 @@ export function Editor({
             </p>
           )}
 
-          {dirty && liveJson !== null && (
-            <details className="json diff" open>
-              <summary>Review diff vs live</summary>
-              <div className="diff-view">
-                <MultiFileDiff
-                  oldFile={{ name: "payload.json", contents: liveJson }}
-                  newFile={{ name: "payload.json", contents: payloadJson }}
-                  options={DIFF_OPTIONS}
-                />
-              </div>
-            </details>
-          )}
-
-          {errors.length > 0 && (
+          {errors.length > 0 && !confirming && (
             <ul className="errors">
               {errors.map((error) => (
                 <li key={error}>{error}</li>
@@ -443,15 +542,15 @@ export function Editor({
               type="button"
               className="btn btn-publish"
               disabled={saving || !dirty}
-              onClick={() => void publish()}
+              onClick={requestPublish}
             >
-              {saving ? "Publishing…" : "Publish"}
+              Publish
             </button>
             <span className="publish-note">
               {published
                 ? "Published — live wherever the flag is rolled out."
                 : dirty
-                  ? "Writes the flag payload. Rollout % is unchanged."
+                  ? "Opens a review of your changes before anything is written."
                   : "Editor matches the live payload."}
             </span>
           </div>
@@ -475,6 +574,63 @@ export function Editor({
           </details>
         </main>
       </div>
+
+      {confirming && liveJson !== null && (
+        <div className="confirm-scrim">
+          <div
+            className="confirm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-title"
+          >
+            <h2 id="confirm-title">Review, then publish</h2>
+            {changes.length > 0 && (
+              <ul className="confirm-summary">
+                {changes.map((change) => (
+                  <li key={change}>{change}</li>
+                ))}
+              </ul>
+            )}
+            <div className="diff-view confirm-diff">
+              <MultiFileDiff
+                oldFile={{ name: "payload.json", contents: liveJson }}
+                newFile={{ name: "payload.json", contents: payloadJson }}
+                options={DIFF_OPTIONS}
+              />
+            </div>
+            {errors.length > 0 && (
+              <ul className="errors">
+                {errors.map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </ul>
+            )}
+            <div className="confirm-actions">
+              <span className="publish-note">
+                Left: live payload. Right: what you are about to publish.
+                Rollout % is unchanged.
+              </span>
+              <span className="spacer" />
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setConfirming(false)}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-publish"
+                onClick={() => void confirmPublish()}
+                disabled={saving}
+              >
+                {saving ? "Publishing…" : "Publish to the live flag"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

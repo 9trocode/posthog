@@ -31,9 +31,16 @@ function select(
     now = NOW,
     appVersion = APP_VERSION as string | null,
     dismissedIds = new Set<string>(),
+    handledThisSession = false,
   } = {},
 ) {
-  return selectAnnouncement({ payload, now, appVersion, dismissedIds });
+  return selectAnnouncement({
+    payload,
+    now,
+    appVersion,
+    dismissedIds,
+    handledThisSession,
+  });
 }
 
 describe("selectAnnouncement", () => {
@@ -132,12 +139,28 @@ describe("selectAnnouncement", () => {
     expect(result.active).toBeNull();
   });
 
-  it("skips dismissed announcements and falls through to the next", () => {
+  it("skips dismissed announcements and falls through to the next on a fresh session", () => {
     const result = select(
       { announcements: [announcement(), announcement({ id: "a2" })] },
       { dismissedIds: new Set(["a1"]) },
     );
     expect(result.active?.announcement.id).toBe("a2");
+  });
+
+  it("shows no further announcement once one was handled this session", () => {
+    const result = select(
+      { announcements: [announcement(), announcement({ id: "a2" })] },
+      { dismissedIds: new Set(["a1"]), handledThisSession: true },
+    );
+    expect(result.active).toBeNull();
+  });
+
+  it("still blocks on a required-update after an announcement was handled this session", () => {
+    const result = select(
+      { announcements: [announcement(), requiredUpdate()] },
+      { dismissedIds: new Set(["a1"]), handledThisSession: true },
+    );
+    expect(result.active?.announcement.id).toBe("r1");
   });
 
   it("prefers an unmet required-update over an earlier announcement", () => {
