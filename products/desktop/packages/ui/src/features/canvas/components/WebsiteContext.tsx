@@ -56,7 +56,7 @@ import {
   Text,
   TextArea,
 } from "@radix-ui/themes";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 type Mode = "rendered" | "edit";
 
@@ -69,6 +69,58 @@ const SPACE_EMPTY_TEMPLATE = "# Space context\n\nDescribe what lives here.\n";
 interface WebsiteContextProps {
   channelId: string;
 }
+
+type FolderInstructionVersion = NonNullable<
+  ReturnType<typeof useFolderInstructionsVersions>["data"]
+>[number];
+
+interface WebsiteContextLoadedView {
+  channelId: string;
+  channelName: string;
+  draft: string;
+  emptyTemplate: string;
+  hasDraft: boolean;
+  hasInstructions: boolean;
+  isConflict: boolean;
+  isFetchingLatest: boolean;
+  isLoadingLatest: boolean;
+  isLoadingVersions: boolean;
+  isPublishing: boolean;
+  latestContent: string;
+  latestVersion: number | undefined;
+  mode: Mode;
+  publishError: Error | null;
+  selectedVersion: FolderInstructionVersion | null;
+  selectedVersionNumber: number | null;
+  setDraft: (value: string) => void;
+  setHasDraft: (value: boolean) => void;
+  setMode: (value: Mode) => void;
+  setSelectedVersionNumber: (value: number | null) => void;
+  spacesLayout: boolean;
+  taskChannel: TaskChannel | undefined;
+  versions: FolderInstructionVersion[] | undefined;
+  onSave: () => void;
+}
+
+type WebsiteContextToolbarView = Pick<
+  WebsiteContextLoadedView,
+  | "draft"
+  | "hasDraft"
+  | "hasInstructions"
+  | "isFetchingLatest"
+  | "isLoadingLatest"
+  | "isLoadingVersions"
+  | "isPublishing"
+  | "latestContent"
+  | "latestVersion"
+  | "mode"
+  | "selectedVersionNumber"
+  | "setDraft"
+  | "setHasDraft"
+  | "setMode"
+  | "setSelectedVersionNumber"
+  | "onSave"
+> & { versions: FolderInstructionVersion[] };
 
 export function WebsiteContext({ channelId }: WebsiteContextProps) {
   const spacesLayout = useChannelsLayout();
@@ -154,21 +206,21 @@ export function WebsiteContext({ channelId }: WebsiteContextProps) {
   // metadata; we don't currently fetch the historical content body, so the
   // viewer falls back to "Open latest in editor" when there is no body.
   // (Backend exposes content only via the `latest` endpoint today.)
-  const selectedVersion = useMemo(() => {
-    if (selectedVersionNumber == null) return null;
-    return versions.find((v) => v.version === selectedVersionNumber) ?? null;
-  }, [selectedVersionNumber, versions]);
+  const selectedVersion =
+    selectedVersionNumber == null
+      ? null
+      : (versions.find((v) => v.version === selectedVersionNumber) ?? null);
+
+  let content: ReactNode;
 
   if (isLoadingLatest) {
-    return (
+    content = (
       <Flex align="center" justify="center" className="h-full">
         <Spinner size="2" />
       </Flex>
     );
-  }
-
-  if (latestError) {
-    return (
+  } else if (latestError) {
+    content = (
       <Flex direction="column" gap="3" p="4">
         <Callout.Root color="red" size="1">
           <Callout.Text>
@@ -177,137 +229,93 @@ export function WebsiteContext({ channelId }: WebsiteContextProps) {
         </Callout.Root>
       </Flex>
     );
+  } else {
+    content = (
+      <WebsiteContextLoaded
+        view={{
+          channelId,
+          channelName,
+          draft,
+          emptyTemplate,
+          hasDraft,
+          hasInstructions,
+          isConflict,
+          isFetchingLatest,
+          isLoadingLatest,
+          isLoadingVersions,
+          isPublishing,
+          latestContent: latest?.content ?? "",
+          latestVersion: latest?.version,
+          mode,
+          publishError,
+          selectedVersion,
+          selectedVersionNumber,
+          setDraft,
+          setHasDraft,
+          setMode,
+          setSelectedVersionNumber,
+          spacesLayout,
+          taskChannel,
+          versions,
+          onSave,
+        }}
+      />
+    );
   }
 
-  // Treat `null` (404: never published), `undefined` (query disabled), AND a
-  // row with whitespace-only content as "no instructions" so we render the
-  // empty state — otherwise MarkdownRenderer paints an invisible empty block
-  // and the page looks blank.
-  const renderedContent = latest?.content ?? "";
+  return content;
+}
+
+function WebsiteContextLoaded({ view }: { view: WebsiteContextLoadedView }) {
+  const {
+    channelId,
+    channelName,
+    draft,
+    emptyTemplate,
+    hasInstructions,
+    isConflict,
+    latestContent,
+    latestVersion,
+    mode,
+    publishError,
+    selectedVersion,
+    setDraft,
+    setHasDraft,
+    setMode,
+    spacesLayout,
+    taskChannel,
+  } = view;
 
   return (
     <Flex direction="column" height="100%" className="overflow-hidden">
-      {/* The shared page header ships with the spaces layout; without it the
-          page opens straight onto its mode toolbar as it always has. */}
-      {spacesLayout && (
-        <PageHeader>
-          <PageHeaderHeading>
-            <PageHeaderTitleRow>
-              <PageHeaderTitle>Context</PageHeaderTitle>
-              {latest?.version != null && (
-                <PageHeaderChip icon={channelPageIcon("context", { size: 12 })}>
-                  v{latest.version}
-                </PageHeaderChip>
-              )}
-            </PageHeaderTitleRow>
-            <PageHeaderDescription>
-              Background every agent working in this{" "}
-              {spacesLayout ? "space" : "channel"} reads before it starts — what
-              lives here, who cares about it, and how to work on it.
-            </PageHeaderDescription>
-          </PageHeaderHeading>
-        </PageHeader>
-      )}
+      <WebsiteContextPageHeader
+        latestVersion={latestVersion}
+        spacesLayout={spacesLayout}
+      />
       {spacesLayout && taskChannel ? (
         <SpaceRepositories channel={taskChannel} />
       ) : null}
-      <Flex
-        align="center"
-        justify="between"
-        gap="3"
-        px="4"
-        py="2"
-        className="shrink-0 border-b border-b-(--gray-5)"
-      >
-        <Flex align="center" gap="3">
-          <SegmentedControl.Root
-            value={mode}
-            onValueChange={(value) => setMode(value as Mode)}
-            size="1"
-          >
-            <SegmentedControl.Item value="rendered">
-              Rendered
-            </SegmentedControl.Item>
-            <SegmentedControl.Item value="edit">Edit</SegmentedControl.Item>
-          </SegmentedControl.Root>
-
-          {/* Background-refetch indicator: the initial load uses the full-screen
-              spinner below; this only fires on revalidations (every mount, plus
-              after publish/delete invalidations) so the user knows the view is
-              live and not just stale cache. */}
-          {isFetchingLatest && !isLoadingLatest ? (
-            <Flex align="center" gap="1">
-              <Spinner size="1" />
-              <Text className="text-[12px] text-gray-10">Refreshing…</Text>
-            </Flex>
-          ) : null}
-
-          {versions.length > 0 ? (
-            <Select.Root
-              size="1"
-              value={
-                selectedVersionNumber != null
-                  ? String(selectedVersionNumber)
-                  : "latest"
-              }
-              onValueChange={(value) => {
-                if (value === "latest") {
-                  setSelectedVersionNumber(null);
-                } else {
-                  setSelectedVersionNumber(Number(value));
-                  setMode("rendered");
-                }
-              }}
-              disabled={isLoadingVersions}
-            >
-              <Select.Trigger />
-              <Select.Content>
-                <Select.Item value="latest">
-                  Latest (v{latest?.version ?? "—"})
-                </Select.Item>
-                {versions
-                  .filter((v) => v.version !== latest?.version)
-                  .map((v) => (
-                    <Select.Item key={v.version} value={String(v.version)}>
-                      v{v.version} · {formatTimestamp(v.created_at)}
-                    </Select.Item>
-                  ))}
-              </Select.Content>
-            </Select.Root>
-          ) : null}
-        </Flex>
-
-        {mode === "edit" ? (
-          <Flex align="center" gap="2">
-            {hasDraft ? (
-              <Button
-                size="1"
-                variant="soft"
-                color="gray"
-                onClick={() => {
-                  setDraft(latest?.content ?? "");
-                  setHasDraft(false);
-                }}
-                disabled={isPublishing}
-              >
-                Discard
-              </Button>
-            ) : null}
-            <Button
-              size="1"
-              variant="solid"
-              onClick={onSave}
-              disabled={
-                isPublishing ||
-                (hasInstructions ? !hasDraft : draft.trim().length === 0)
-              }
-            >
-              {isPublishing ? <Spinner size="1" /> : null}
-              Save new version
-            </Button>
-          </Flex>
-        ) : null}
-      </Flex>
+      <WebsiteContextToolbar
+        view={{
+          draft: view.draft,
+          hasDraft: view.hasDraft,
+          hasInstructions: view.hasInstructions,
+          isFetchingLatest: view.isFetchingLatest,
+          isLoadingLatest: view.isLoadingLatest,
+          isLoadingVersions: view.isLoadingVersions,
+          isPublishing: view.isPublishing,
+          latestContent: view.latestContent,
+          latestVersion: view.latestVersion,
+          mode: view.mode,
+          selectedVersionNumber: view.selectedVersionNumber,
+          setDraft: view.setDraft,
+          setHasDraft: view.setHasDraft,
+          setMode: view.setMode,
+          setSelectedVersionNumber: view.setSelectedVersionNumber,
+          versions: view.versions ?? [],
+          onSave: view.onSave,
+        }}
+      />
 
       {publishError ? (
         <Box px="4" pt="3">
@@ -321,59 +329,285 @@ export function WebsiteContext({ channelId }: WebsiteContextProps) {
         </Box>
       ) : null}
 
-      {!selectedVersion && mode === "edit" ? (
-        // The editor sits outside the scroll area so it grows with the window
-        // instead of scrolling the page around a fixed-height box.
-        <Box p="4" className="flex min-h-0 flex-1">
-          <TextArea
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              setHasDraft(true);
-            }}
-            size="2"
-            placeholder={
-              spacesLayout
-                ? "# Space context\n\nWrite markdown describing this space…"
-                : "# Channel context\n\nWrite markdown describing this channel…"
-            }
-            className="min-h-0 flex-1 font-[var(--code-font-family)]"
-          />
-        </Box>
-      ) : (
-        <ScrollArea
-          type="auto"
-          scrollbars="vertical"
-          className="scroll-area-constrain-width min-h-0 flex-1"
-        >
-          <Box p="4">
-            {selectedVersion ? (
-              <Callout.Root color="gray" size="1">
-                <Callout.Text>
-                  Viewing v{selectedVersion.version} metadata. Past content is
-                  not fetched today — switch to "Latest" to read or edit current
-                  content.
-                </Callout.Text>
-              </Callout.Root>
-            ) : hasInstructions ? (
-              <Box className="text-[13px]">
-                <MarkdownRenderer content={renderedContent} />
-              </Box>
-            ) : (
-              <EmptyState
-                channelId={channelId}
-                channelName={channelName}
-                onCreate={() => {
-                  setDraft(emptyTemplate);
-                  setHasDraft(true);
-                  setMode("edit");
-                }}
-              />
-            )}
-          </Box>
-        </ScrollArea>
-      )}
+      <WebsiteContextBody
+        channelId={channelId}
+        channelName={channelName}
+        draft={draft}
+        emptyTemplate={emptyTemplate}
+        hasInstructions={hasInstructions}
+        latestContent={latestContent}
+        mode={mode}
+        selectedVersion={selectedVersion}
+        setDraft={setDraft}
+        setHasDraft={setHasDraft}
+        setMode={setMode}
+        spacesLayout={spacesLayout}
+      />
     </Flex>
+  );
+}
+
+function WebsiteContextPageHeader({
+  latestVersion,
+  spacesLayout,
+}: {
+  latestVersion: number | undefined;
+  spacesLayout: boolean;
+}) {
+  if (!spacesLayout) {
+    return null;
+  }
+
+  return (
+    <PageHeader>
+      <PageHeaderHeading>
+        <PageHeaderTitleRow>
+          <PageHeaderTitle>Context</PageHeaderTitle>
+          {latestVersion != null && (
+            <PageHeaderChip icon={channelPageIcon("context", { size: 12 })}>
+              v{latestVersion}
+            </PageHeaderChip>
+          )}
+        </PageHeaderTitleRow>
+        <PageHeaderDescription>
+          Background every agent working in this space reads before it starts —
+          what lives here, who cares about it, and how to work on it.
+        </PageHeaderDescription>
+      </PageHeaderHeading>
+    </PageHeader>
+  );
+}
+
+function WebsiteContextToolbar({ view }: { view: WebsiteContextToolbarView }) {
+  const {
+    draft,
+    hasDraft,
+    hasInstructions,
+    isFetchingLatest,
+    isLoadingLatest,
+    isLoadingVersions,
+    isPublishing,
+    latestContent,
+    latestVersion,
+    mode,
+    selectedVersionNumber,
+    setDraft,
+    setHasDraft,
+    setMode,
+    setSelectedVersionNumber,
+    versions,
+    onSave,
+  } = view;
+
+  return (
+    <Flex
+      align="center"
+      justify="between"
+      gap="3"
+      px="4"
+      py="2"
+      className="shrink-0 border-b border-b-(--gray-5)"
+    >
+      <Flex align="center" gap="3">
+        <SegmentedControl.Root
+          value={mode}
+          onValueChange={(value) => setMode(value as Mode)}
+          size="1"
+        >
+          <SegmentedControl.Item value="rendered">
+            Rendered
+          </SegmentedControl.Item>
+          <SegmentedControl.Item value="edit">Edit</SegmentedControl.Item>
+        </SegmentedControl.Root>
+
+        {isFetchingLatest && !isLoadingLatest ? (
+          <Flex align="center" gap="1">
+            <Spinner size="1" />
+            <Text className="text-[12px] text-gray-10">Refreshing…</Text>
+          </Flex>
+        ) : null}
+
+        <VersionSelector
+          isLoadingVersions={isLoadingVersions}
+          latestVersion={latestVersion}
+          selectedVersionNumber={selectedVersionNumber}
+          setMode={setMode}
+          setSelectedVersionNumber={setSelectedVersionNumber}
+          versions={versions}
+        />
+      </Flex>
+
+      {mode === "edit" ? (
+        <Flex align="center" gap="2">
+          {hasDraft ? (
+            <Button
+              size="1"
+              variant="soft"
+              color="gray"
+              onClick={() => {
+                setDraft(latestContent);
+                setHasDraft(false);
+              }}
+              disabled={isPublishing}
+            >
+              Discard
+            </Button>
+          ) : null}
+          <Button
+            size="1"
+            variant="solid"
+            onClick={onSave}
+            disabled={
+              isPublishing ||
+              (hasInstructions ? !hasDraft : draft.trim().length === 0)
+            }
+          >
+            {isPublishing ? <Spinner size="1" /> : null}
+            Save new version
+          </Button>
+        </Flex>
+      ) : null}
+    </Flex>
+  );
+}
+
+function VersionSelector({
+  isLoadingVersions,
+  latestVersion,
+  selectedVersionNumber,
+  setMode,
+  setSelectedVersionNumber,
+  versions,
+}: {
+  isLoadingVersions: boolean;
+  latestVersion: number | undefined;
+  selectedVersionNumber: number | null;
+  setMode: (value: Mode) => void;
+  setSelectedVersionNumber: (value: number | null) => void;
+  versions: FolderInstructionVersion[];
+}) {
+  if (versions.length === 0) {
+    return null;
+  }
+
+  const versionItems = versions.reduce<ReactNode[]>((items, version) => {
+    if (version.version !== latestVersion) {
+      items.push(
+        <Select.Item key={version.version} value={String(version.version)}>
+          v{version.version} · {formatTimestamp(version.created_at)}
+        </Select.Item>,
+      );
+    }
+    return items;
+  }, []);
+
+  return (
+    <Select.Root
+      size="1"
+      value={
+        selectedVersionNumber != null ? String(selectedVersionNumber) : "latest"
+      }
+      onValueChange={(value) => {
+        if (value === "latest") {
+          setSelectedVersionNumber(null);
+        } else {
+          setSelectedVersionNumber(Number(value));
+          setMode("rendered");
+        }
+      }}
+      disabled={isLoadingVersions}
+    >
+      <Select.Trigger />
+      <Select.Content>
+        <Select.Item value="latest">
+          Latest (v{latestVersion ?? "—"})
+        </Select.Item>
+        {versionItems}
+      </Select.Content>
+    </Select.Root>
+  );
+}
+
+function WebsiteContextBody({
+  channelId,
+  channelName,
+  draft,
+  emptyTemplate,
+  hasInstructions,
+  latestContent,
+  mode,
+  selectedVersion,
+  setDraft,
+  setHasDraft,
+  setMode,
+  spacesLayout,
+}: {
+  channelId: string;
+  channelName: string;
+  draft: string;
+  emptyTemplate: string;
+  hasInstructions: boolean;
+  latestContent: string;
+  mode: Mode;
+  selectedVersion: FolderInstructionVersion | null;
+  setDraft: (value: string) => void;
+  setHasDraft: (value: boolean) => void;
+  setMode: (value: Mode) => void;
+  spacesLayout: boolean;
+}) {
+  if (!selectedVersion && mode === "edit") {
+    return (
+      <Box p="4" className="flex min-h-0 flex-1">
+        <TextArea
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setHasDraft(true);
+          }}
+          size="2"
+          placeholder={
+            spacesLayout
+              ? "# Space context\n\nWrite markdown describing this space…"
+              : "# Channel context\n\nWrite markdown describing this channel…"
+          }
+          className="min-h-0 flex-1 font-[var(--code-font-family)]"
+        />
+      </Box>
+    );
+  }
+
+  return (
+    <ScrollArea
+      type="auto"
+      scrollbars="vertical"
+      className="scroll-area-constrain-width min-h-0 flex-1"
+    >
+      <Box p="4">
+        {selectedVersion ? (
+          <Callout.Root color="gray" size="1">
+            <Callout.Text>
+              Viewing v{selectedVersion.version} metadata. Past content is not
+              fetched today — switch to "Latest" to read or edit current
+              content.
+            </Callout.Text>
+          </Callout.Root>
+        ) : hasInstructions ? (
+          <Box className="text-[13px]">
+            <MarkdownRenderer content={latestContent} />
+          </Box>
+        ) : (
+          <EmptyState
+            channelId={channelId}
+            channelName={channelName}
+            onCreate={() => {
+              setDraft(emptyTemplate);
+              setHasDraft(true);
+              setMode("edit");
+            }}
+          />
+        )}
+      </Box>
+    </ScrollArea>
   );
 }
 

@@ -41,10 +41,10 @@ export class DesktopPiRpcClientFactory implements PiRpcClientFactory {
       throw new Error("Pi requires PostHog authentication");
     }
 
-    const baseUrl = await this.getProxyUrl(credentials.region);
-
-    const mcpConfiguration =
-      await this.mcpServerSource.getMcpRuntimeConfiguration();
+    const [baseUrl, mcpConfiguration] = await Promise.all([
+      this.getProxyUrl(credentials.region),
+      this.mcpServerSource.getMcpRuntimeConfiguration(),
+    ]);
     const runtimeMcpServers = createRuntimeMcpServers(mcpConfiguration.servers);
 
     return createPiRpcClient({

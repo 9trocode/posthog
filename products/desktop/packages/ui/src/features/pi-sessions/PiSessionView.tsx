@@ -55,6 +55,7 @@ import { logger } from "@posthog/ui/shell/logger";
 import { Box, Flex } from "@radix-ui/themes";
 import {
   type ReactElement,
+  type RefObject,
   useCallback,
   useEffect,
   useRef,
@@ -92,6 +93,61 @@ type PiQueueSnapshot = Awaited<ReturnType<PiSessionController["clearQueue"]>>;
 type SetMessagingMode = ReturnType<
   typeof useMessagingModeStore.getState
 >["setMode"];
+type ProgressEvent = Extract<AgentConversationEvent, { type: "progress" }>;
+type PiMcpPermissionRequest =
+  PiControllerSessionState["mcpToolPermissionRequests"] extends Map<
+    unknown,
+    infer Permission
+  >
+    ? Permission
+    : never;
+
+interface PiSessionViewModel extends PiSessionViewProps {
+  cancelPrompt: () => void;
+  changeProjectTrust: (trusted: boolean) => Promise<void>;
+  contextUsage: ReturnType<typeof toPiContextUsage>;
+  controlsPending: boolean;
+  currentExtensionState: PiExtensionTaskState;
+  editQueuedMessage: () => void;
+  extensionDialog: PiExtensionTaskState["dialogs"][number] | undefined;
+  handlePromptRecall: PromptRecallHandler;
+  hasQueuedMessage: boolean;
+  hasTranscript: boolean;
+  isAuthRestoring: boolean;
+  isBashRunning: boolean;
+  isCompacting: boolean;
+  isConnecting: boolean;
+  isMcpPermissionResponding: boolean;
+  isOnline: boolean;
+  isStreaming: boolean;
+  latestProgress: ProgressEvent | undefined;
+  messagingMode: MessagingMode;
+  messagingModeToggle: ReactElement;
+  mcpPermission: PiMcpPermissionRequest | undefined;
+  piExtensionController: PiExtensionController;
+  piSessionController: PiSessionController;
+  projectTrustPending: boolean;
+  promptRecallRef: RefObject<PromptRecallHandler | null>;
+  removeQueuedMessage: () => void;
+  repoPath: string | undefined;
+  respondMcpPermission: (decision: "allow_always" | "reject") => void;
+  restart: () => void;
+  retry: () => void;
+  runBashCommand: (command: string) => void;
+  sendPrompt: (text: string) => void;
+  session: PiControllerSessionState | undefined;
+  sessionAvailable: boolean;
+  status: PiControllerSessionState["status"] | undefined;
+  toggleMessagingMode: () => void;
+}
+
+type PiSessionTranscriptView = Omit<
+  PiSessionViewModel,
+  "isConnecting" | "latestProgress" | "session"
+> & {
+  connectionError: PiControllerSessionState["error"] | undefined;
+  session: PiControllerSessionState;
+};
 
 function usePiSessionConnection(
   taskId: string,
@@ -465,6 +521,15 @@ export function PiSessionView({
   taskRunId,
   isCloud,
 }: PiSessionViewProps) {
+  const view = usePiSessionViewModel({ taskId, taskRunId, isCloud });
+  return <PiSessionViewContent {...view} />;
+}
+
+function usePiSessionViewModel({
+  taskId,
+  taskRunId,
+  isCloud,
+}: PiSessionViewProps): PiSessionViewModel {
   const piSessionController = useService<PiSessionController>(
     PI_SESSION_CONTROLLER,
   );
@@ -590,24 +655,102 @@ export function PiSessionView({
     [mcpPermission, piSessionController, taskId],
   );
 
+  const latestProgress = session?.events.findLast(
+    (event): event is ProgressEvent =>
+      event.type === "progress" && event.status === "in_progress",
+  );
+  const isConnecting = session?.connectionState === "connecting";
+  const isAuthRestoring = session?.authRestoring ?? false;
+  const contextUsage = toPiContextUsage(session?.stats);
+  const hasTranscript =
+    session?.events.some((event) => event.type !== "progress") ?? false;
+  const sessionAvailable =
+    session?.connectionState === "connected" || hasTranscript;
+
+  const controlsPending = status ? isStreaming || isBashRunning : false;
+  const hasQueuedMessage =
+    (session?.queue.steering.length ?? 0) +
+      (session?.queue.followUp.length ?? 0) >
+    0;
+  let messagingModeToggle: ReactElement = (
+    <Skeleton className="h-7 w-24 bg-foreground/15" />
+  );
+
+  if (status) {
+    messagingModeToggle = (
+      <PiMessagingModeSelector
+        mode={messagingMode}
+        queuedCount={status.pendingMessageCount}
+        disabled={isBashRunning}
+        onModeChange={(mode) => setMessagingMode(taskId, mode)}
+      />
+    );
+  }
+
+  const currentExtensionState =
+    extensionState ?? createEmptyPiExtensionTaskState();
+  const extensionDialog = currentExtensionState.dialogs[0];
+
+  return {
+    cancelPrompt,
+    changeProjectTrust,
+    contextUsage,
+    controlsPending,
+    currentExtensionState,
+    editQueuedMessage,
+    extensionDialog,
+    handlePromptRecall,
+    hasQueuedMessage,
+    hasTranscript,
+    isAuthRestoring,
+    isBashRunning,
+    isCloud,
+    isCompacting,
+    isConnecting,
+    isMcpPermissionResponding,
+    isOnline,
+    isStreaming,
+    latestProgress,
+    messagingMode,
+    messagingModeToggle,
+    mcpPermission,
+    piExtensionController,
+    piSessionController,
+    projectTrustPending,
+    promptRecallRef,
+    removeQueuedMessage,
+    repoPath,
+    respondMcpPermission,
+    restart,
+    retry,
+    runBashCommand,
+    sendPrompt,
+    session,
+    sessionAvailable,
+    status,
+    taskId,
+    taskRunId,
+    toggleMessagingMode,
+  };
+}
+
+function PiSessionViewContent({
+  hasTranscript,
+  isConnecting,
+  isCloud,
+  latestProgress,
+  restart,
+  retry,
+  session,
+  status,
+  ...view
+}: PiSessionViewModel) {
   if (!session) {
     return <TaskDetailSkeleton />;
   }
 
-  const latestProgress = session.events.findLast(
-    (event): event is Extract<AgentConversationEvent, { type: "progress" }> =>
-      event.type === "progress" && event.status === "in_progress",
-  );
-  const isConnecting = session.connectionState === "connecting";
-  const isAuthRestoring = session.authRestoring;
   const connectionError =
     session.error?.scope === "connection" ? session.error : undefined;
-  const contextUsage = toPiContextUsage(session.stats);
-  const hasTranscript = session.events.some(
-    (event) => event.type !== "progress",
-  );
-  const sessionAvailable =
-    session.connectionState === "connected" || hasTranscript;
   const executionTarget = isCloud ? "cloud" : "local";
   if (isConnecting && !hasTranscript) {
     return (
@@ -647,27 +790,60 @@ export function PiSessionView({
     return <TaskDetailSkeleton />;
   }
 
-  const controlsPending = status ? isStreaming || isBashRunning : false;
-  const hasQueuedMessage =
-    session.queue.steering.length + session.queue.followUp.length > 0;
-  let messagingModeToggle: ReactElement = (
-    <Skeleton className="h-7 w-24 bg-foreground/15" />
+  return (
+    <PiSessionTranscript
+      view={{
+        ...view,
+        connectionError,
+        hasTranscript,
+        isCloud,
+        restart,
+        retry,
+        session,
+        status,
+      }}
+    />
   );
+}
 
-  if (status) {
-    messagingModeToggle = (
-      <PiMessagingModeSelector
-        mode={messagingMode}
-        queuedCount={status.pendingMessageCount}
-        disabled={isBashRunning}
-        onModeChange={(mode) => setMessagingMode(taskId, mode)}
-      />
-    );
-  }
-
-  const currentExtensionState =
-    extensionState ?? createEmptyPiExtensionTaskState();
-  const extensionDialog = currentExtensionState.dialogs[0];
+function PiSessionTranscript({ view }: { view: PiSessionTranscriptView }) {
+  const {
+    cancelPrompt,
+    changeProjectTrust,
+    connectionError,
+    contextUsage,
+    controlsPending,
+    currentExtensionState,
+    editQueuedMessage,
+    extensionDialog,
+    handlePromptRecall,
+    hasQueuedMessage,
+    hasTranscript,
+    isAuthRestoring,
+    isCloud,
+    isCompacting,
+    isMcpPermissionResponding,
+    isOnline,
+    isStreaming,
+    messagingModeToggle,
+    mcpPermission,
+    piExtensionController,
+    piSessionController,
+    projectTrustPending,
+    promptRecallRef,
+    removeQueuedMessage,
+    repoPath,
+    respondMcpPermission,
+    restart,
+    retry,
+    runBashCommand,
+    sendPrompt,
+    session,
+    sessionAvailable,
+    taskId,
+    taskRunId,
+    toggleMessagingMode,
+  } = view;
 
   return (
     <Flex direction="column" height="100%">
@@ -707,99 +883,201 @@ export function PiSessionView({
         className="mx-auto w-full px-2 pb-3"
         style={{ maxWidth: CHAT_CONTENT_MAX_WIDTH }}
       >
-        <PiQueuedMessagesDock
-          queue={session.queue}
-          onEdit={editQueuedMessage}
-          onRemove={removeQueuedMessage}
+        <PiSessionComposer
+          view={{
+            cancelPrompt,
+            changeProjectTrust,
+            contextUsage,
+            controlsPending,
+            currentExtensionState,
+            editQueuedMessage,
+            handlePromptRecall,
+            hasQueuedMessage,
+            isAuthRestoring,
+            isCloud,
+            isCompacting,
+            isMcpPermissionResponding,
+            isOnline,
+            messagingModeToggle,
+            mcpPermission,
+            piSessionController,
+            projectTrustPending,
+            removeQueuedMessage,
+            repoPath,
+            respondMcpPermission,
+            runBashCommand,
+            sendPrompt,
+            session,
+            sessionAvailable,
+            taskId,
+            taskRunId,
+            toggleMessagingMode,
+          }}
         />
-        {!isCloud && (
-          <>
-            <PiExtensionStatuses statuses={currentExtensionState.statuses} />
-            <PiExtensionWidgets
-              widgets={currentExtensionState.widgets}
-              placement="aboveEditor"
-            />
-            {session.projectTrust?.hasProjectResources && (
-              <PiProjectTrustBanner
-                trusted={session.projectTrust.trusted}
-                disabled={
-                  controlsPending || session.connectionState !== "connected"
-                }
-                pending={projectTrustPending}
-                onTrust={() => changeProjectTrust(true)}
-                onRevoke={() => changeProjectTrust(false)}
-              />
-            )}
-          </>
-        )}
-        {mcpPermission ? (
-          isMcpPermissionResponding ? (
-            <Skeleton className="h-24 w-full" />
-          ) : (
-            <PermissionSelector
-              toolCall={buildPiMcpPermissionToolCall(mcpPermission)}
-              options={[...MCP_TOOL_PERMISSION_OPTIONS]}
-              onSelect={(optionId) => {
-                respondMcpPermission(
-                  optionId === "allow_always" ? "allow_always" : "reject",
-                );
-              }}
-              onCancel={() => respondMcpPermission("reject")}
-            />
-          )
-        ) : (
-          <PromptInput
-            sessionId={taskId}
-            toolbarEndSlot={<ContextUsageIndicator usage={contextUsage} />}
-            taskId={taskId}
-            repoPath={repoPath}
-            placeholder="Type a message..."
-            disabled={isCompacting}
-            isLoading={controlsPending}
-            submitDisabledExternal={
-              !sessionAvailable ||
-              !status ||
-              !isOnline ||
-              hasQueuedMessage ||
-              isAuthRestoring
-            }
-            submitTooltipOverride={
-              !isOnline
-                ? "No internet connection"
-                : isAuthRestoring
-                  ? "Restoring authentication"
-                  : hasQueuedMessage
-                    ? "A message is already queued"
-                    : undefined
-            }
-            enableBashMode
-            enableCommands
-            modelSelector={
-              <PiSessionModelControls
-                taskId={taskId}
-                taskRunId={taskRunId}
-                session={session}
-                controller={piSessionController}
-                isOnline={isOnline}
-                onError={handleControllerError}
-              />
-            }
-            reasoningSelector={null}
-            messagingModeToggle={messagingModeToggle}
-            onToggleMessagingMode={toggleMessagingMode}
-            onPromptRecall={handlePromptRecall}
-            onSubmit={sendPrompt}
-            onBashCommand={runBashCommand}
-            onCancel={cancelPrompt}
-          />
-        )}
-        {!isCloud && (
-          <PiExtensionWidgets
-            widgets={currentExtensionState.widgets}
-            placement="belowEditor"
-          />
-        )}
       </Box>
     </Flex>
+  );
+}
+
+function PiSessionComposer({
+  view,
+}: {
+  view: Pick<
+    PiSessionViewModel,
+    | "cancelPrompt"
+    | "changeProjectTrust"
+    | "contextUsage"
+    | "controlsPending"
+    | "currentExtensionState"
+    | "editQueuedMessage"
+    | "handlePromptRecall"
+    | "hasQueuedMessage"
+    | "isAuthRestoring"
+    | "isCloud"
+    | "isCompacting"
+    | "isMcpPermissionResponding"
+    | "isOnline"
+    | "messagingModeToggle"
+    | "mcpPermission"
+    | "piSessionController"
+    | "projectTrustPending"
+    | "removeQueuedMessage"
+    | "repoPath"
+    | "respondMcpPermission"
+    | "runBashCommand"
+    | "sendPrompt"
+    | "sessionAvailable"
+    | "taskId"
+    | "taskRunId"
+    | "toggleMessagingMode"
+  > & {
+    session: PiControllerSessionState;
+  };
+}) {
+  const {
+    cancelPrompt,
+    changeProjectTrust,
+    contextUsage,
+    controlsPending,
+    currentExtensionState,
+    editQueuedMessage,
+    handlePromptRecall,
+    hasQueuedMessage,
+    isAuthRestoring,
+    isCloud,
+    isCompacting,
+    isMcpPermissionResponding,
+    isOnline,
+    messagingModeToggle,
+    mcpPermission,
+    piSessionController,
+    projectTrustPending,
+    removeQueuedMessage,
+    repoPath,
+    respondMcpPermission,
+    runBashCommand,
+    sendPrompt,
+    session,
+    sessionAvailable,
+    taskId,
+    taskRunId,
+    toggleMessagingMode,
+  } = view;
+
+  return (
+    <>
+      <PiQueuedMessagesDock
+        queue={session.queue}
+        onEdit={editQueuedMessage}
+        onRemove={removeQueuedMessage}
+      />
+      {!isCloud && (
+        <>
+          <PiExtensionStatuses statuses={currentExtensionState.statuses} />
+          <PiExtensionWidgets
+            widgets={currentExtensionState.widgets}
+            placement="aboveEditor"
+          />
+          {session.projectTrust?.hasProjectResources && (
+            <PiProjectTrustBanner
+              trusted={session.projectTrust.trusted}
+              disabled={
+                controlsPending || session.connectionState !== "connected"
+              }
+              pending={projectTrustPending}
+              onTrust={() => changeProjectTrust(true)}
+              onRevoke={() => changeProjectTrust(false)}
+            />
+          )}
+        </>
+      )}
+      {mcpPermission ? (
+        isMcpPermissionResponding ? (
+          <Skeleton className="h-24 w-full" />
+        ) : (
+          <PermissionSelector
+            toolCall={buildPiMcpPermissionToolCall(mcpPermission)}
+            options={[...MCP_TOOL_PERMISSION_OPTIONS]}
+            onSelect={(optionId) => {
+              respondMcpPermission(
+                optionId === "allow_always" ? "allow_always" : "reject",
+              );
+            }}
+            onCancel={() => respondMcpPermission("reject")}
+          />
+        )
+      ) : (
+        <PromptInput
+          sessionId={taskId}
+          toolbarEndSlot={<ContextUsageIndicator usage={contextUsage} />}
+          taskId={taskId}
+          repoPath={repoPath}
+          placeholder="Type a message..."
+          disabled={isCompacting}
+          isLoading={controlsPending}
+          submitDisabledExternal={
+            !sessionAvailable ||
+            !session.status ||
+            !isOnline ||
+            hasQueuedMessage ||
+            isAuthRestoring
+          }
+          submitTooltipOverride={
+            !isOnline
+              ? "No internet connection"
+              : isAuthRestoring
+                ? "Restoring authentication"
+                : hasQueuedMessage
+                  ? "A message is already queued"
+                  : undefined
+          }
+          enableBashMode
+          enableCommands
+          modelSelector={
+            <PiSessionModelControls
+              taskId={taskId}
+              taskRunId={taskRunId}
+              session={session}
+              controller={piSessionController}
+              isOnline={isOnline}
+              onError={handleControllerError}
+            />
+          }
+          reasoningSelector={null}
+          messagingModeToggle={messagingModeToggle}
+          onToggleMessagingMode={toggleMessagingMode}
+          onPromptRecall={handlePromptRecall}
+          onSubmit={sendPrompt}
+          onBashCommand={runBashCommand}
+          onCancel={cancelPrompt}
+        />
+      )}
+      {!isCloud && (
+        <PiExtensionWidgets
+          widgets={currentExtensionState.widgets}
+          placement="belowEditor"
+        />
+      )}
+    </>
   );
 }

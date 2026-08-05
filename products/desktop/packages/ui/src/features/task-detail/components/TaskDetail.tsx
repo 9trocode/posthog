@@ -2,9 +2,17 @@ import { PI_SESSION_CONTROLLER } from "@posthog/core/pi-runtime/identifiers";
 import type { PiSessionController } from "@posthog/core/pi-runtime/piSessionController";
 import { isTaskActivelyRunning } from "@posthog/core/sidebar/taskRunning";
 import { useService } from "@posthog/di/react";
+import type { WorkspaceMode } from "@posthog/shared";
 import type { Task } from "@posthog/shared/domain-types";
 import { Box, Flex, Text, Tooltip } from "@radix-ui/themes";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useHotkeys, useHotkeysContext } from "react-hotkeys-hook";
 import { useStore } from "zustand";
 import { useBlurOnEscape } from "../../../hooks/useBlurOnEscape";
@@ -140,6 +148,50 @@ export function TaskDetail({
   useBlurOnEscape();
   useWorkspaceEvents(taskId);
 
+  const workspace = useWorkspace(taskId);
+  const workspaceMode = workspace?.mode;
+  const headerContent = useTaskHeaderContent({
+    channelId,
+    channelName,
+    effectiveRepoPath,
+    task,
+    taskId,
+    workspaceMode,
+  });
+  useSetHeaderContent(headerContent);
+
+  const isCloud =
+    workspace?.mode === "cloud" || task.latest_run?.environment === "cloud";
+
+  return (
+    <TaskDetailBody
+      isCloud={isCloud}
+      runtime={runtime}
+      selectedTaskRunId={selectedTaskRunId}
+      setShowArchiveConfirm={setShowArchiveConfirm}
+      showArchiveConfirm={showArchiveConfirm}
+      task={task}
+      taskId={taskId}
+      onArchive={runArchive}
+    />
+  );
+}
+
+function useTaskHeaderContent({
+  channelId,
+  channelName,
+  effectiveRepoPath,
+  task,
+  taskId,
+  workspaceMode,
+}: {
+  channelId: string | undefined;
+  channelName: string | undefined;
+  effectiveRepoPath: string | undefined;
+  task: Task;
+  taskId: string;
+  workspaceMode: WorkspaceMode | undefined;
+}) {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const isEditingTitle = editingTaskId === taskId;
   const { renameTask } = useRenameTask();
@@ -164,8 +216,7 @@ export function TaskDetail({
   const handleTitleEditCancel = useCallback(() => {
     setEditingTaskId(null);
   }, []);
-  // Inside a channel the thread also gets a "copy link" share affordance.
-  // Memoized so the headerContent memo below isn't busted by unrelated renders.
+
   const trailing = useMemo(
     () =>
       channelId ? (
@@ -173,13 +224,9 @@ export function TaskDetail({
       ) : null,
     [channelId, taskId],
   );
-  const workspace = useWorkspace(taskId);
-  const workspaceMode = workspace?.mode;
-  const headerContent = useMemo(
+
+  return useMemo(
     () =>
-      // Inside a channel, prefix the editable title with the channel
-      // breadcrumb ("# channel / title"); the plain Code view keeps the bare
-      // title. Both share the same inline-rename editor.
       channelName ? (
         <ChannelBreadcrumb
           channelName={channelName}
@@ -240,14 +287,30 @@ export function TaskDetail({
       handleTitleEditCancel,
     ],
   );
+}
 
-  useSetHeaderContent(headerContent);
-
+function TaskDetailBody({
+  isCloud,
+  runtime,
+  selectedTaskRunId,
+  setShowArchiveConfirm,
+  showArchiveConfirm,
+  task,
+  taskId,
+  onArchive,
+}: {
+  isCloud: boolean;
+  runtime: "pi" | "acp";
+  selectedTaskRunId: string | undefined;
+  setShowArchiveConfirm: (show: boolean) => void;
+  showArchiveConfirm: boolean;
+  task: Task;
+  taskId: string;
+  onArchive: () => Promise<void>;
+}) {
   const reviewMode = useReviewNavigationStore(
     (s) => s.reviewModes[taskId] ?? "closed",
   );
-  const isCloud =
-    workspace?.mode === "cloud" || task.latest_run?.environment === "cloud";
 
   const isReviewOpen = reviewMode !== "closed";
   const isExpanded = reviewMode === "expanded";
@@ -262,7 +325,7 @@ export function TaskDetail({
   const isDragging = useRef(false);
 
   const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
+    (e: ReactMouseEvent) => {
       e.preventDefault();
       isDragging.current = true;
 
@@ -352,7 +415,7 @@ export function TaskDetail({
         stopsCloudSandbox={task.latest_run?.environment === "cloud"}
         onConfirm={async () => {
           try {
-            await runArchive();
+            await onArchive();
           } finally {
             setShowArchiveConfirm(false);
           }
