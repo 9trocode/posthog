@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from parameterized import parameterized
 
-from products.slack_app.evals.scorers import MODEL_OVERRIDE_KEY, ModelOverrideMatch, NoUnaskedOverride
+from products.slack_app.evals.scorers import (
+    FOLLOWUP_KEY,
+    MODEL_OVERRIDE_KEY,
+    REPO_SELECTION_KEY,
+    ModelOverrideMatch,
+    NoDroppedFollowup,
+    NoUnaskedOverride,
+    SelectedExpectedRepository,
+    SelectionStageMatch,
+)
 
 ASKS_FOR_FABLE = {MODEL_OVERRIDE_KEY: {"model": "claude-fable-5", "reasoning_effort": None}}
 ASKS_FOR_NOTHING = {MODEL_OVERRIDE_KEY: {"model": None, "reasoning_effort": None}}
@@ -74,3 +83,71 @@ class TestNoUnaskedOverride:
         """
         score = NoUnaskedOverride().eval(output={"override": None, "error": "boom"}, expected=ASKS_FOR_NOTHING)
         assert score.score is None
+
+
+class TestNoDroppedFollowup:
+    """The follow-up suite's headline metric, so its denominator has to be right.
+
+    It reports a rate over replies that *were* meant for the agent. Scoring the chatter
+    cases too would dilute it with cases that were never at risk of a silent drop.
+    """
+
+    @parameterized.expand(
+        [
+            ("forwarded", {"agent_directed": True}, 1.0),
+            ("dropped", {"agent_directed": False}, 0.0),
+        ]
+    )
+    def test_scores_directed_cases(self, _name, output, want):
+        expected = {FOLLOWUP_KEY: {"agent_directed": True}}
+        assert NoDroppedFollowup().eval(output=output, expected=expected).score == want
+
+    @parameterized.expand([("stayed_asleep", {"agent_directed": False}), ("woke_up", {"agent_directed": True})])
+    def test_skips_chatter_cases(self, _name, output):
+        expected = {FOLLOWUP_KEY: {"agent_directed": False}}
+        assert NoDroppedFollowup().eval(output=output, expected=expected).score is None
+
+    def test_a_failed_call_counts_as_a_drop(self):
+        # The classifier returns False on error, which silently drops the message — the
+        # exact failure this scorer exists to count, so it must not skip away as infra noise.
+        expected = {FOLLOWUP_KEY: {"agent_directed": True}}
+        assert (
+            NoDroppedFollowup().eval(output={"agent_directed": None, "error": "boom"}, expected=expected).score == 0.0
+        )
+
+
+class TestSelectionStageMatch:
+    """Which stage answered is half the result: reaching the right repository through the
+    agent when the cascade should have caught it means every such mention now costs a sandbox."""
+
+    @parameterized.expand(
+        [
+            ("right_stage", {"stage": "cascade", "outcome": "auto"}, 1.0),
+            ("escalated_too_far", {"stage": "agent", "outcome": "found"}, 0.0),
+        ]
+    )
+    def test_scores(self, _name, output, want):
+        expected = {REPO_SELECTION_KEY: {"stage": "cascade", "outcome": "auto"}}
+        assert SelectionStageMatch().eval(output=output, expected=expected).score == want
+
+    def test_skips_when_the_case_declares_no_stage(self):
+        assert SelectionStageMatch().eval(output={"stage": "agent"}, expected={}).score is None
+
+
+class TestSelectedExpectedRepository:
+    @parameterized.expand(
+        [
+            ("picked_it", {"repository": "hedgebox/hedgebox-api"}, 1.0),
+            ("picked_another", {"repository": "hedgebox/hedgebox-www"}, 0.0),
+            ("picked_nothing", {"repository": None}, 0.0),
+        ]
+    )
+    def test_scores(self, _name, output, want):
+        expected = {REPO_SELECTION_KEY: {"stage": "agent", "outcome": "found", "repository": "hedgebox/hedgebox-api"}}
+        assert SelectedExpectedRepository().eval(output=output, expected=expected).score == want
+
+    def test_skips_cases_that_never_reach_a_repository(self):
+        # The Haiku gate's no-code decisions have no right answer here, and scoring them 0
+        # would report the gate working correctly as a selection failure.
+        expected = {REPO_SELECTION_KEY: {"stage": "haiku", "outcome": "no_repo"}}
+        assert SelectedExpectedRepository().eval(output={"repository": None}, expected=expected).score is None

@@ -322,3 +322,63 @@ class SelectedExpectedRepository(Scorer):
                 "reason": (output or {}).get("detail"),
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Untagged follow-up routing
+# ---------------------------------------------------------------------------
+
+FOLLOWUP_KEY = "followup_routing"
+
+
+class FollowupRoutingMatch(Scorer):
+    """Did the classifier route the reply the way a person in the thread would?"""
+
+    def _name(self) -> str:
+        return FOLLOWUP_KEY
+
+    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
+        want = (expected or {}).get(FOLLOWUP_KEY)
+        if want is None or "agent_directed" not in want:
+            return Score(name=self._name(), score=None, metadata={"reason": "No expectation for this case"})
+        if output and output.get("error"):
+            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
+
+        got = (output or {}).get("agent_directed")
+        return Score(
+            name=self._name(),
+            score=1.0 if got == want["agent_directed"] else 0.0,
+            metadata={"expected": want["agent_directed"], "actual": got},
+        )
+
+
+class NoDroppedFollowup(Scorer):
+    """The expensive direction: a real follow-up classified as side chatter.
+
+    The two errors cost differently, and the classifier is deliberately biased to say
+    yes because of it. Forwarding chatter wastes one agent turn that the thread can see
+    and correct. Dropping an instruction is silent — the agent keeps working on the old
+    understanding, and the human only finds out when the result is wrong and has to
+    re-tag ``@PostHog`` to recover.
+
+    Skips on cases that are genuinely side chatter, so the score reads as a rate over the
+    replies that were actually meant for the agent.
+    """
+
+    def _name(self) -> str:
+        return "no_dropped_followup"
+
+    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
+        want = (expected or {}).get(FOLLOWUP_KEY) or {}
+        if not want.get("agent_directed"):
+            return Score(name=self._name(), score=None, metadata={"reason": "Case is side chatter"})
+        if output and output.get("error"):
+            # A failed call returns False, which drops the message — the failure this
+            # scorer exists to count, so it is not skipped away as an infra blip.
+            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
+
+        return Score(
+            name=self._name(),
+            score=1.0 if (output or {}).get("agent_directed") else 0.0,
+            metadata={"actual": (output or {}).get("agent_directed")},
+        )
