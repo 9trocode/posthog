@@ -4072,6 +4072,9 @@ export interface Survey extends WithAccessControl {
             thankYouMessageHeader?: string
             thankYouMessageDescription?: string
             thankYouMessageCloseButtonText?: string
+            introScreenHeader?: string
+            introScreenDescription?: string
+            introScreenButtonText?: string
             submitButtonText?: string
             backButtonText?: string
         }
@@ -4143,6 +4146,14 @@ export interface SurveyAppearance {
     thankYouMessageDescription?: string
     thankYouMessageDescriptionContentType?: SurveyQuestionDescriptionContentType
     thankYouMessageCloseButtonText?: string
+    // Optional intro screen shown before the first question, the leading mirror of the
+    // confirmation message. Not a question: dismissing it records no response and it never
+    // counts toward completion or partial-response metrics.
+    displayIntroScreen?: boolean
+    introScreenHeader?: string
+    introScreenDescription?: string
+    introScreenDescriptionContentType?: SurveyQuestionDescriptionContentType
+    introScreenButtonText?: string
     autoDisappear?: boolean
     position?: SurveyPosition
     tabPosition?: SurveyTabPosition
