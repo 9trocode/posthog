@@ -27,7 +27,15 @@ function BannerMock({ item }: { item: EditableItem }) {
 }
 
 function ModalMock({ item }: { item: EditableItem }) {
-  const blocking = item.kind === "required-update";
+  const blocking = item.kind === "required-update" || item.requiresAck;
+  const primary =
+    item.kind === "required-update"
+      ? "Restart to update"
+      : item.minVersion
+        ? "Update now"
+        : item.requiresAck
+          ? item.ackLabel || "OK"
+          : item.ctaLabel || null;
   return (
     <div className="pv-scrim">
       <div className="pv-modal">
@@ -35,13 +43,7 @@ function ModalMock({ item }: { item: EditableItem }) {
         <p>{item.body || "Body text appears here. Markdown renders in-app."}</p>
         <div className="pv-modal-actions">
           {!blocking && <span className="pv-btn">Dismiss</span>}
-          {blocking || item.minVersion ? (
-            <span className="pv-btn pv-btn-solid">
-              {blocking ? "Restart to update" : "Update now"}
-            </span>
-          ) : item.ctaLabel ? (
-            <span className="pv-btn pv-btn-solid">{item.ctaLabel}</span>
-          ) : null}
+          {primary && <span className="pv-btn pv-btn-solid">{primary}</span>}
         </div>
       </div>
     </div>
@@ -50,7 +52,10 @@ function ModalMock({ item }: { item: EditableItem }) {
 
 /** The announcement as PostHog Desktop will render it, inside a mock window. */
 export function Preview({ item }: { item: EditableItem | null }) {
-  const isBanner = item?.kind === "announcement" && item.style === "banner";
+  const isBanner =
+    item?.kind === "announcement" &&
+    item.style === "banner" &&
+    !item.requiresAck;
   return (
     <div className="preview">
       <div className="pv-frame" aria-label="Preview of the desktop app">
@@ -86,14 +91,22 @@ export function Preview({ item }: { item: EditableItem | null }) {
             </li>
           ) : (
             <>
-              <li>
-                Dismissible. Dismissal is keyed on{" "}
-                <code>{item.id || "id"}</code> — change the id to resurface it.
-              </li>
+              {item.requiresAck ? (
+                <li>
+                  Blocks until acknowledged — updating counts as
+                  acknowledgement. Keyed on <code>{item.id || "id"}</code>.
+                </li>
+              ) : (
+                <li>
+                  Dismissible. Dismissal is keyed on{" "}
+                  <code>{item.id || "id"}</code> — change the id to resurface
+                  it.
+                </li>
+              )}
               {item.minVersion && (
                 <li>
                   Apps below <code>{item.minVersion}</code> get "Update now"
-                  instead of the CTA.
+                  instead of the {item.requiresAck ? "ack button" : "CTA"}.
                 </li>
               )}
             </>

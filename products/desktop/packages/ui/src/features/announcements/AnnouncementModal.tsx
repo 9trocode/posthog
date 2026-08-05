@@ -50,14 +50,28 @@ export function AnnouncementModal({
     dismiss(announcement.id);
   };
 
+  const acknowledge = (ackType: "ok" | "update") => {
+    track(ANALYTICS_EVENTS.ANNOUNCEMENT_ACKNOWLEDGED, {
+      ...analytics,
+      ack_type: ackType,
+    });
+    dismiss(announcement.id);
+  };
+
+  const blocking = announcement.requiresAck;
+
   return (
     <Dialog
       open
-      onOpenChange={(open) => {
-        if (!open) handleClose();
-      }}
+      onOpenChange={
+        blocking
+          ? undefined
+          : (open) => {
+              if (!open) handleClose();
+            }
+      }
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" showCloseButton={!blocking}>
         <div className="flex flex-col gap-4 px-5 pt-5 pb-5">
           <div className="flex flex-col gap-1.5">
             <DialogTitle className="font-semibold text-[17px] text-gray-12 tracking-tight">
@@ -68,22 +82,42 @@ export function AnnouncementModal({
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <Button variant="outline" size="sm" onClick={handleClose}>
-              Dismiss
-            </Button>
-            {needsUpdate ? (
-              <UpdateAction analytics={analytics} showProgress />
-            ) : announcement.cta ? (
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() =>
-                  announcement.cta && handleCta(announcement.cta.url)
-                }
-              >
-                {announcement.cta.label}
-              </Button>
-            ) : null}
+            {blocking ? (
+              needsUpdate ? (
+                <UpdateAction
+                  analytics={analytics}
+                  showProgress
+                  onActivated={() => acknowledge("update")}
+                />
+              ) : (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => acknowledge("ok")}
+                >
+                  {announcement.ackLabel ?? "OK"}
+                </Button>
+              )
+            ) : (
+              <>
+                <Button variant="outline" size="sm" onClick={handleClose}>
+                  Dismiss
+                </Button>
+                {needsUpdate ? (
+                  <UpdateAction analytics={analytics} showProgress />
+                ) : announcement.cta ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() =>
+                      announcement.cta && handleCta(announcement.cta.url)
+                    }
+                  >
+                    {announcement.cta.label}
+                  </Button>
+                ) : null}
+              </>
+            )}
           </div>
         </div>
       </DialogContent>

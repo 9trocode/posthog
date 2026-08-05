@@ -11,6 +11,8 @@ export interface EditableItem {
   minVersion: string;
   ctaLabel: string;
   ctaUrl: string;
+  requiresAck: boolean;
+  ackLabel: string;
 }
 
 export function blankItem(kind: EditableItem["kind"]): EditableItem {
@@ -25,6 +27,8 @@ export function blankItem(kind: EditableItem["kind"]): EditableItem {
     minVersion: "",
     ctaLabel: "",
     ctaUrl: "",
+    requiresAck: false,
+    ackLabel: "",
   };
 }
 
@@ -40,6 +44,8 @@ export function toEditable(items: Announcement[]): EditableItem[] {
     minVersion: item.minVersion ?? "",
     ctaLabel: item.kind === "announcement" ? (item.cta?.label ?? "") : "",
     ctaUrl: item.kind === "announcement" ? (item.cta?.url ?? "") : "",
+    requiresAck: item.kind === "announcement" ? item.requiresAck : false,
+    ackLabel: item.kind === "announcement" ? (item.ackLabel ?? "") : "",
   }));
 }
 
@@ -56,9 +62,12 @@ export function toPayloadItem(item: EditableItem): Record<string, unknown> {
     base.minVersion = item.minVersion;
     return base;
   }
-  base.style = item.style;
+  base.style = item.requiresAck ? "modal" : item.style;
   if (item.minVersion) base.minVersion = item.minVersion;
-  if (item.ctaLabel || item.ctaUrl) {
+  if (item.requiresAck) {
+    base.requiresAck = true;
+    if (item.ackLabel) base.ackLabel = item.ackLabel;
+  } else if (item.ctaLabel || item.ctaUrl) {
     base.cta = { label: item.ctaLabel, url: item.ctaUrl };
   }
   return base;

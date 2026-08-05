@@ -57,6 +57,15 @@ describe("announcements schema", () => {
       "announcement with minVersion nudge",
       { ...validAnnouncement, minVersion: "1.40.0" },
     ],
+    [
+      "requiresAck modal",
+      {
+        ...validAnnouncement,
+        style: "modal",
+        requiresAck: true,
+        ackLabel: "I understand",
+      },
+    ],
     ["required update", validRequiredUpdate],
   ])("accepts %s", (_name, input) => {
     expect(announcementSchema.safeParse(input).success).toBe(true);
@@ -92,6 +101,18 @@ describe("announcements schema", () => {
     [
       "required update with bad minVersion",
       { ...validRequiredUpdate, minVersion: "latest" },
+    ],
+    [
+      "requiresAck banner (implicit style)",
+      { ...validAnnouncement, requiresAck: true },
+    ],
+    [
+      "requiresAck banner (explicit style)",
+      { ...validAnnouncement, style: "banner", requiresAck: true },
+    ],
+    [
+      "empty ackLabel",
+      { ...validAnnouncement, style: "modal", requiresAck: true, ackLabel: "" },
     ],
   ])("rejects %s", (_name, input) => {
     expect(announcementSchema.safeParse(input).success).toBe(false);

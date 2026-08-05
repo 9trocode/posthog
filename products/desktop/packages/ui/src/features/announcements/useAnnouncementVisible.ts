@@ -5,8 +5,13 @@ export function useAnnouncementVisible(): boolean {
   return useActiveAnnouncement() !== null;
 }
 
-/** A blocking required-update announcement is on stage. */
+/** A blocking announcement (required-update or requiresAck) is on stage. */
 export function useBlockingAnnouncementVisible(): boolean {
   const active = useActiveAnnouncement();
-  return active !== null && active.announcement.kind === "required-update";
+  if (active === null) return false;
+  const { announcement } = active;
+  return (
+    announcement.kind === "required-update" ||
+    (announcement.kind === "announcement" && announcement.requiresAck)
+  );
 }

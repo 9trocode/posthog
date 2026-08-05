@@ -122,6 +122,16 @@ describe("selectAnnouncement", () => {
     expect(result.active?.needsUpdate).toBe(needsUpdate);
   });
 
+  it("retires an acknowledged requiresAck announcement", () => {
+    const result = select(
+      {
+        announcements: [announcement({ style: "modal", requiresAck: true })],
+      },
+      { dismissedIds: new Set(["a1"]) },
+    );
+    expect(result.active).toBeNull();
+  });
+
   it("skips dismissed announcements and falls through to the next", () => {
     const result = select(
       { announcements: [announcement(), announcement({ id: "a2" })] },

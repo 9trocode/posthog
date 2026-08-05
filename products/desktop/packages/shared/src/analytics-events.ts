@@ -1287,6 +1287,12 @@ export interface AnnouncementCtaClickedProperties
   cta_type: "external" | "deeplink" | "update";
 }
 
+export interface AnnouncementAcknowledgedProperties
+  extends AnnouncementProperties {
+  /** "ok" = the ack button; "update" = an update action counted as the ack. */
+  ack_type: "ok" | "update";
+}
+
 // Event names as constants
 export const ANALYTICS_EVENTS = {
   // App lifecycle
@@ -1465,6 +1471,7 @@ export const ANALYTICS_EVENTS = {
   ANNOUNCEMENT_SHOWN: "Announcement shown",
   ANNOUNCEMENT_DISMISSED: "Announcement dismissed",
   ANNOUNCEMENT_CTA_CLICKED: "Announcement CTA clicked",
+  ANNOUNCEMENT_ACKNOWLEDGED: "Announcement acknowledged",
 
   // Loops events
   LOOP_LIST_VIEWED: "Loop list viewed",
@@ -1649,6 +1656,7 @@ export type EventPropertyMap = {
   [ANALYTICS_EVENTS.ANNOUNCEMENT_SHOWN]: AnnouncementProperties;
   [ANALYTICS_EVENTS.ANNOUNCEMENT_DISMISSED]: AnnouncementProperties;
   [ANALYTICS_EVENTS.ANNOUNCEMENT_CTA_CLICKED]: AnnouncementCtaClickedProperties;
+  [ANALYTICS_EVENTS.ANNOUNCEMENT_ACKNOWLEDGED]: AnnouncementAcknowledgedProperties;
 
   // Loops events
   [ANALYTICS_EVENTS.LOOP_LIST_VIEWED]: LoopListViewedProperties;

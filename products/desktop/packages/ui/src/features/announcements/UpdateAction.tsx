@@ -23,9 +23,12 @@ const MANUAL_DOWNLOAD_URL = "https://github.com/PostHog/code/releases/latest";
 export function UpdateAction({
   analytics,
   showProgress = false,
+  onActivated,
 }: {
   analytics: AnnouncementProperties;
   showProgress?: boolean;
+  /** Fired when the user takes an update action (download/restart/manual). */
+  onActivated?: () => void;
 }) {
   const { status, isEnabled, downloadPercent } = useUpdateView();
   const installUpdate = useInstallUpdate();
@@ -51,6 +54,7 @@ export function UpdateAction({
       ...analytics,
       cta_type: "update",
     });
+    onActivated?.();
   };
 
   if (!isEnabled) {
@@ -119,22 +123,19 @@ export function UpdateAction({
     );
   }
 
-  if (status === "error") {
+  if (status === "checking" || isCheckPending) {
     return (
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={isCheckPending}
-        onClick={() => runCheck(undefined)}
-      >
-        Retry update check
+      <Button variant="outline" size="sm" disabled>
+        Checking for updates…
       </Button>
     );
   }
 
+  // Idle after the kicked check means it found nothing or failed — leave the
+  // user a way to retry.
   return (
-    <Button variant="outline" size="sm" disabled>
-      Checking for updates…
+    <Button variant="outline" size="sm" onClick={() => runCheck(undefined)}>
+      Check for updates
     </Button>
   );
 }

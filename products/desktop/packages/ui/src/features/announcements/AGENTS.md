@@ -28,14 +28,21 @@ AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
 
 ## The two kinds
 
-- `kind: "announcement"` — a feature announcement everyone sees, always
-  dismissible, `style: "banner" | "modal"`. Optional `minVersion` means "the
-  announced feature needs at least this version": apps below it get an
-  "Update now" action (`UpdateAction`) in place of the `cta`; apps at or
-  above it get the `cta`.
+- `kind: "announcement"` — a feature announcement everyone sees,
+  `style: "banner" | "modal"`. Optional `minVersion` means "the announced
+  feature needs at least this version": apps below it get an "Update now"
+  action (`UpdateAction`) in place of the `cta`; apps at or above it get the
+  `cta`. Dismissible unless `requiresAck`.
+  - `requiresAck: true` (modal only — the schema rejects banners) blocks
+    until the user explicitly acts: no dismiss, no Esc. Up-to-date users get
+    the ack button (`ackLabel`, default "OK"); users below `minVersion` get
+    the update action instead, and **updating counts as acknowledging** — the
+    ack records on the update click, so nobody re-sees it after restarting.
 - `kind: "required-update"` — shown **only** to apps below its required
   `minVersion`: a blocking, non-dismissible modal (`RequiredUpdateModal`)
-  that drives the existing update flow. Users already up to date never see it.
+  that drives the existing update flow. Users already up to date never see
+  it. For "everyone must confirm they saw this" use
+  `announcement` + `requiresAck` instead.
 
 ## Precedence
 

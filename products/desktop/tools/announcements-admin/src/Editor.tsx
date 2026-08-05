@@ -295,9 +295,10 @@ export function Editor({
                 </label>
                 {item.kind === "announcement" && (
                   <label>
-                    style
+                    style{item.requiresAck && " — modal while ack required"}
                     <select
-                      value={item.style}
+                      value={item.requiresAck ? "modal" : item.style}
+                      disabled={item.requiresAck}
                       onChange={(e) =>
                         update(index, {
                           style: e.target.value as EditableItem["style"],
@@ -312,6 +313,34 @@ export function Editor({
               </div>
 
               {item.kind === "announcement" && (
+                <div className="grid">
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={item.requiresAck}
+                      onChange={(e) =>
+                        update(index, { requiresAck: e.target.checked })
+                      }
+                    />
+                    require acknowledgement — blocks until confirmed; updating
+                    counts
+                  </label>
+                  {item.requiresAck && (
+                    <label>
+                      ack button label
+                      <input
+                        placeholder="OK"
+                        value={item.ackLabel}
+                        onChange={(e) =>
+                          update(index, { ackLabel: e.target.value })
+                        }
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+
+              {item.kind === "announcement" && !item.requiresAck && (
                 <div className="grid">
                   <label>
                     button label — optional

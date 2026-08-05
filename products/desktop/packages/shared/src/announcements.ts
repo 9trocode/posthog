@@ -28,29 +28,51 @@ const baseAnnouncementShape = {
   endsAt: z.iso.datetime({ offset: true }).optional(),
 };
 
-export const announcementSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ...baseAnnouncementShape,
-    kind: z.literal("announcement"),
-    style: z.enum(["banner", "modal"]).default("banner"),
-    cta: z.object({ label: z.string().min(1), url: ctaUrlSchema }).optional(),
-    /**
-     * The announced feature needs at least this app version. Apps below it
-     * show an "Update now" action in place of the cta; apps at or above it
-     * show the cta. Dismissible and shown to everyone either way.
-     */
-    minVersion: versionSchema.optional(),
-  }),
-  z.object({
-    ...baseAnnouncementShape,
-    kind: z.literal("required-update"),
-    /**
-     * Rendered only when the running app is below this version — blocking and
-     * non-dismissible. Users already at or above it never see anything.
-     */
-    minVersion: versionSchema,
-  }),
-]);
+export const announcementSchema = z
+  .discriminatedUnion("kind", [
+    z.object({
+      ...baseAnnouncementShape,
+      kind: z.literal("announcement"),
+      style: z.enum(["banner", "modal"]).default("banner"),
+      cta: z.object({ label: z.string().min(1), url: ctaUrlSchema }).optional(),
+      /**
+       * The announced feature needs at least this app version. Apps below it
+       * show an "Update now" action in place of the cta; apps at or above it
+       * show the cta.
+       */
+      minVersion: versionSchema.optional(),
+      /**
+       * Blocks until explicitly acknowledged: no dismiss, no Esc — only the
+       * ack button, or the update action when the app is below minVersion
+       * (updating counts as acknowledging). Modal style only.
+       */
+      requiresAck: z.boolean().default(false),
+      /** Ack button label; the app defaults it to "OK". */
+      ackLabel: z.string().min(1).optional(),
+    }),
+    z.object({
+      ...baseAnnouncementShape,
+      kind: z.literal("required-update"),
+      /**
+       * Rendered only when the running app is below this version — blocking and
+       * non-dismissible. Users already at or above it never see anything.
+       */
+      minVersion: versionSchema,
+    }),
+  ])
+  .superRefine((item, ctx) => {
+    if (
+      item.kind === "announcement" &&
+      item.requiresAck &&
+      item.style !== "modal"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["style"],
+        message: 'requiresAck announcements must use style: "modal"',
+      });
+    }
+  });
 
 /**
  * Loose envelope: items are validated one by one with announcementSchema so a
