@@ -9,7 +9,13 @@ from django.utils import timezone
 import structlog
 import django_filters
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_field, extend_schema_view
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_field,
+    extend_schema_view,
+)
 from pydantic import ValidationError as PydanticValidationError
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -27,6 +33,7 @@ from posthog.models.user import User
 from posthog.rbac.access_control_api_mixin import AccessControlViewSetMixin
 from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 
+from products.replay_vision.backend.api.errors import ReplayVisionErrorSerializer
 from products.replay_vision.backend.api.filters import (
     MultiChoiceFilter,
     OrderByFilter,
@@ -1197,7 +1204,12 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
 
     @extend_schema(
         request=ObserveRequestSerializer,
-        responses={202: ObserveResponseSerializer},
+        responses={
+            202: ObserveResponseSerializer,
+            503: OpenApiResponse(
+                response=ReplayVisionErrorSerializer, description="The observation workflow couldn't be started."
+            ),
+        },
     )
     @action(
         detail=True,
@@ -1235,7 +1247,8 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
             raise Throttled(detail="This team is at its in-flight observation limit. Try again in a few minutes.")
         if outcome is WorkflowStartOutcome.FAILED:
             return Response(
-                {"error": "Failed to start observation workflow"},
+                # `detail` (not `error`) so ApiError carries the message into the frontend toast.
+                {"detail": "Failed to start the observation. Try again in a moment."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
@@ -1368,9 +1381,10 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
         cost = observation_credits_for_model(scanner.model)
         # Skip the aggregate entirely for the uncapped common case, as check_scanner_quota does.
         scanner_remaining = compute_scanner_budget(scanner).remaining if scanner.credit_limit is not None else None
-        # Uncapped (remaining None) means that limit never binds. Otherwise, how many of THIS model's cost fit.
-        org_limit = in_flight_limit if snapshot.remaining is None else (snapshot.remaining // cost if cost else 0)
-        scanner_limit = in_flight_limit if scanner_remaining is None else (scanner_remaining // cost if cost else 0)
+        # Uncapped (remaining None), or a free model that spends nothing: that limit can't bind.
+        # Otherwise, how many of THIS model's cost fit.
+        org_limit = in_flight_limit if snapshot.remaining is None or cost <= 0 else snapshot.remaining // cost
+        scanner_limit = in_flight_limit if scanner_remaining is None or cost <= 0 else scanner_remaining // cost
         # Report whichever limit is strictly tighter, so the user knows which one to raise.
         if scanner_limit < in_flight_limit and scanner_limit <= org_limit:
             return scanner_limit, "skipped_scanner_limit", team_in_flight, scanner_in_flight
@@ -1529,7 +1543,12 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
 
     @extend_schema(
         request=SuggestTagsRequestSerializer,
-        responses={200: SuggestTagsResponseSerializer},
+        responses={
+            200: SuggestTagsResponseSerializer,
+            503: OpenApiResponse(
+                response=ReplayVisionErrorSerializer, description="Tag suggestions couldn't be generated."
+            ),
+        },
     )
     @action(
         detail=False,
@@ -1568,7 +1587,7 @@ class ReplayScannerViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixin, vi
             )
         except SuggestionError:
             return Response(
-                {"error": "Couldn't generate tag suggestions right now. Please try again."},
+                {"detail": "Couldn't generate tag suggestions right now. Try again in a moment."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
