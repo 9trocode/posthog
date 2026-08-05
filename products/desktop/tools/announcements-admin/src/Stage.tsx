@@ -1,12 +1,11 @@
-import type { HERO_HEDGEHOGS } from "@posthog/shared/announcements";
-import { useEffect, useState } from "react";
+import { assets as hoggieCatalog } from "@posthog/brand/hoggies/metadata";
+import { HERO_HEDGEHOGS, hoggiePngUrl } from "@posthog/shared/announcements";
+import { useEffect, useMemo, useState } from "react";
 import builderHog from "./assets/hedgehogs/builder-hog-03.png";
 import explorerHog from "./assets/hedgehogs/explorer-hog.png";
 import happyHog from "./assets/hedgehogs/happy-hog.png";
 import loopHog from "./assets/hedgehogs/loop-hog.svg";
 import type { EditableItem } from "./items";
-
-const HEDGEHOGS = ["builder", "explorer", "happy", "loop"] as const;
 
 const HEDGEHOG_SRC: Record<(typeof HERO_HEDGEHOGS)[number], string> = {
   builder: builderHog,
@@ -14,6 +13,14 @@ const HEDGEHOG_SRC: Record<(typeof HERO_HEDGEHOGS)[number], string> = {
   happy: happyHog,
   loop: loopHog,
 };
+
+/** Bundled names render from local assets; catalog slugs from the brand CDN. */
+function hoggieSrc(slug: string): string {
+  return (
+    (HEDGEHOG_SRC as Record<string, string | undefined>)[slug] ??
+    hoggiePngUrl(slug)
+  );
+}
 
 type Patch = Partial<EditableItem>;
 type OnChange = (patch: Patch) => void;
@@ -121,12 +128,95 @@ function HeroBand({ item }: { item: EditableItem }) {
       style={{ backgroundColor: item.heroColor || defaultColor(item.kind) }}
     >
       <GeometricPattern />
-      <img
-        className="st-hero-hog"
-        src={HEDGEHOG_SRC[item.heroHedgehog]}
-        alt=""
-      />
+      <img className="st-hero-hog" src={hoggieSrc(item.heroHedgehog)} alt="" />
       <div className="st-hero-fade" />
+    </div>
+  );
+}
+
+function HoggiePicker({
+  item,
+  onChange,
+}: {
+  item: EditableItem;
+  onChange: OnChange;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const active = item.heroType === "hedgehog";
+
+  const results = useMemo(() => {
+    const bundled = HERO_HEDGEHOGS.map((slug) => ({
+      slug: slug as string,
+      name: `${slug} · built-in`,
+      tags: [] as string[],
+    }));
+    const catalog = hoggieCatalog.map((a) => ({
+      slug: a.slug,
+      name: a.name,
+      tags: a.tags ?? [],
+    }));
+    const all = [...bundled, ...catalog];
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (h) =>
+        h.name.toLowerCase().includes(q) ||
+        h.slug.includes(q) ||
+        h.tags.some((t) => t.toLowerCase().includes(q)),
+    );
+  }, [query]);
+
+  return (
+    <div className="hog-pick">
+      <button
+        type="button"
+        className={active ? "hog-current hog-current-active" : "hog-current"}
+        title="Pick a hedgehog for the hero band"
+        onClick={() => {
+          if (!active) onChange({ heroType: "hedgehog" });
+          setOpen((o) => !o);
+        }}
+      >
+        <img src={hoggieSrc(item.heroHedgehog)} alt="" />
+        <span>{item.heroHedgehog}</span>
+        <span aria-hidden>▾</span>
+      </button>
+      {open && (
+        <div className="hog-panel">
+          <input
+            className="hog-search mono"
+            aria-label="Search hoggies"
+            placeholder={`Search ${HERO_HEDGEHOGS.length + hoggieCatalog.length} hoggies…`}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <div className="hog-grid">
+            {results.map((h) => (
+              <button
+                key={h.slug}
+                type="button"
+                title={h.name}
+                className={
+                  active && item.heroHedgehog === h.slug
+                    ? "hog-cell hog-cell-active"
+                    : "hog-cell"
+                }
+                onClick={() => {
+                  onChange({ heroType: "hedgehog", heroHedgehog: h.slug });
+                  setOpen(false);
+                }}
+              >
+                <img src={hoggieSrc(h.slug)} alt="" loading="lazy" />
+                <span>{h.name}</span>
+              </button>
+            ))}
+            {results.length === 0 && (
+              <p className="hog-none">No hoggies match.</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -307,23 +397,7 @@ export function Stage({
         )}
         {!isBanner && (
           <div className="hero-tools">
-            {HEDGEHOGS.map((name) => (
-              <button
-                key={name}
-                type="button"
-                className={
-                  item.heroType === "hedgehog" && item.heroHedgehog === name
-                    ? "hog-chip hog-chip-active"
-                    : "hog-chip"
-                }
-                title={`${name} hedgehog`}
-                onClick={() =>
-                  onChange({ heroType: "hedgehog", heroHedgehog: name })
-                }
-              >
-                <img src={HEDGEHOG_SRC[name]} alt={name} />
-              </button>
-            ))}
+            <HoggiePicker item={item} onChange={onChange} />
             <input
               type="color"
               className="hog-color"

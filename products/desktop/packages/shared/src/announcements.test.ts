@@ -72,6 +72,10 @@ describe("announcements schema", () => {
       { ...validAnnouncement, hero: { hedgehog: "builder", color: "#2f80fa" } },
     ],
     [
+      "brand-catalog hoggie hero",
+      { ...validAnnouncement, hero: { hedgehog: "dr-manhattan" } },
+    ],
+    [
       "image hero",
       { ...validAnnouncement, hero: { imageUrl: "https://posthog.com/x.png" } },
     ],
@@ -125,9 +129,10 @@ describe("announcements schema", () => {
       { ...validAnnouncement, style: "modal", requiresAck: true, ackLabel: "" },
     ],
     [
-      "unknown hero hedgehog",
-      { ...validAnnouncement, hero: { hedgehog: "max" } },
+      "non-slug hero hedgehog",
+      { ...validAnnouncement, hero: { hedgehog: "Not A Slug" } },
     ],
+    ["empty hero hedgehog", { ...validAnnouncement, hero: { hedgehog: "" } }],
     [
       "non-hex hero color",
       { ...validAnnouncement, hero: { hedgehog: "happy", color: "blue" } },

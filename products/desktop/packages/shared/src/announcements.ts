@@ -18,7 +18,17 @@ const ctaUrlSchema = z
     message: "must be an https:// URL or a posthog-code:// deep link",
   });
 
+/** Hedgehogs bundled into the app — these render without any network. */
 export const HERO_HEDGEHOGS = ["builder", "explorer", "happy", "loop"] as const;
+
+/**
+ * Hoggie PNGs for hero hedgehogs beyond the bundled four, pinned to the npm
+ * release of PostHog/brand so the URLs stay immutable. Browse the catalog at
+ * https://brand.posthog.com/hoggies.
+ */
+export function hoggiePngUrl(slug: string): string {
+  return `https://cdn.jsdelivr.net/npm/@posthog/brand@0.9.0/dist/generated/hoggies/png/${slug}.png`;
+}
 
 /**
  * The modal's hero band. Absent = a default hedgehog; "none" = plain modal.
@@ -26,7 +36,12 @@ export const HERO_HEDGEHOGS = ["builder", "explorer", "happy", "loop"] as const;
  */
 const heroSchema = z.union([
   z.object({
-    hedgehog: z.enum(HERO_HEDGEHOGS),
+    /**
+     * A bundled name (HERO_HEDGEHOGS) or any hoggie slug from PostHog/brand.
+     * Non-bundled slugs load from the pinned CDN copy (hoggiePngUrl) and fall
+     * back to the default hedgehog when unreachable.
+     */
+    hedgehog: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
     /** Band background, hex only. Defaults to PostHog blue. */
     color: z
       .string()

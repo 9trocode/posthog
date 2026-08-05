@@ -1,6 +1,7 @@
-import type {
-  HERO_HEDGEHOGS,
-  AnnouncementHero as HeroConfig,
+import {
+  type HERO_HEDGEHOGS,
+  type AnnouncementHero as HeroConfig,
+  hoggiePngUrl,
 } from "@posthog/shared/announcements";
 import {
   builderHog,
@@ -8,6 +9,7 @@ import {
   happyHog,
   loopHog,
 } from "@posthog/ui/assets/hedgehogs";
+import { useState } from "react";
 
 type HedgehogName = (typeof HERO_HEDGEHOGS)[number];
 
@@ -19,6 +21,10 @@ const HEDGEHOG_SRC: Record<HedgehogName, string> = {
 };
 
 const DEFAULT_COLOR = "#2f80fa";
+
+function bundledSrc(slug: string): string | undefined {
+  return (HEDGEHOG_SRC as Record<string, string | undefined>)[slug];
+}
 
 function GeometricPattern() {
   return (
@@ -97,6 +103,31 @@ function GeometricPattern() {
 }
 
 /**
+ * Any hoggie by slug: bundled names render from local assets, everything else
+ * streams from the pinned PostHog/brand CDN copy and falls back to the
+ * kind-default hedgehog when unreachable (offline, unknown slug).
+ */
+function HoggieImage({
+  slug,
+  fallback,
+}: {
+  slug: string;
+  fallback: HedgehogName;
+}) {
+  const [failed, setFailed] = useState(false);
+  const local = bundledSrc(slug);
+  const src = local ?? (failed ? HEDGEHOG_SRC[fallback] : hoggiePngUrl(slug));
+  return (
+    <img
+      src={src}
+      alt=""
+      className="relative h-28 w-auto object-contain"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+/**
  * Modal hero band, styled after the Loops promo dialog: a colored band with a
  * hedgehog by default, a remote image when the payload provides one, nothing
  * when the payload opts out.
@@ -135,11 +166,7 @@ export function AnnouncementHero({
       style={{ backgroundColor: color }}
     >
       <GeometricPattern />
-      <img
-        src={HEDGEHOG_SRC[hedgehog]}
-        alt=""
-        className="relative h-28 w-auto object-contain"
-      />
+      <HoggieImage key={hedgehog} slug={hedgehog} fallback={defaultHedgehog} />
       <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-(--background)" />
     </div>
   );

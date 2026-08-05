@@ -1,3 +1,4 @@
+import { MultiFileDiff } from "@pierre/diffs/react";
 import { announcementsPayloadSchema } from "@posthog/shared/announcements";
 import { useMemo, useState } from "react";
 import { z } from "zod";
@@ -12,6 +13,15 @@ import {
   toPayloadItem,
 } from "./items";
 import { Stage } from "./Stage";
+
+const DIFF_OPTIONS = {
+  theme: { dark: "github-dark", light: "github-light" },
+  themeType: "light",
+  diffStyle: "split",
+  overflow: "wrap",
+  disableFileHeader: true,
+  tokenizeMaxLineLength: 1000,
+} as const;
 
 function rolloutLabel(flag: FlagRecord): { text: string; live: boolean } {
   if (!flag.active) return { text: "flag disabled", live: false };
@@ -93,6 +103,24 @@ export function Editor({
       ),
     [items, suppressChangelog],
   );
+
+  // The live payload, normalized through the same editor model so the diff
+  // shows real changes rather than key-order or formatting noise.
+  const liveJson = useMemo(
+    () =>
+      initial === null
+        ? null
+        : JSON.stringify(
+            {
+              announcements: initial.items.map(toPayloadItem),
+              suppressChangelog: initial.suppressChangelog,
+            },
+            null,
+            2,
+          ),
+    [initial],
+  );
+  const dirty = liveJson !== payloadJson;
 
   const update = (index: number, patch: Partial<EditableItem>) => {
     setItems((prev) =>
@@ -389,6 +417,19 @@ export function Editor({
             </p>
           )}
 
+          {dirty && liveJson !== null && (
+            <details className="json diff" open>
+              <summary>Review diff vs live</summary>
+              <div className="diff-view">
+                <MultiFileDiff
+                  oldFile={{ name: "payload.json", contents: liveJson }}
+                  newFile={{ name: "payload.json", contents: payloadJson }}
+                  options={DIFF_OPTIONS}
+                />
+              </div>
+            </details>
+          )}
+
           {errors.length > 0 && (
             <ul className="errors">
               {errors.map((error) => (
@@ -401,7 +442,7 @@ export function Editor({
             <button
               type="button"
               className="btn btn-publish"
-              disabled={saving}
+              disabled={saving || !dirty}
               onClick={() => void publish()}
             >
               {saving ? "Publishing…" : "Publish"}
@@ -409,7 +450,9 @@ export function Editor({
             <span className="publish-note">
               {published
                 ? "Published — live wherever the flag is rolled out."
-                : "Writes the flag payload. Rollout % is unchanged."}
+                : dirty
+                  ? "Writes the flag payload. Rollout % is unchanged."
+                  : "Editor matches the live payload."}
             </span>
           </div>
 

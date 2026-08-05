@@ -29,9 +29,13 @@ AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
   mounted beside `UsageBillingAnnouncementModal`).
 - Modals open with a hero band (`AnnouncementHero`, styled after the Loops
   promo dialog): a hedgehog on a colored band by default, overridable per item
-  via `hero` — `{ "hedgehog": "builder" | "explorer" | "happy" | "loop",
-  "color": "#rrggbb" }`, `{ "imageUrl": "https://…" }`, or `{ "none": true }`
-  for a plain modal. Banners never render a hero.
+  via `hero` — `{ "hedgehog": "<slug>", "color": "#rrggbb" }`,
+  `{ "imageUrl": "https://…" }`, or `{ "none": true }` for a plain modal.
+  The slug is a bundled name (`builder`, `explorer`, `happy`, `loop` — local
+  assets, no network) or any hoggie slug from
+  [PostHog/brand](https://brand.posthog.com/hoggies), loaded from a CDN copy
+  pinned to the package release (`hoggiePngUrl`) with a fallback to the
+  default hedgehog when unreachable. Banners never render a hero.
 
 ## The two kinds
 

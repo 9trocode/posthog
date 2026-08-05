@@ -1,7 +1,4 @@
-import type {
-  Announcement,
-  HERO_HEDGEHOGS,
-} from "@posthog/shared/announcements";
+import type { Announcement } from "@posthog/shared/announcements";
 
 export interface EditableItem {
   kind: "announcement" | "required-update";
@@ -17,7 +14,8 @@ export interface EditableItem {
   requiresAck: boolean;
   ackLabel: string;
   heroType: "hedgehog" | "image" | "none";
-  heroHedgehog: (typeof HERO_HEDGEHOGS)[number];
+  /** A bundled hedgehog name or any PostHog/brand hoggie slug. */
+  heroHedgehog: string;
   heroColor: string;
   heroImageUrl: string;
 }
