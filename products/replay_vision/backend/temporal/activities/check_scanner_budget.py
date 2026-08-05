@@ -7,8 +7,10 @@ from products.replay_vision.backend.temporal.metrics import record_sweep_outcome
 from products.replay_vision.backend.temporal.sweep_types import CheckScannerBudgetInputs, CheckScannerBudgetOutput
 
 
-def _notify_limit_reached(scanner: ReplayScanner) -> None:
-    """Best-effort realtime notification; a failure here must never affect the sweep's pause decision."""
+def _notify_limit_reached(scanner: ReplayScanner) -> bool:
+    """Best-effort realtime notification; a failure here must never affect the sweep's pause decision.
+    False means the send raised; a deliberate skip inside the pipeline (flag off, nobody to notify)
+    still counts as sent, so it is not retried every tick."""
     try:
         from posthog.models import User  # noqa: PLC0415
         from posthog.rbac.user_access_control import UserAccessControl  # noqa: PLC0415
@@ -65,6 +67,8 @@ def _notify_limit_reached(scanner: ReplayScanner) -> None:
             extra={"scanner_id": str(scanner.id), "team_id": scanner.team_id},
             exc_info=True,
         )
+        return False
+    return True
 
 
 @activity.defn
@@ -89,7 +93,10 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
         return CheckScannerBudgetOutput(capped=False)
     if scanner.credit_limit is None:
         return CheckScannerBudgetOutput(capped=False)
-    budget = compute_scanner_budget(scanner)
+    # One period resolution feeds both the cap decision and the notification stamp, so a tick that
+    # spans a rollover or a billing sync cannot bind them to different periods.
+    period = current_period_bounds(scanner.team.organization_id)
+    budget = compute_scanner_budget(scanner, period)
     if not budget.blocked:
         return CheckScannerBudgetOutput(capped=False)
     if not budget.blocked_by_settled_spend:
@@ -110,16 +117,22 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
     # Only genuine settled exhaustion is notified: the in-flight-only branch above is a transient
     # spike that may clear itself within minutes as reservations release, and notifying there could
     # tell a user their scanner stopped when it's about to resume on its own.
-    period_start = current_period_bounds(scanner.team.organization_id).start
-    should_notify = scanner.limit_notified_period_start != period_start
     # `.update` bypasses the model's version-tracking save(), matching how the watermark is advanced.
-    # Stamping the notification flag in the same call means a crash between here and the send below
-    # can only skip a notification, never send one without recording that it happened.
-    ReplayScanner.objects.filter(pk=scanner.pk).update(
-        last_swept_at=initial_watermark(),
-        last_seen_session_id="",
-        limit_notified_period_start=period_start,
+    # The stamp is claimed in the same UPDATE's WHERE, so of two racing ticks (a timed-out zombie
+    # attempt overlapping the next) exactly one wins the send, and a crash between here and the send
+    # below can only skip a notification, never send one without recording that it happened.
+    stamped = (
+        ReplayScanner.objects.filter(pk=scanner.pk)
+        .exclude(limit_notified_period_start=period.start)
+        .update(
+            last_swept_at=initial_watermark(),
+            last_seen_session_id="",
+            limit_notified_period_start=period.start,
+        )
     )
+    if not stamped:
+        # Already notified this period; still advance the watermark past the skipped window.
+        ReplayScanner.objects.filter(pk=scanner.pk).update(last_swept_at=initial_watermark(), last_seen_session_id="")
     activity.logger.info(
         "Sweep skipped: scanner credit limit reached",
         extra={
@@ -131,6 +144,10 @@ def check_scanner_budget_activity(inputs: CheckScannerBudgetInputs) -> CheckScan
     )
     # Sent after the update commits: an email or realtime push can't be un-sent, so it must never
     # fire ahead of (or inside a transaction with) the state that records it happened.
-    if should_notify:
-        _notify_limit_reached(scanner)
+    if stamped and not _notify_limit_reached(scanner):
+        # The send raised before anything went out; hand the claim back so a transient outage
+        # delays the period's one notification instead of consuming it.
+        ReplayScanner.objects.filter(pk=scanner.pk, limit_notified_period_start=period.start).update(
+            limit_notified_period_start=None
+        )
     return CheckScannerBudgetOutput(capped=True)

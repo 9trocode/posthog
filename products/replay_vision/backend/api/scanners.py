@@ -576,6 +576,9 @@ class ReplayScannerSerializer(UserAccessControlSerializerMixin, serializers.Mode
         # The UI PATCHes the whole form on save, so edits are detected by comparing values, not keys.
         before = {field: getattr(instance, field) for field in validated_data}
         was_enabled = instance.enabled
+        if "credit_limit" in validated_data and validated_data["credit_limit"] != instance.credit_limit:
+            # A changed limit starts a fresh notification cycle: reaching the new limit is news.
+            instance.limit_notified_period_start = None
         try:
             scanner = super().update(instance, validated_data)
         except IntegrityError as e:

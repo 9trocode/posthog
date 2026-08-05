@@ -438,6 +438,79 @@ def test_limit_notification_excludes_users_denied_on_the_scanner() -> None:
     assert denied.id not in recipients
 
 
+@pytest.mark.django_db(transaction=True)
+def test_limit_notification_is_delivered_end_to_end() -> None:
+    # Everything real except the remote feature flag and Kafka: the resolver, the notifications
+    # pipeline's own access and preference filters, and the persisted event. Mock-only coverage
+    # let the whole delivery path regress invisibly.
+    from posthog.models import User
+
+    from products.notifications.backend.models import NotificationEvent
+
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(credit_limit=limit)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
+    member = User.objects.create_and_join(scanner.team.organization, "member@posthog.com", "testtest")
+
+    with (
+        patch("products.notifications.backend.logic.posthoganalytics.feature_enabled", return_value=True),
+        patch("products.notifications.backend.logic._publish_to_kafka"),
+    ):
+        output = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    assert output.capped is True
+    event = NotificationEvent.objects.get(resource_type="replay_scanner", resource_id=str(scanner.id))
+    assert member.id in event.resolved_user_ids
+    assert event.source_url == f"/replay-vision/{scanner.id}"
+    assert scanner.name in event.title
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failed_send_returns_the_notification_to_the_next_tick() -> None:
+    # A transient pipeline outage must delay the period's one notification, not consume it.
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(credit_limit=limit)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
+
+    with patch(
+        "products.notifications.backend.facade.api.create_notification", side_effect=RuntimeError("pipeline down")
+    ):
+        check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    scanner.refresh_from_db()
+    assert scanner.limit_notified_period_start is None
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    mock_notify.assert_called_once()
+    scanner.refresh_from_db()
+    assert scanner.limit_notified_period_start is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_raising_the_limit_rearms_the_notification_for_the_same_period() -> None:
+    # Editing the limit clears the stamp (see the serializer), so hitting the raised limit later in
+    # the same period notifies again instead of staying silent until the next period.
+    limit = 20 * _OBSERVATION_CREDITS
+    scanner = _make_scanner(credit_limit=limit)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+    mock_notify.assert_called_once()
+
+    # The user raises the limit; the serializer clears the stamp alongside.
+    ReplayScanner.objects.filter(pk=scanner.pk).update(credit_limit=2 * limit, limit_notified_period_start=None)
+    seed_scanner_spend(scanner, _OBSERVATION_CREDITS, observations=20)
+
+    with patch("products.notifications.backend.facade.api.create_notification") as mock_notify:
+        output = check_scanner_budget_activity(CheckScannerBudgetInputs(scanner_id=scanner.id, team_id=scanner.team_id))
+
+    assert output.capped is True
+    mock_notify.assert_called_once()
+
+
 # SweepScannerWorkflow (mocked-Temporal)
 
 
