@@ -58,7 +58,11 @@ export function Preview({ item }: { item: EditableItem | null }) {
     !item.requiresAck;
   return (
     <div className="preview">
-      <div className="pv-frame" aria-label="Preview of the desktop app">
+      <div
+        className="pv-frame"
+        role="img"
+        aria-label="Preview of the desktop app"
+      >
         <div className="pv-titlebar" aria-hidden>
           <span className="pv-dot" />
           <span className="pv-dot" />
