@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 
-import { IconChevronDown } from '@posthog/icons'
+import { IconChevronDown, IconRefresh } from '@posthog/icons'
 import {
     Button,
     DropdownMenu,
     DropdownMenuContent,
+    DropdownMenuItem,
     DropdownMenuRadioGroup,
     DropdownMenuRadioItem,
+    DropdownMenuSeparator,
     DropdownMenuSub,
     DropdownMenuSubContent,
     DropdownMenuSubTrigger,
@@ -44,6 +46,8 @@ export interface ComposerModelEffortPickersProps {
     /** The selection shown is the resolved default (user/project preference), not an explicit pick for
      * this run — the model trigger renders a "Default ·" prefix so that's visible at a glance. */
     isDefaultSelection?: boolean
+    /** Clears the explicit pick so the run falls back to the resolved default. Omit to hide the row. */
+    onResetToDefault?: () => void
 }
 
 /**
@@ -89,6 +93,7 @@ export function ComposerModelEffortPickers({
     onEffortChange,
     lockedRuntimeAdapter,
     isDefaultSelection = false,
+    onResetToDefault,
 }: ComposerModelEffortPickersProps): JSX.Element {
     const [open, setOpen] = useState(false)
 
@@ -180,6 +185,22 @@ export function ComposerModelEffortPickers({
                             </DropdownMenuRadioItem>
                         ))}
                     </PickerSection>
+                )}
+
+                {onResetToDefault && (
+                    <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                            disabled={isDefaultSelection}
+                            onClick={() => {
+                                onResetToDefault()
+                                setOpen(false)
+                            }}
+                        >
+                            <IconRefresh />
+                            Reset to default
+                        </DropdownMenuItem>
+                    </>
                 )}
             </DropdownMenuContent>
         </DropdownMenu>

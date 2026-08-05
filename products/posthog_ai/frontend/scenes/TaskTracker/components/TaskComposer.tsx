@@ -108,6 +108,9 @@ export function TaskComposer(): JSX.Element {
                                             })
                                         }
                                         onEffortChange={(reasoningEffort) => setNewTaskData({ reasoningEffort })}
+                                        // Clearing both pins is what hands the choice back to the resolved
+                                        // default — submit then omits the triple entirely.
+                                        onResetToDefault={() => setNewTaskData({ model: null, reasoningEffort: null })}
                                     />
                                 </Composer.Footer>
                             </Composer.Frame>
