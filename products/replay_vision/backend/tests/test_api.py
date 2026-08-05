@@ -2034,6 +2034,25 @@ class TestBulkObserveAction(_VisionAPITestCase):
         events = [call.args[1] for call in report.call_args_list]
         self.assertEqual(events, ["replay_vision_bulk_scan_started"])
 
+    def test_bulk_observe_partial_fit_starts_what_the_scanner_limit_affords(
+        self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
+    ) -> None:
+        # Room for exactly two more observations and three sessions requested: the batch starts two
+        # and labels the remainder with the scanner-specific reason.
+        mock_sync_connect.return_value = MagicMock()
+        mock_async_to_sync.return_value = MagicMock()
+        cost = observation_credits_for_model(self.scanner.model)
+        ReplayScanner.objects.filter(pk=self.scanner.pk).update(credit_limit=2 * cost)
+
+        resp = self.client.post(
+            self.bulk_url(str(self.scanner.id)), data={"session_ids": ["p-1", "p-2", "p-3"]}, format="json"
+        )
+
+        self.assertEqual(resp.status_code, 202, resp.json())
+        body = resp.json()
+        self.assertEqual(body["started"], 2)
+        self.assertEqual([r["scan_outcome"] for r in body["results"]], ["started", "started", "skipped_scanner_limit"])
+
     def test_bulk_observe_is_unaffected_when_no_scanner_limit_is_set(
         self, mock_sync_connect: MagicMock, mock_async_to_sync: MagicMock
     ) -> None:

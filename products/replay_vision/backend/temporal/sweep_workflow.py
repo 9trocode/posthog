@@ -19,7 +19,10 @@ from posthog.temporal.common.search_attributes import (
 with wf.unsafe.imports_passed_through():
     from django.conf import settings
 
-    from products.replay_vision.backend.temporal.metrics import record_vision_action_occurrence_dropped
+    from products.replay_vision.backend.temporal.metrics import (
+        record_sweep_outcome,
+        record_vision_action_occurrence_dropped,
+    )
 
 from products.replay_vision.backend.models.replay_observation import ObservationTrigger
 from products.replay_vision.backend.temporal.activities import (
@@ -70,23 +73,6 @@ class SweepScannerWorkflow(PostHogWorkflow):
 
     @wf.run
     async def run(self, inputs: SweepScannerInputs) -> None:
-        # A capped scanner does no work this tick. Fails open (admissions stay gated at the persistence
-        # boundary), and patched so sweeps already in flight replay unchanged across the deploy.
-        if wf.patched("replay-vision-scanner-credit-limit"):
-            try:
-                budget = await wf.execute_activity(
-                    check_scanner_budget_activity,
-                    CheckScannerBudgetInputs(scanner_id=inputs.scanner_id, team_id=inputs.team_id),
-                    start_to_close_timeout=CHECK_SCANNER_BUDGET_TIMEOUT,
-                    retry_policy=common.RetryPolicy(maximum_attempts=1),
-                )
-                if budget.capped:
-                    return
-            except Exception:
-                wf.logger.warning(
-                    "replay_vision.scanner_budget_check_failed", extra={"scanner_id": str(inputs.scanner_id)}
-                )
-
         # The sweep is also the heartbeat for this scanner's "and then…" vision actions. Best-effort:
         # a vision-action problem must never block the scanner's core session scan, and it's
         # independent of the in-flight throttle below (which is about apply-scanner load).
@@ -107,6 +93,27 @@ class SweepScannerWorkflow(PostHogWorkflow):
             except Exception:
                 wf.logger.warning(
                     "replay_vision.prompt_suggestion_refresh_failed", extra={"scanner_id": str(inputs.scanner_id)}
+                )
+
+        # A capped scanner scans no sessions this tick, but the heartbeats above still ran: vision
+        # actions and the prompt recommendation spend no scanner credits, so a cap must not starve
+        # them. Fails open (admissions stay gated at the persistence boundary), and patched so sweeps
+        # already in flight replay unchanged across the deploy.
+        if wf.patched("replay-vision-scanner-credit-limit"):
+            try:
+                budget = await wf.execute_activity(
+                    check_scanner_budget_activity,
+                    CheckScannerBudgetInputs(scanner_id=inputs.scanner_id, team_id=inputs.team_id),
+                    start_to_close_timeout=CHECK_SCANNER_BUDGET_TIMEOUT,
+                    retry_policy=common.RetryPolicy(maximum_attempts=1),
+                )
+                if budget.capped:
+                    return
+            except Exception:
+                if not wf.unsafe.is_replaying():
+                    record_sweep_outcome("scanner_budget_check_failed")
+                wf.logger.warning(
+                    "replay_vision.scanner_budget_check_failed", extra={"scanner_id": str(inputs.scanner_id)}
                 )
 
         # Hard concurrency caps: per scanner (one bad config) and per team (many scanners), enforced as the
