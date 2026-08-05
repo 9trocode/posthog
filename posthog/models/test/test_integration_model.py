@@ -4551,6 +4551,11 @@ class TestEbayIntegrationModel(BaseTest):
             "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
         ]
 
+    def test_ebay_is_an_oauth_kind(self):
+        # Not being listed makes the authorize + callback endpoints reject the kind, drops it out
+        # of the scheduled token refresh sweep, and means disconnecting never revokes the grant.
+        assert "ebay" in OauthIntegration.supported_kinds
+
     @parameterized.expand(
         [
             ("no_client_id", {"EBAY_APP_CLIENT_ID": ""}),
