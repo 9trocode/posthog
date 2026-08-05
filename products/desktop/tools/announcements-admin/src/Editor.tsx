@@ -544,15 +544,9 @@ export function Editor({
               disabled={saving || !dirty}
               onClick={requestPublish}
             >
-              Publish
+              Review changes
             </button>
-            <span className="publish-note">
-              {published
-                ? "Published — live wherever the flag is rolled out."
-                : dirty
-                  ? "Opens a review of your changes before anything is written."
-                  : "Editor matches the live payload."}
-            </span>
+            {published && <span className="publish-note">Published</span>}
           </div>
 
           <details className="json">
@@ -583,7 +577,7 @@ export function Editor({
             aria-modal="true"
             aria-labelledby="confirm-title"
           >
-            <h2 id="confirm-title">Review, then publish</h2>
+            <h2 id="confirm-title">Review changes</h2>
             {changes.length > 0 && (
               <ul className="confirm-summary">
                 {changes.map((change) => (
@@ -606,10 +600,6 @@ export function Editor({
               </ul>
             )}
             <div className="confirm-actions">
-              <span className="publish-note">
-                Left: live payload. Right: what you are about to publish.
-                Rollout % is unchanged.
-              </span>
               <span className="spacer" />
               <button
                 type="button"
@@ -625,7 +615,7 @@ export function Editor({
                 onClick={() => void confirmPublish()}
                 disabled={saving}
               >
-                {saving ? "Publishing…" : "Publish to the live flag"}
+                {saving ? "Publishing…" : "Publish"}
               </button>
             </div>
           </div>
