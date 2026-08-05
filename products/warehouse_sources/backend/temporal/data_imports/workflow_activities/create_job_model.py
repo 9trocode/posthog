@@ -227,7 +227,9 @@ def create_external_data_job_model_activity(
             )
 
         schema.status = ExternalDataSchema.Status.RUNNING
-        schema.save()
+        # Scope the save to status so a concurrent manual trigger that just cleared the failure
+        # backoff (queryset UPDATE) isn't clobbered by writing stale counters back here.
+        schema.save(update_fields=["status", "updated_at"])
 
         pipeline_version = ExternalDataJob.PipelineVersion.V2
         if inputs.is_v3:

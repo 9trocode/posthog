@@ -1484,7 +1484,10 @@ class ExternalDataSchemaViewset(TeamAndOrgViewSetMixin, viewsets.ModelViewSet):
             raise
 
         instance.status = ExternalDataSchema.Status.RUNNING
-        instance.save()
+        # Scope the save to status: trigger_external_data_workflow just cleared the failure
+        # backoff counters with a queryset UPDATE, so a full save() would write the stale
+        # in-memory consecutive_failures/last_failed_at back and re-arm the backoff.
+        instance.save(update_fields=["status", "updated_at"])
         return Response(status=status.HTTP_200_OK)
 
     @action(methods=["POST"], detail=True)
