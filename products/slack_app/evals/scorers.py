@@ -223,3 +223,102 @@ class NoUnaskedOverride(Scorer):
             score=0.0 if invented else 1.0,
             metadata={"actual_model": got_model, "actual_effort": got_effort},
         )
+
+
+# ---------------------------------------------------------------------------
+# Repository selection
+# ---------------------------------------------------------------------------
+
+# Selection is a cascade — an explicit repo name short-circuits before any LLM, a Haiku
+# gate decides whether code is involved at all, and only what survives both reaches the
+# discovery agent. Which stage answered is as much of the result as the answer, because a
+# case that reaches the agent has already cost a sandbox.
+REPO_SELECTION_KEY = "repo_selection"
+
+
+class SelectionStageMatch(Scorer):
+    """Did selection end at the stage it should have?
+
+    The stage carries the cost: the whole point of the cascade and the Haiku gate is that
+    most mentions never pay for the agent. A case that lands on the right repository via
+    the wrong stage is a regression in everything but the answer.
+    """
+
+    def _name(self) -> str:
+        return "selection_stage"
+
+    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
+        want = (expected or {}).get(REPO_SELECTION_KEY)
+        if want is None or not want.get("stage"):
+            return Score(name=self._name(), score=None, metadata={"reason": "Case declares no expected stage"})
+        if output and output.get("error"):
+            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
+
+        got = (output or {}).get("stage")
+        return Score(
+            name=self._name(),
+            score=1.0 if got == want["stage"] else 0.0,
+            metadata={"expected_stage": want["stage"], "actual_stage": got},
+        )
+
+
+class SelectionOutcomeMatch(Scorer):
+    """Did the stage reach the outcome it should have?
+
+    Kept separate from the stage so a failure says which half moved. `no_match`, a
+    rejected hallucination, and a crash are all distinct outcomes the workflow handles
+    differently downstream, so they are never collapsed into "not found".
+    """
+
+    def _name(self) -> str:
+        return "selection_outcome"
+
+    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
+        want = (expected or {}).get(REPO_SELECTION_KEY)
+        if want is None or not want.get("outcome"):
+            return Score(name=self._name(), score=None, metadata={"reason": "Case declares no expected outcome"})
+        if output and output.get("error"):
+            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
+
+        got = (output or {}).get("outcome")
+        return Score(
+            name=self._name(),
+            score=1.0 if got == want["outcome"] else 0.0,
+            metadata={
+                "expected_outcome": want["outcome"],
+                "actual_outcome": got,
+                "detail": (output or {}).get("detail"),
+            },
+        )
+
+
+class SelectedExpectedRepository(Scorer):
+    """Of the repositories on offer, did it pick the right one?
+
+    Only meaningful against the fixture catalogue in ``seeders.py``: the repositories are
+    fixed, so a case can name the answer. Skips on cases that never reach a repository
+    (the Haiku gate's no-code decisions) and on cases where more than one repo is a
+    defensible read.
+    """
+
+    def _name(self) -> str:
+        return "selected_expected_repository"
+
+    def _run_eval_sync(self, output: dict | None, expected=None, **kwargs) -> Score:
+        want = (expected or {}).get(REPO_SELECTION_KEY) or {}
+        wanted_repo = want.get("repository")
+        if not wanted_repo:
+            return Score(name=self._name(), score=None, metadata={"reason": "Case declares no expected repository"})
+        if output and output.get("error"):
+            return Score(name=self._name(), score=0.0, metadata={"reason": output["error"]})
+
+        got = (output or {}).get("repository")
+        return Score(
+            name=self._name(),
+            score=1.0 if got == wanted_repo else 0.0,
+            metadata={
+                "expected_repository": wanted_repo,
+                "actual_repository": got,
+                "reason": (output or {}).get("detail"),
+            },
+        )

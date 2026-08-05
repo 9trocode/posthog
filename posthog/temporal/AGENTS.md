@@ -17,9 +17,9 @@ Pointers, not content. Read the linked docs before changing code or tests in thi
 - [`signals emission`](../../products/signals/backend/emission/AGENTS.md) — signal emission for data-imports events (moved to the signals product).
 - [`sync_person_distinct_ids/`](./sync_person_distinct_ids/README.md), [`experiments/`](./experiments/README.md), [`weekly_digest/`](./weekly_digest/README.md), [`ingestion_acceptance_test/`](./ingestion_acceptance_test/README.md), [`health_checks/`](./health_checks/README.md), [`ai_observability/trace_summarization/`](./ai_observability/trace_summarization/README.md) — each has its own README for context.
 
-## Local eval scripts
+## Evals for the Slack activities
 
-- [`ai/slack_app/eval_slack_repo_selection.py`](./ai/slack_app/eval_slack_repo_selection.py) — exercises the Slack `@PostHog` repo-selection cascade (cascade → Haiku gate → discovery agent) against a real team with a connected GitHub integration. Pass/fail summary, no Slack needed. Run as a file (`python posthog/temporal/ai/slack_app/eval_slack_repo_selection.py --list-cases`), not via `python -m` — the latter would force `ai/__init__.py` to load workflows before `django.setup()`. Lives here, not under `management/commands/`, because the import graph it needs (`products/slack_app` + `products/tasks`) is only reachable from `posthog/`.
+The Slack `@PostHog` suites live with the product, in [`products/slack_app/evals/`](../../products/slack_app/evals/), and run on the shared harness — `hogli evals eval_repo_selection` for the cascade and Haiku gate, `hogli evals eval_repo_discovery` for the sandbox-backed discovery agent. Both run against seeded fixture repositories rather than a real GitHub connection. See [the evals skill](../../.claude/skills/writing-evals/SKILL.md).
 
 ## Checking the Slack repo discovery agent
 
