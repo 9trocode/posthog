@@ -256,6 +256,7 @@ def _prepare_launch(ctx: TaskProcessingContext, scopes: PosthogMcpScopes, sandbo
         origin_product=task.origin_product,
         task_agent_key=task.mcp_builtin_agent_key,
         credential_owner_id=task.mcp_credential_owner_id,
+        store_mounts_disabled=task.mcp_store_mounts_disabled,
     )
     if user_mcp_configs:
         mcp_configs = mcp_configs + user_mcp_configs

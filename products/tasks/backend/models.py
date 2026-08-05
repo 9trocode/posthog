@@ -52,6 +52,7 @@ LogLevel = Literal["debug", "info", "warn", "error"]
 MCPBuiltInAgentKey = Literal["support", "scout"]
 MCP_BUILT_IN_AGENT_STATE_KEY = "mcp_builtin_agent_key"
 MCP_CREDENTIAL_OWNER_STATE_KEY = "mcp_credential_owner_id"
+MCP_STORE_MOUNTS_DISABLED_STATE_KEY = "mcp_store_mounts_disabled"
 MCP_BUILT_IN_AGENT_KEY_BY_ORIGIN: dict[str, MCPBuiltInAgentKey] = {
     "support_reply": "support",
     "signals_scout": "scout",
@@ -352,6 +353,18 @@ class Task(DeletedMetaFields, models.Model):
         owner_id = (self.state or {}).get(MCP_CREDENTIAL_OWNER_STATE_KEY)
         return owner_id if isinstance(owner_id, int) else None
 
+    @property
+    def mcp_store_mounts_disabled(self) -> bool:
+        """Whether this task's runs must not mount any MCP Store installations.
+
+        Set server-side at creation for runs whose output can reach an untrusted
+        audience with no human review (auto-publishable support replies): external
+        MCP servers expose a tool surface the PostHog token scopes don't constrain,
+        so those runs get none. The flag only ever narrows capability, so it needs
+        no trust marker to read.
+        """
+        return bool((self.state or {}).get(MCP_STORE_MOUNTS_DISABLED_STATE_KEY))
+
     def capture_event(
         self, event: str, properties: dict | None = None, capture_fn: Callable[..., None] | None = None
     ) -> None:
@@ -555,6 +568,7 @@ class Task(DeletedMetaFields, models.Model):
         custom_image_id: str | None = None,
         mcp_builtin_agent_key: MCPBuiltInAgentKey | None = None,
         mcp_credential_owner_id: int | None = None,
+        mcp_store_mounts_disabled: bool = False,
     ) -> tuple["Task", dict[str, Any]]:
         """Create the Task row and assemble the initial run's `extra_state`.
 
@@ -639,6 +653,8 @@ class Task(DeletedMetaFields, models.Model):
             # run to delegate to, and a stray owner id must not be able to ride on a task.
             if mcp_credential_owner_id is not None:
                 initial_state[MCP_CREDENTIAL_OWNER_STATE_KEY] = mcp_credential_owner_id
+        if mcp_store_mounts_disabled:
+            initial_state[MCP_STORE_MOUNTS_DISABLED_STATE_KEY] = True
 
         task = Task.objects.create(
             team=team,
@@ -855,6 +871,7 @@ class Task(DeletedMetaFields, models.Model):
         github_read_access: bool = False,
         mcp_builtin_agent_key: MCPBuiltInAgentKey | None = None,
         mcp_credential_owner_id: int | None = None,
+        mcp_store_mounts_disabled: bool = False,
     ) -> "Task":
         from products.tasks.backend.temporal.client import _normalize_slack_context, execute_task_processing_workflow
 
@@ -890,6 +907,7 @@ class Task(DeletedMetaFields, models.Model):
             custom_image_id=custom_image_id,
             mcp_builtin_agent_key=mcp_builtin_agent_key,
             mcp_credential_owner_id=mcp_credential_owner_id,
+            mcp_store_mounts_disabled=mcp_store_mounts_disabled,
         )
 
         run_extra_state = dict(extra_state or {})

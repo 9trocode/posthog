@@ -69,6 +69,7 @@ class MultiTurnSession:
         workflow_id_prefix: str | None = None,
         mcp_builtin_agent_key: MCPBuiltInAgentKey | None = None,
         mcp_credential_owner_id: int | None = None,
+        mcp_store_mounts_disabled: bool = False,
     ) -> tuple[MultiTurnSession, _ModelT]:
         """Start a multi-turn sandbox session and wait for the first structured response.
 
@@ -104,6 +105,7 @@ class MultiTurnSession:
             workflow_id_prefix=workflow_id_prefix,
             mcp_builtin_agent_key=mcp_builtin_agent_key,
             mcp_credential_owner_id=mcp_credential_owner_id,
+            mcp_store_mounts_disabled=mcp_store_mounts_disabled,
         )
         try:
             parsed = cls._parse_and_validate(last_message, model, label="initial turn")
@@ -160,6 +162,7 @@ class MultiTurnSession:
         workflow_id_prefix: str | None = None,
         mcp_builtin_agent_key: MCPBuiltInAgentKey | None = None,
         mcp_credential_owner_id: int | None = None,
+        mcp_store_mounts_disabled: bool = False,
     ) -> tuple[MultiTurnSession, str]:
         """Start a multi-turn sandbox session and return the first raw agent response.
 
@@ -184,6 +187,7 @@ class MultiTurnSession:
             workflow_id_prefix=workflow_id_prefix,
             mcp_builtin_agent_key=mcp_builtin_agent_key,
             mcp_credential_owner_id=mcp_credential_owner_id,
+            mcp_store_mounts_disabled=mcp_store_mounts_disabled,
         )
         logger.info("multi_turn: started task=%s run=%s step=%s", task.id, task_run.id, step_name or "unknown")
         # Get session's parent workflow to send heartbeats to keep the agent alive while waiting for turns.
