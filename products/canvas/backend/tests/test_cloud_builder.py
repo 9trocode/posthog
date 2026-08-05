@@ -1,6 +1,7 @@
 import os
 import hashlib
 import tempfile
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ from django.test import SimpleTestCase
 
 from parameterized import parameterized
 
-from products.canvas.backend.build_service import run_cloud_builder, validate_builder_output
+from products.canvas.backend.build_service import node_executable, run_cloud_builder, validate_builder_output
 from products.canvas.backend.presentation.serializers import CanvasSourceProjectSerializer
 from products.canvas.backend.source import synthetic_source_project, validate_source_project
 
@@ -94,8 +95,38 @@ class TestCanvasCloudBuilder(SimpleTestCase):
         runtime = next(file["content"] for file in result["files"] if file["path"] == "assets/canvas-runtime.js")
         self.assertIn('event.data?.type!=="connect"', runtime)
         self.assertIn("event.ports[0]", runtime)
-        self.assertIn("port?.postMessage", runtime)
+        self.assertIn("port.postMessage", runtime)
         self.assertNotIn("parent.postMessage({channel,...message}", runtime)
+
+    def test_runtime_flushes_data_requests_queued_before_the_port_connects(self) -> None:
+        # The host delivers the MessagePort only after the artifact iframe's
+        # load event, so a ph.query issued while the app mounts runs before the
+        # port exists. Dropping it leaves the request to die on its 30s timeout.
+        result = run_cloud_builder(self._project('document.body.textContent = "Hello"'))
+
+        runtime = next(file["content"] for file in result["files"] if file["path"] == "assets/canvas-runtime.js")
+        harness = "\n".join(
+            [
+                "const listeners = {};",
+                "globalThis.window = globalThis;",
+                "globalThis.parent = {};",
+                'globalThis.document = { readyState: "complete" };',
+                "globalThis.addEventListener = (type, fn) => { (listeners[type] ||= []).push(fn); };",
+                runtime,
+                "const received = [];",
+                "const port = { postMessage: (m) => received.push(m), addEventListener: () => {}, start: () => {} };",
+                'window.ph.query("SELECT 1");',
+                'for (const fn of listeners.message) fn({ source: parent, data: { channel: "posthog-canvas", type: "connect" }, ports: [port] });',
+                'const request = received.find((m) => m.type === "data-request" && m.method === "query");',
+                'if (!request) { console.error("pre-connect request was dropped"); process.exit(1); }',
+                'if (!received.some((m) => m.type === "ready")) { console.error("ready was not posted"); process.exit(1); }',
+                "process.exit(0);",
+            ]
+        )
+
+        process = subprocess.run([node_executable()], input=harness, capture_output=True, text=True, timeout=60)
+
+        self.assertEqual(process.returncode, 0, process.stderr or process.stdout)
 
     def test_runtime_bounds_host_side_effects(self) -> None:
         result = run_cloud_builder(self._project('document.body.textContent = "Hello"'))
