@@ -29,6 +29,9 @@ import { urls } from 'scenes/urls'
 
 import { SIDE_PANEL_CONTEXT_KEY, SidePanelSceneContext } from '~/layout/navigation-3000/sidepanel/types'
 
+import { experimentsList } from 'products/experiments/frontend/generated/api'
+import type { ExperimentBasicApi } from 'products/experiments/frontend/generated/api.schemas'
+
 import {
     visionScannersAffectedCohortCreate,
     visionScannersCreate,
@@ -236,6 +239,8 @@ export interface replayScannerLogicValues {
     durationValidationError: string | null
     estimateRequestVersion: number
     experimentContext: ExperimentScannerContext | null
+    experimentOptions: ExperimentBasicApi[]
+    experimentOptionsLoading: boolean
     hasActiveObservationFilters: boolean
     hasObservationsInFlight: boolean
     hasUnsavedChanges: boolean
@@ -299,6 +304,9 @@ export interface replayScannerLogicActions {
     applyTemplate: (templateKey: string | null) => {
         templateKey: string | null
     }
+    attachExperiment: (experimentId: number) => {
+        experimentId: number
+    }
     clearObservationFilters: () => {
         value: true
     }
@@ -313,6 +321,21 @@ export interface replayScannerLogicActions {
     }
     dismissTagSuggestions: () => {
         value: true
+    }
+    loadExperimentOptions: () => any
+    loadExperimentOptionsFailure: (
+        error: string,
+        errorObject?: any
+    ) => {
+        error: string
+        errorObject?: any
+    }
+    loadExperimentOptionsSuccess: (
+        experimentOptions: ExperimentBasicApi[],
+        payload?: any
+    ) => {
+        experimentOptions: ExperimentBasicApi[]
+        payload?: any
     }
     loadObservationStats: () => {
         value: true
@@ -592,6 +615,7 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
         setExperimentContext: (context: ExperimentScannerContext | null) => ({ context }),
         setExperimentVariantKeys: (variantKeys: string[]) => ({ variantKeys }),
         detachExperimentContext: true,
+        attachExperiment: (experimentId: number) => ({ experimentId }),
         applyTemplate: (templateKey: string | null) => ({ templateKey }),
         saveAffectedCohort: (tag?: string) => ({ tag }),
         setScannerType: (scannerType: ScannerType) => ({ scannerType }),
@@ -732,6 +756,19 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
     })),
 
     loaders(({ props, values }) => ({
+        experimentOptions: [
+            [] as ExperimentBasicApi[],
+            {
+                loadExperimentOptions: async () => {
+                    const teamId = teamLogic.values.currentTeamId
+                    if (!teamId) {
+                        return []
+                    }
+                    const response = await experimentsList(String(teamId), { limit: 100 })
+                    return response.results ?? []
+                },
+            },
+        ],
         affectedCohort: [
             null as { cohort_id: number } | null,
             {
@@ -1258,6 +1295,27 @@ export const replayScannerLogic = kea<replayScannerLogicType>([
                 if (values.observationsSort?.columnKey === 'result' && scanner.scanner_type) {
                     actions.loadObservations()
                     actions.loadObservationStats()
+                }
+            },
+
+            // Cold-entry targeting: the wizard wasn't opened from an experiment, so fetch the one
+            // the user picked and inject its exposure filter into whatever filters already exist.
+            // Unlike the deep-link prefill, the scanner's name is left alone.
+            attachExperiment: async ({ experimentId }) => {
+                try {
+                    const experiment = await api.experiments.get(experimentId)
+                    const context: ExperimentScannerContext = {
+                        experiment,
+                        variantKeys: [],
+                        useExposureFallback: false,
+                    }
+                    actions.setExperimentContext(context)
+                    actions.setScannerValue(
+                        'query',
+                        replaceExperimentExposureFilter(values.scanner?.query ?? null, context)
+                    )
+                } catch (error: any) {
+                    lemonToast.error(`Couldn't load the experiment${error?.detail ? `: ${error.detail}` : ''}`)
                 }
             },
 
