@@ -17,6 +17,14 @@
             "description": "A UUID string identifying this Signal scout config.",
             "type": "string"
         },
+        "mcp_gateway_server_ids": {
+            "description": "MCP gateway servers (by id) this scout's runs may use, chosen from the connections its creator shared with the Scout agent. Selection is per scout: an empty list mounts none of the creator's connections. Connections teammates shared to the whole team are not gated by this list. Applies from the scout's next run.",
+            "items": {
+                "type": "string"
+            },
+            "maxItems": 100,
+            "type": "array"
+        },
         "network_access": {
             "description": "What the scout's sandbox can reach over the network while it runs. `trusted` (the default) restricts runs to the platform's trusted-domain allowlist (PostHog, GitHub, common package registries). Set `full` to let this scout reach any site, for skills that read external sources such as documentation or papers. Applies from the scout's next run.\n\n* `trusted` - Trusted domains only\n* `full` - Full",
             "enum": ["trusted", "full"],
