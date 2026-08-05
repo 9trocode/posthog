@@ -311,6 +311,12 @@ tools:
     tasks-active-wizard-run-retrieve:
         operation: tasks_active_wizard_run_retrieve
         enabled: false
+    tasks-config-create:
+        operation: tasks_config_create
+        enabled: false
+    tasks-config-list:
+        operation: tasks_config_list
+        enabled: false
     tasks-create:
         operation: tasks_create
         enabled: true
@@ -384,6 +390,12 @@ tools:
                 - internal
                 - created_at
                 - updated_at
+    tasks-me-config-create:
+        operation: tasks_me_config_create
+        enabled: false
+    tasks-me-config-list:
+        operation: tasks_me_config_list
+        enabled: false
     tasks-models-retrieve:
         operation: tasks_models_retrieve
         enabled: false
