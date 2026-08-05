@@ -145,7 +145,7 @@ class S3BatchWriter:
         if self._schema is None:
             self._schema = pa_table.schema
         else:
-            self._schema = unify_schemas_with_text_fallback([self._schema, pa_table.schema])
+            self._schema = unify_schemas_with_text_fallback([self._schema, pa_table.schema], self._logger)
 
         self._logger.debug(
             f"Batch {batch_index} written successfully",
