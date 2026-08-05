@@ -22,11 +22,10 @@ import type { SparklineDatum, SparklineEvent, VolumeSparklineHoverSelection } fr
 import { VolumeSparkline } from './VolumeSparkline/VolumeSparkline'
 
 export const Metadata = ({ children, className }: PropsWithChildren<{ className?: string }>): JSX.Element => {
-    const { aggregations, summaryLoading, issueLoading, firstSeen, lastSeen, issueId, spikeEvents } =
-        useValues(errorTrackingIssueSceneLogic)
+    const { issueId, spikeEvents } = useValues(errorTrackingIssueSceneLogic)
     const { setDateRange } = useActions(errorTrackingIssueSceneLogic)
     const sparklineKey = issueId || 'issue-unknown'
-    const { hoverSelection, clickedSpike } = useValues(errorTrackingVolumeSparklineLogic({ sparklineKey }))
+    const { clickedSpike } = useValues(errorTrackingVolumeSparklineLogic({ sparklineKey }))
     const { setClickedSpike } = useActions(errorTrackingVolumeSparklineLogic({ sparklineKey }))
     const sparklineData = useSparklineDataIssueScene()
     const sparklineEvents = useSparklineEvents()
@@ -66,46 +65,7 @@ export const Metadata = ({ children, className }: PropsWithChildren<{ className?
 
     return (
         <div className={className}>
-            <div className="flex justify-between items-center h-[40px] px-4 shrink-0">
-                <div className="flex justify-end items-center h-full">
-                    {match(hoverSelection)
-                        .when(
-                            (data) => shouldRenderIssueMetrics(data),
-                            () => <IssueMetrics aggregations={aggregations} summaryLoading={summaryLoading} />
-                        )
-                        .with({ kind: 'bin' }, (data) => renderDataPoint(data.datum))
-                        .with({ kind: 'event' }, (data) => renderEventPoint(data.event))
-                        .otherwise(() => null)}
-                </div>
-                <div className="flex justify-end items-center h-full">
-                    {match(hoverSelection)
-                        .with({ kind: 'bin' }, (data) => renderDate(data.datum.date))
-                        .with({ kind: 'event' }, (data) => renderDate(data.event.date))
-                        .otherwise(() => (
-                            <>
-                                <TimeBoundary
-                                    time={firstSeen}
-                                    loading={issueLoading}
-                                    label="First Seen"
-                                    updateDateRange={(dateRange) => {
-                                        dateRange.date_from = firstSeen?.toISOString()
-                                        return dateRange
-                                    }}
-                                />
-                                <IconChevronRight />
-                                <TimeBoundary
-                                    time={lastSeen}
-                                    loading={summaryLoading}
-                                    label="Last Seen"
-                                    updateDateRange={(dateRange) => {
-                                        dateRange.date_to = lastSeen?.endOf('minute').toISOString()
-                                        return dateRange
-                                    }}
-                                />
-                            </>
-                        ))}
-                </div>
-            </div>
+            <MetadataHeader sparklineKey={sparklineKey} />
             <div
                 onClick={cancelEvent}
                 ref={sparklineContainerRef}
@@ -133,6 +93,56 @@ export const Metadata = ({ children, className }: PropsWithChildren<{ className?
                 />
             )}
             <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
+        </div>
+    )
+}
+
+/** Owns the `hoverSelection` read: it changes on every hovered bucket, and reading it in
+ *  `Metadata` would re-render the whole chart subtree per mousemove. */
+function MetadataHeader({ sparklineKey }: { sparklineKey: string }): JSX.Element {
+    const { aggregations, summaryLoading, issueLoading, firstSeen, lastSeen } = useValues(errorTrackingIssueSceneLogic)
+    const { hoverSelection } = useValues(errorTrackingVolumeSparklineLogic({ sparklineKey }))
+
+    return (
+        <div className="flex justify-between items-center h-[40px] px-4 shrink-0">
+            <div className="flex justify-end items-center h-full">
+                {match(hoverSelection)
+                    .when(
+                        (data) => shouldRenderIssueMetrics(data),
+                        () => <IssueMetrics aggregations={aggregations} summaryLoading={summaryLoading} />
+                    )
+                    .with({ kind: 'bin' }, (data) => renderDataPoint(data.datum))
+                    .with({ kind: 'event' }, (data) => renderEventPoint(data.event))
+                    .otherwise(() => null)}
+            </div>
+            <div className="flex justify-end items-center h-full">
+                {match(hoverSelection)
+                    .with({ kind: 'bin' }, (data) => renderDate(data.datum.date))
+                    .with({ kind: 'event' }, (data) => renderDate(data.event.date))
+                    .otherwise(() => (
+                        <>
+                            <TimeBoundary
+                                time={firstSeen}
+                                loading={issueLoading}
+                                label="First Seen"
+                                updateDateRange={(dateRange) => {
+                                    dateRange.date_from = firstSeen?.toISOString()
+                                    return dateRange
+                                }}
+                            />
+                            <IconChevronRight />
+                            <TimeBoundary
+                                time={lastSeen}
+                                loading={summaryLoading}
+                                label="Last Seen"
+                                updateDateRange={(dateRange) => {
+                                    dateRange.date_to = lastSeen?.endOf('minute').toISOString()
+                                    return dateRange
+                                }}
+                            />
+                        </>
+                    ))}
+            </div>
         </div>
     )
 }

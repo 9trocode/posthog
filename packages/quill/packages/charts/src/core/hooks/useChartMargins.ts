@@ -244,8 +244,10 @@ export function useChartMargins({
             ? COLLAPSED_AXIS_MARGIN
             : DEFAULT_MARGINS.bottom + (normalizedXAxisLabel ? X_AXIS_TITLE_MARGIN : 0)
         const leftLabelReserve = gutterReserves ? gutterReserves.left : Math.ceil(yLabelWidth) + Y_LABEL_RIGHT_PADDING
+        // Even with the y-axis collapsed, the first x label still centers on the plot's left edge,
+        // so its half-width keeps the floor (the right margin already does the same).
         const left = hideYAxis
-            ? COLLAPSED_AXIS_MARGIN
+            ? Math.max(COLLAPSED_AXIS_MARGIN, xLabelHalfWidth + X_LABEL_EDGE_PADDING)
             : Math.max(
                   MIN_LEFT_MARGIN,
                   leftLabelReserve + Y_LABEL_LEFT_GUTTER,
