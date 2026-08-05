@@ -4,9 +4,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [
-        ("warehouse_sources", "0117_scaffold_three_requested_sources"),
-    ]
+    dependencies = [('warehouse_sources', '0118_scaffold_sevalla_source')]
 
     operations = [
         migrations.AddField(
