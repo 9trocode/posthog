@@ -321,6 +321,14 @@ pub async fn serve(
             }
         };
 
+    // Read repair for the two hypercaches that are read straight through to Redis on every
+    // request. The flags hypercache is deliberately left out: it is etag-enabled, and
+    // FlagDefinitionsCache already absorbs repeat reads of a cold key in process.
+    let read_repair_ttl_seconds = match config.hypercache_read_repair_ttl_seconds {
+        0 => None,
+        ttl => Some(ttl),
+    };
+
     // Create HyperCacheReader for team metadata at startup
     // Uses token-based lookup instead of team_id
     let team_redis_client = dedicated_redis_client
@@ -334,6 +342,7 @@ pub async fn serve(
         config.object_storage_bucket.clone(),
     );
     team_hypercache_config.token_based = true;
+    team_hypercache_config.read_repair_ttl_seconds = read_repair_ttl_seconds;
 
     if !config.object_storage_endpoint.is_empty() {
         team_hypercache_config.s3_endpoint = Some(config.object_storage_endpoint.clone());
@@ -407,6 +416,7 @@ pub async fn serve(
         config.object_storage_bucket.clone(),
     );
     config_hypercache_config.token_based = true;
+    config_hypercache_config.read_repair_ttl_seconds = read_repair_ttl_seconds;
 
     if !config.object_storage_endpoint.is_empty() {
         config_hypercache_config.s3_endpoint = Some(config.object_storage_endpoint.clone());
