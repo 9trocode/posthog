@@ -1,0 +1,416 @@
+import type { HERO_HEDGEHOGS } from "@posthog/shared/announcements";
+import { useEffect, useState } from "react";
+import builderHog from "./assets/hedgehogs/builder-hog-03.png";
+import explorerHog from "./assets/hedgehogs/explorer-hog.png";
+import happyHog from "./assets/hedgehogs/happy-hog.png";
+import loopHog from "./assets/hedgehogs/loop-hog.svg";
+import type { EditableItem } from "./items";
+
+const HEDGEHOGS = ["builder", "explorer", "happy", "loop"] as const;
+
+const HEDGEHOG_SRC: Record<(typeof HERO_HEDGEHOGS)[number], string> = {
+  builder: builderHog,
+  explorer: explorerHog,
+  happy: happyHog,
+  loop: loopHog,
+};
+
+type Patch = Partial<EditableItem>;
+type OnChange = (patch: Patch) => void;
+
+function defaultColor(kind: EditableItem["kind"]): string {
+  return kind === "required-update" ? "#f54e00" : "#2f80fa";
+}
+
+function segCls(active: boolean): string {
+  return active ? "seg-btn seg-btn-active" : "seg-btn";
+}
+
+function GeometricPattern() {
+  return (
+    <svg
+      className="st-pattern"
+      viewBox="0 0 232 96"
+      preserveAspectRatio="xMidYMid slice"
+      aria-hidden="true"
+    >
+      <circle cx="26" cy="22" r="11" fill="currentColor" opacity="0.25" />
+      <circle
+        cx="204"
+        cy="66"
+        r="17"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        opacity="0.3"
+      />
+      <rect
+        x="176"
+        y="10"
+        width="15"
+        height="15"
+        rx="2"
+        transform="rotate(18 183 17)"
+        fill="currentColor"
+        opacity="0.2"
+      />
+      <polygon points="64,10 75,30 53,30" fill="currentColor" opacity="0.3" />
+      <path
+        d="M8 62 l7 -8 7 8 7 -8 7 8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.35"
+      />
+      <circle cx="118" cy="14" r="4" fill="currentColor" opacity="0.35" />
+      <path
+        d="M148 78 h12 M154 72 v12"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        opacity="0.3"
+      />
+      <circle
+        cx="52"
+        cy="78"
+        r="6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        opacity="0.25"
+      />
+      <rect
+        x="96"
+        y="70"
+        width="10"
+        height="10"
+        transform="rotate(-12 101 75)"
+        fill="currentColor"
+        opacity="0.18"
+      />
+      <polygon
+        points="206,18 214,32 198,32"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+        opacity="0.3"
+      />
+    </svg>
+  );
+}
+
+function HeroBand({ item }: { item: EditableItem }) {
+  if (item.heroType === "image") {
+    return item.heroImageUrl ? (
+      <div className="st-hero">
+        <img className="st-hero-cover" src={item.heroImageUrl} alt="" />
+        <div className="st-hero-fade" />
+      </div>
+    ) : (
+      <div className="st-hero st-hero-blank">
+        paste an image url in the toolbar
+      </div>
+    );
+  }
+  return (
+    <div
+      className="st-hero"
+      style={{ backgroundColor: item.heroColor || defaultColor(item.kind) }}
+    >
+      <GeometricPattern />
+      <img
+        className="st-hero-hog"
+        src={HEDGEHOG_SRC[item.heroHedgehog]}
+        alt=""
+      />
+      <div className="st-hero-fade" />
+    </div>
+  );
+}
+
+function PrimaryAction({
+  item,
+  stale,
+  onChange,
+}: {
+  item: EditableItem;
+  stale: boolean;
+  onChange: OnChange;
+}) {
+  if (item.kind === "required-update") {
+    return <span className="st-btn st-btn-solid">Restart to update</span>;
+  }
+  if (stale) {
+    return <span className="st-btn st-btn-solid">Update now</span>;
+  }
+  if (item.requiresAck) {
+    return (
+      <input
+        className="st-btn st-btn-solid st-btn-edit"
+        aria-label="Acknowledge button label"
+        placeholder="OK"
+        size={Math.max(3, (item.ackLabel || "OK").length + 1)}
+        value={item.ackLabel}
+        onChange={(e) => onChange({ ackLabel: e.target.value })}
+      />
+    );
+  }
+  return (
+    <input
+      className="st-btn st-btn-edit"
+      aria-label="Button label — leave empty for no button"
+      title="Leave empty for no button"
+      placeholder="+ button"
+      size={Math.max(4, (item.ctaLabel || "+ button").length)}
+      value={item.ctaLabel}
+      onChange={(e) => onChange({ ctaLabel: e.target.value })}
+    />
+  );
+}
+
+function BannerEdit({
+  item,
+  stale,
+  onChange,
+}: {
+  item: EditableItem;
+  stale: boolean;
+  onChange: OnChange;
+}) {
+  return (
+    <div className="st-banner">
+      <span className="st-banner-icon" aria-hidden>
+        📣
+      </span>
+      <div className="st-banner-text">
+        <input
+          className="st-edit st-banner-title"
+          aria-label="Title"
+          placeholder="Announcement title"
+          value={item.title}
+          onChange={(e) => onChange({ title: e.target.value })}
+        />
+        <input
+          className="st-edit st-banner-sub"
+          aria-label="Message — banners show a single line"
+          title="Banners show a single line"
+          placeholder="One-line message"
+          value={item.body}
+          onChange={(e) => onChange({ body: e.target.value })}
+        />
+      </div>
+      {stale ? (
+        <span className="st-btn st-btn-solid">Update now</span>
+      ) : (
+        <PrimaryAction item={item} stale={stale} onChange={onChange} />
+      )}
+      <span className="st-x" aria-hidden>
+        ✕
+      </span>
+    </div>
+  );
+}
+
+function ModalEdit({
+  item,
+  stale,
+  onChange,
+}: {
+  item: EditableItem;
+  stale: boolean;
+  onChange: OnChange;
+}) {
+  const blocking = item.kind === "required-update" || item.requiresAck;
+  return (
+    <div className="st-scrim">
+      <div className="st-modal">
+        {item.heroType !== "none" && <HeroBand item={item} />}
+        <div className="st-modal-inner">
+          <input
+            className="st-edit st-title"
+            aria-label="Title"
+            placeholder="Announcement title"
+            value={item.title}
+            onChange={(e) => onChange({ title: e.target.value })}
+          />
+          <textarea
+            className="st-edit st-body-text"
+            aria-label="Body — markdown renders in the app"
+            title="Markdown renders in the app"
+            placeholder="Write the announcement. Markdown works."
+            rows={Math.min(10, Math.max(3, item.body.split("\n").length))}
+            value={item.body}
+            onChange={(e) => onChange({ body: e.target.value })}
+          />
+          <div className="st-actions">
+            {!blocking && <span className="st-btn">Dismiss</span>}
+            <PrimaryAction item={item} stale={stale} onChange={onChange} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The editing surface: the announcement rendered inside a mock desktop app,
+ * with the copy edited directly in place. Everything visual is configured
+ * from the toolbar above the frame; everything else lives in the props strip.
+ */
+export function Stage({
+  item,
+  onChange,
+}: {
+  item: EditableItem;
+  onChange: OnChange;
+}) {
+  const isAnnouncement = item.kind === "announcement";
+  const canToggleState = isAnnouncement && item.minVersion !== "";
+  const [viewStale, setViewStale] = useState(false);
+  useEffect(() => {
+    if (!canToggleState) setViewStale(false);
+  }, [canToggleState]);
+  const stale = !isAnnouncement || (canToggleState && viewStale);
+  const isBanner = isAnnouncement && item.style === "banner";
+
+  return (
+    <div className="stage">
+      <div className="st-toolbar">
+        {isAnnouncement && (
+          <fieldset className="seg" aria-label="Display style">
+            <button
+              type="button"
+              className={segCls(item.style === "banner")}
+              onClick={() => onChange({ style: "banner", requiresAck: false })}
+            >
+              banner
+            </button>
+            <button
+              type="button"
+              className={segCls(item.style === "modal" && !item.requiresAck)}
+              onClick={() => onChange({ style: "modal", requiresAck: false })}
+            >
+              modal
+            </button>
+            <button
+              type="button"
+              className={segCls(item.requiresAck)}
+              title="No dismiss, no Esc — only the acknowledge button clears it. Updating counts as acknowledging."
+              onClick={() => onChange({ style: "modal", requiresAck: true })}
+            >
+              blocking
+            </button>
+          </fieldset>
+        )}
+        {!isBanner && (
+          <div className="hero-tools">
+            {HEDGEHOGS.map((name) => (
+              <button
+                key={name}
+                type="button"
+                className={
+                  item.heroType === "hedgehog" && item.heroHedgehog === name
+                    ? "hog-chip hog-chip-active"
+                    : "hog-chip"
+                }
+                title={`${name} hedgehog`}
+                onClick={() =>
+                  onChange({ heroType: "hedgehog", heroHedgehog: name })
+                }
+              >
+                <img src={HEDGEHOG_SRC[name]} alt={name} />
+              </button>
+            ))}
+            <input
+              type="color"
+              className="hog-color"
+              aria-label="Band color"
+              title="Band color"
+              value={item.heroColor || defaultColor(item.kind)}
+              onChange={(e) =>
+                onChange({ heroType: "hedgehog", heroColor: e.target.value })
+              }
+            />
+            <button
+              type="button"
+              className={
+                item.heroType === "image" ? "chip chip-active" : "chip"
+              }
+              onClick={() => onChange({ heroType: "image" })}
+            >
+              image
+            </button>
+            <button
+              type="button"
+              className={item.heroType === "none" ? "chip chip-active" : "chip"}
+              onClick={() => onChange({ heroType: "none" })}
+            >
+              no hero
+            </button>
+            {item.heroType === "image" && (
+              <input
+                className="mono st-img-url"
+                aria-label="Hero image URL — https only"
+                placeholder="https://…"
+                value={item.heroImageUrl}
+                onChange={(e) => onChange({ heroImageUrl: e.target.value })}
+              />
+            )}
+          </div>
+        )}
+        <span className="spacer" />
+        {canToggleState && (
+          <fieldset className="seg" aria-label="Previewed app version">
+            <button
+              type="button"
+              className={segCls(!viewStale)}
+              onClick={() => setViewStale(false)}
+            >
+              up to date
+            </button>
+            <button
+              type="button"
+              className={segCls(viewStale)}
+              onClick={() => setViewStale(true)}
+            >
+              below {item.minVersion}
+            </button>
+          </fieldset>
+        )}
+      </div>
+
+      <div className="st-frame">
+        <div className="st-titlebar" aria-hidden>
+          <span className="st-dot" />
+          <span className="st-dot" />
+          <span className="st-dot" />
+          <span className="st-tab" />
+        </div>
+        {isBanner && (
+          <BannerEdit item={item} stale={stale} onChange={onChange} />
+        )}
+        <div className="st-body">
+          <div className="st-sidebar" aria-hidden>
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="st-content" aria-hidden>
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+          {!isBanner && (
+            <ModalEdit item={item} stale={stale} onChange={onChange} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

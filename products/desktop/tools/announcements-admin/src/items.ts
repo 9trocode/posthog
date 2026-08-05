@@ -16,10 +16,17 @@ export interface EditableItem {
   ctaUrl: string;
   requiresAck: boolean;
   ackLabel: string;
-  heroType: "default" | "hedgehog" | "image" | "none";
+  heroType: "hedgehog" | "image" | "none";
   heroHedgehog: (typeof HERO_HEDGEHOGS)[number];
   heroColor: string;
   heroImageUrl: string;
+}
+
+/** What the app renders when the payload carries no hero field. */
+export function kindDefaultHedgehog(
+  kind: EditableItem["kind"],
+): EditableItem["heroHedgehog"] {
+  return kind === "required-update" ? "builder" : "happy";
 }
 
 export function blankItem(kind: EditableItem["kind"]): EditableItem {
@@ -36,8 +43,8 @@ export function blankItem(kind: EditableItem["kind"]): EditableItem {
     ctaUrl: "",
     requiresAck: false,
     ackLabel: "",
-    heroType: "default",
-    heroHedgehog: "happy",
+    heroType: "hedgehog",
+    heroHedgehog: kindDefaultHedgehog(kind),
     heroColor: "",
     heroImageUrl: "",
   };
@@ -57,15 +64,16 @@ export function toEditable(items: Announcement[]): EditableItem[] {
     ctaUrl: item.kind === "announcement" ? (item.cta?.url ?? "") : "",
     requiresAck: item.kind === "announcement" ? item.requiresAck : false,
     ackLabel: item.kind === "announcement" ? (item.ackLabel ?? "") : "",
-    heroType: !item.hero
-      ? ("default" as const)
-      : "none" in item.hero
+    heroType:
+      item.hero && "none" in item.hero
         ? ("none" as const)
-        : "imageUrl" in item.hero
+        : item.hero && "imageUrl" in item.hero
           ? ("image" as const)
           : ("hedgehog" as const),
     heroHedgehog:
-      item.hero && "hedgehog" in item.hero ? item.hero.hedgehog : "happy",
+      item.hero && "hedgehog" in item.hero
+        ? item.hero.hedgehog
+        : kindDefaultHedgehog(item.kind),
     heroColor:
       item.hero && "hedgehog" in item.hero ? (item.hero.color ?? "") : "",
     heroImageUrl:
@@ -82,16 +90,27 @@ export function toPayloadItem(item: EditableItem): Record<string, unknown> {
   };
   if (item.startsAt) base.startsAt = item.startsAt;
   if (item.endsAt) base.endsAt = item.endsAt;
-  if (item.heroType === "none") {
-    base.hero = { none: true };
-  } else if (item.heroType === "image") {
-    base.hero = { imageUrl: item.heroImageUrl };
-  } else if (item.heroType === "hedgehog") {
-    base.hero = {
-      hedgehog: item.heroHedgehog,
-      ...(item.heroColor ? { color: item.heroColor } : {}),
-    };
+
+  // Heroes only render on modals, and the app already shows the kind-default
+  // hedgehog when the field is absent — emit hero only when it changes that.
+  const rendersModal =
+    item.kind === "required-update" || item.style === "modal";
+  if (rendersModal) {
+    if (item.heroType === "none") {
+      base.hero = { none: true };
+    } else if (item.heroType === "image") {
+      base.hero = { imageUrl: item.heroImageUrl };
+    } else if (
+      item.heroColor ||
+      item.heroHedgehog !== kindDefaultHedgehog(item.kind)
+    ) {
+      base.hero = {
+        hedgehog: item.heroHedgehog,
+        ...(item.heroColor ? { color: item.heroColor } : {}),
+      };
+    }
   }
+
   if (item.kind === "required-update") {
     base.minVersion = item.minVersion;
     return base;

@@ -1,7 +1,4 @@
-import {
-  announcementsPayloadSchema,
-  HERO_HEDGEHOGS,
-} from "@posthog/shared/announcements";
+import { announcementsPayloadSchema } from "@posthog/shared/announcements";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { type FlagRecord, readPayload, savePayload } from "./api";
@@ -14,7 +11,7 @@ import {
   toEditable,
   toPayloadItem,
 } from "./items";
-import { Preview } from "./Preview";
+import { Stage } from "./Stage";
 
 function rolloutLabel(flag: FlagRecord): { text: string; live: boolean } {
   if (!flag.active) return { text: "flag disabled", live: false };
@@ -28,6 +25,27 @@ function rolloutLabel(flag: FlagRecord): { text: string; live: boolean } {
   return percent > 0
     ? { text: `${percent}% on air`, live: true }
     : { text: "0% · dark", live: false };
+}
+
+function factsFor(item: EditableItem): string {
+  if (item.kind === "required-update") {
+    return `Blocks every app below ${item.minVersion || "the required version"} until it updates — up-to-date users never see it.`;
+  }
+  const parts: string[] = [];
+  parts.push(
+    item.requiresAck
+      ? "Blocks until acknowledged; updating counts as acknowledging."
+      : "Dismissible — dismissal sticks per user, keyed on the id.",
+  );
+  if (item.minVersion) {
+    parts.push(
+      `Apps below ${item.minVersion} get "Update now" instead of the button.`,
+    );
+  }
+  if (item.startsAt || item.endsAt) {
+    parts.push("Only shows inside the scheduled window.");
+  }
+  return parts.join(" ");
 }
 
 export function Editor({
@@ -63,7 +81,8 @@ export function Editor({
 
   const flagUrl = `${POSTHOG_HOST}/project/${PROJECT_ID}/feature_flags/${flag.id}`;
   const rollout = rolloutLabel(flag);
-  const selectedItem = items[Math.min(selected, items.length - 1)] ?? null;
+  const selIndex = Math.min(selected, items.length - 1);
+  const selectedItem = items[selIndex] ?? null;
 
   const payloadJson = useMemo(
     () =>
@@ -189,288 +208,67 @@ export function Editor({
         </div>
       </header>
 
-      <div className="cols">
-        <main className="queue">
-          <p className="queue-note">
-            Order is priority — the app shows the first eligible item only.
-            Dismissing one reveals the next.
-          </p>
-          <label className="check policy">
-            <input
-              type="checkbox"
-              checked={suppressChangelog}
-              onChange={(e) => {
-                setSuppressChangelog(e.target.checked);
-                setPublished(false);
-              }}
-            />
-            an on-stage announcement cancels the What's New changelog — uncheck
-            to show both back to back
-          </label>
-
-          {items.map((item, index) => (
-            <section
-              className={index === selected ? "card card-selected" : "card"}
-              key={`${index}-${item.kind}`}
-              onFocusCapture={() => setSelected(index)}
-              onPointerDown={() => setSelected(index)}
-            >
-              <div className="card-head">
-                <span className="card-index">
-                  {String(index + 1).padStart(2, "0")}
+      <div className="layout">
+        <aside className="rail">
+          <div className="rail-list">
+            {items.map((item, index) => (
+              <div
+                key={`${index}-${item.kind}`}
+                className={
+                  index === selIndex
+                    ? "rail-item rail-item-active"
+                    : "rail-item"
+                }
+              >
+                <button
+                  type="button"
+                  className="rail-row"
+                  onClick={() => setSelected(index)}
+                >
+                  <span className="rail-num">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span
+                    className={
+                      item.kind === "required-update"
+                        ? "rail-dot rail-dot-update"
+                        : "rail-dot"
+                    }
+                    title={
+                      item.kind === "required-update"
+                        ? "Required update"
+                        : "Announcement"
+                    }
+                  />
+                  <span className="rail-title">{item.title || "Untitled"}</span>
+                </button>
+                <span className="rail-actions">
+                  <button
+                    type="button"
+                    aria-label="Move up"
+                    onClick={() => move(index, -1)}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Move down"
+                    onClick={() => move(index, 1)}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Remove"
+                    onClick={() => remove(index)}
+                  >
+                    ✕
+                  </button>
                 </span>
-                <span
-                  className={
-                    item.kind === "required-update"
-                      ? "kind-tag kind-update"
-                      : "kind-tag"
-                  }
-                >
-                  {item.kind === "required-update"
-                    ? "Required update"
-                    : "Announcement"}
-                </span>
-                <span className="spacer" />
-                <button
-                  type="button"
-                  className="btn btn-icon"
-                  aria-label="Move up"
-                  onClick={() => move(index, -1)}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-icon"
-                  aria-label="Move down"
-                  onClick={() => move(index, 1)}
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => remove(index)}
-                >
-                  Remove
-                </button>
               </div>
-
-              <div className="grid">
-                <label>
-                  id — dismissal key
-                  <input
-                    className="mono"
-                    placeholder="loops-launch"
-                    value={item.id}
-                    onChange={(e) => update(index, { id: e.target.value })}
-                  />
-                </label>
-                <label>
-                  title
-                  <input
-                    placeholder="Introducing…"
-                    value={item.title}
-                    onChange={(e) => update(index, { title: e.target.value })}
-                  />
-                </label>
-              </div>
-
-              <label>
-                body — markdown; banners show the first line
-                <textarea
-                  rows={3}
-                  value={item.body}
-                  onChange={(e) => update(index, { body: e.target.value })}
-                />
-              </label>
-
-              <div className="grid">
-                <label>
-                  starts — optional
-                  <input
-                    type="datetime-local"
-                    className="mono"
-                    value={isoToLocalInput(item.startsAt)}
-                    onChange={(e) =>
-                      update(index, {
-                        startsAt: localInputToIso(e.target.value),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  ends — optional
-                  <input
-                    type="datetime-local"
-                    className="mono"
-                    value={isoToLocalInput(item.endsAt)}
-                    onChange={(e) =>
-                      update(index, { endsAt: localInputToIso(e.target.value) })
-                    }
-                  />
-                </label>
-                <label>
-                  min version{" "}
-                  {item.kind === "required-update"
-                    ? "— blocks older apps"
-                    : "— optional update nudge"}
-                  <input
-                    className="mono"
-                    placeholder="1.42.0"
-                    value={item.minVersion}
-                    onChange={(e) =>
-                      update(index, { minVersion: e.target.value })
-                    }
-                  />
-                </label>
-                {item.kind === "announcement" && (
-                  <label>
-                    style
-                    <select
-                      value={item.style}
-                      onChange={(e) =>
-                        update(
-                          index,
-                          e.target.value === "banner"
-                            ? { style: "banner", requiresAck: false }
-                            : { style: "modal" },
-                        )
-                      }
-                    >
-                      <option value="banner">banner</option>
-                      <option value="modal">modal</option>
-                    </select>
-                  </label>
-                )}
-              </div>
-
-              {item.kind === "announcement" && item.style === "modal" && (
-                <div className="grid">
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={item.requiresAck}
-                      onChange={(e) =>
-                        update(index, { requiresAck: e.target.checked })
-                      }
-                    />
-                    require acknowledgement — blocks until confirmed; updating
-                    counts
-                  </label>
-                  {item.requiresAck && (
-                    <label>
-                      ack button label
-                      <input
-                        placeholder="OK"
-                        value={item.ackLabel}
-                        onChange={(e) =>
-                          update(index, { ackLabel: e.target.value })
-                        }
-                      />
-                    </label>
-                  )}
-                </div>
-              )}
-
-              {(item.kind === "required-update" || item.style === "modal") && (
-                <div className="grid">
-                  <label>
-                    hero
-                    <select
-                      value={item.heroType}
-                      onChange={(e) =>
-                        update(index, {
-                          heroType: e.target.value as EditableItem["heroType"],
-                        })
-                      }
-                    >
-                      <option value="default">default hedgehog</option>
-                      <option value="hedgehog">pick hedgehog</option>
-                      <option value="image">image url</option>
-                      <option value="none">plain — no hero</option>
-                    </select>
-                  </label>
-                  {item.heroType === "hedgehog" && (
-                    <>
-                      <label>
-                        hedgehog
-                        <select
-                          value={item.heroHedgehog}
-                          onChange={(e) =>
-                            update(index, {
-                              heroHedgehog: e.target
-                                .value as EditableItem["heroHedgehog"],
-                            })
-                          }
-                        >
-                          {HERO_HEDGEHOGS.map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        band color — hex, optional
-                        <input
-                          className="mono"
-                          placeholder="#2f80fa"
-                          value={item.heroColor}
-                          onChange={(e) =>
-                            update(index, { heroColor: e.target.value })
-                          }
-                        />
-                      </label>
-                    </>
-                  )}
-                  {item.heroType === "image" && (
-                    <label>
-                      image url — https only
-                      <input
-                        className="mono"
-                        placeholder="https://…"
-                        value={item.heroImageUrl}
-                        onChange={(e) =>
-                          update(index, { heroImageUrl: e.target.value })
-                        }
-                      />
-                    </label>
-                  )}
-                </div>
-              )}
-
-              {item.kind === "announcement" && !item.requiresAck && (
-                <div className="grid">
-                  <label>
-                    {item.minVersion
-                      ? "button label — shown once the app is up to date"
-                      : "button label — optional"}
-                    <input
-                      placeholder="Learn more"
-                      value={item.ctaLabel}
-                      onChange={(e) =>
-                        update(index, { ctaLabel: e.target.value })
-                      }
-                    />
-                  </label>
-                  <label>
-                    button link — https:// or posthog-code://
-                    <input
-                      className="mono"
-                      placeholder="posthog-code://loop"
-                      value={item.ctaUrl}
-                      onChange={(e) =>
-                        update(index, { ctaUrl: e.target.value })
-                      }
-                    />
-                  </label>
-                </div>
-              )}
-            </section>
-          ))}
-
-          <div className="row">
+            ))}
+          </div>
+          <div className="rail-add">
             <button
               type="button"
               className="btn"
@@ -486,24 +284,110 @@ export function Editor({
               + Required update
             </button>
           </div>
-
-          <details className="json">
-            <summary>Raw JSON</summary>
-            <textarea
-              rows={14}
-              className="mono"
-              value={jsonDraft ?? payloadJson}
-              onChange={(e) => setJsonDraft(e.target.value)}
+          <p className="rail-note">
+            Top item shows first; dismissing one reveals the next.
+          </p>
+          <label
+            className="check rail-policy"
+            title="While an announcement is showing, the What's New changelog stays hidden. Uncheck to show both, back to back."
+          >
+            <input
+              type="checkbox"
+              checked={suppressChangelog}
+              onChange={(e) => {
+                setSuppressChangelog(e.target.checked);
+                setPublished(false);
+              }}
             />
-            <button
-              type="button"
-              className="btn"
-              disabled={jsonDraft === null}
-              onClick={applyJson}
-            >
-              Apply JSON
-            </button>
-          </details>
+            mute What's New
+          </label>
+        </aside>
+
+        <main className="work">
+          {selectedItem ? (
+            <>
+              <Stage
+                item={selectedItem}
+                onChange={(patch) => update(selIndex, patch)}
+              />
+              <div className="props">
+                <label title="Dismissal key — persists per user; change it to resurface the announcement for everyone">
+                  id
+                  <input
+                    className="mono"
+                    placeholder="cloud-billing"
+                    value={selectedItem.id}
+                    onChange={(e) => update(selIndex, { id: e.target.value })}
+                  />
+                </label>
+                <label
+                  title={
+                    selectedItem.kind === "required-update"
+                      ? "Apps below this version are blocked until they update"
+                      : "Optional — apps below this version see an Update button instead"
+                  }
+                >
+                  min version
+                  <input
+                    className="mono"
+                    placeholder="1.42.0"
+                    value={selectedItem.minVersion}
+                    onChange={(e) =>
+                      update(selIndex, { minVersion: e.target.value })
+                    }
+                  />
+                </label>
+                <label title="Optional — hidden before this time">
+                  starts
+                  <input
+                    type="datetime-local"
+                    className="mono"
+                    value={isoToLocalInput(selectedItem.startsAt)}
+                    onChange={(e) =>
+                      update(selIndex, {
+                        startsAt: localInputToIso(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label title="Optional — hidden after this time">
+                  ends
+                  <input
+                    type="datetime-local"
+                    className="mono"
+                    value={isoToLocalInput(selectedItem.endsAt)}
+                    onChange={(e) =>
+                      update(selIndex, {
+                        endsAt: localInputToIso(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+                {selectedItem.kind === "announcement" &&
+                  !selectedItem.requiresAck && (
+                    <label
+                      className="props-grow"
+                      title="Where the button goes — https:// opens the browser, posthog-code:// opens in-app"
+                    >
+                      button link
+                      <input
+                        className="mono"
+                        placeholder="https:// or posthog-code://"
+                        value={selectedItem.ctaUrl}
+                        onChange={(e) =>
+                          update(selIndex, { ctaUrl: e.target.value })
+                        }
+                      />
+                    </label>
+                  )}
+              </div>
+              <p className="facts">{factsFor(selectedItem)}</p>
+            </>
+          ) : (
+            <p className="work-empty">
+              Nothing queued — add an announcement to start.
+            </p>
+          )}
 
           {errors.length > 0 && (
             <ul className="errors">
@@ -528,12 +412,25 @@ export function Editor({
                 : "Writes the flag payload. Rollout % is unchanged."}
             </span>
           </div>
-        </main>
 
-        <aside className="side">
-          <span className="eyebrow">In-app preview</span>
-          <Preview item={selectedItem} />
-        </aside>
+          <details className="json">
+            <summary>Raw JSON</summary>
+            <textarea
+              rows={14}
+              className="mono"
+              value={jsonDraft ?? payloadJson}
+              onChange={(e) => setJsonDraft(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn"
+              disabled={jsonDraft === null}
+              onClick={applyJson}
+            >
+              Apply JSON
+            </button>
+          </details>
+        </main>
       </div>
     </div>
   );
