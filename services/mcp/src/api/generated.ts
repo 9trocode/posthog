@@ -12418,6 +12418,7 @@ export namespace Schemas {
 
     /**
      * * `breaking_master` - BREAKING_MASTER
+     * * `blocking_merge_queue` - BLOCKING_MERGE_QUEUE
      * * `novel_burst` - NOVEL_BURST
      * * `potentially_resolved` - POTENTIALLY_RESOLVED
      * * `flaky` - FLAKY
@@ -12428,6 +12429,7 @@ export namespace Schemas {
 
     export const BrokenTestRowStateEnum = {
       BreakingMaster: 'breaking_master',
+      BlockingMergeQueue: 'blocking_merge_queue',
       NovelBurst: 'novel_burst',
       PotentiallyResolved: 'potentially_resolved',
       Flaky: 'flaky',
@@ -12445,9 +12447,10 @@ export namespace Schemas {
       job_name: string;
       /** 'owner/name' repository the failure belongs to. */
       repo: string;
-      /** The classifier's verdict on how this failure is behaving right now: 'breaking_master' (failing on trunk, latest trunk run still red), 'novel_burst' (new within a day and spreading across branches, not on trunk yet), 'potentially_resolved' (hit trunk but trunk is green again), 'flaky' (sporadic across branches over more than a day), or 'pr_only' (confined to one branch — one PR's own problem).
+      /** The classifier's verdict on how this failure is behaving right now: 'breaking_master' (failing on trunk, latest trunk run still red), 'blocking_merge_queue' (stopped a merge on a commit that already passed the PR's own CI, trunk still green), 'novel_burst' (new within a day and spreading across branches, not on trunk yet), 'potentially_resolved' (hit trunk but trunk is green again), 'flaky' (sporadic across branches over more than a day), or 'pr_only' (confined to one branch — one PR's own problem).
        *
        * * `breaking_master` - BREAKING_MASTER
+       * * `blocking_merge_queue` - BLOCKING_MERGE_QUEUE
        * * `novel_burst` - NOVEL_BURST
        * * `potentially_resolved` - POTENTIALLY_RESOLVED
        * * `flaky` - FLAKY
@@ -28091,7 +28094,7 @@ export namespace Schemas {
     } as const;
 
     /**
-     * The metric collections as the client last read them, used together with `version` to resolve concurrent metric edits: changes made by other users are merged per metric uuid where safe instead of failing. Relevant keys are metrics, metrics_secondary, and saved_metrics_ids; unknown keys are ignored. Without it, any version mismatch fails with HTTP 409.
+     * The experiment state as the client last read it, used together with `version` to resolve concurrent edits: metric collections merge per metric uuid, and any other field the update carries merges per field against its base value here (only a same-field double edit fails). Relevant keys are metrics, metrics_secondary, saved_metrics_ids, plus the last-read values of whichever scalar fields the update writes; unknown keys are ignored. Changed fields without a base value — and, without this object, any version mismatch — fail with HTTP 409.
      * @nullable
      */
     export type ExperimentOriginalExperiment = { [key: string]: unknown } | null;
@@ -28775,12 +28778,12 @@ export namespace Schemas {
       /** When true, sync the flag config sent in this request (via the `feature_flag` object) to the linked feature flag. Draft experiments always sync regardless. On a running experiment, `feature_flag` config without this flag is rejected. */
       update_feature_flag_params?: boolean;
       /**
-         * Optimistic-concurrency token. Reads return the experiment's current version, bumped on every update. Send the version you last read with an update to detect concurrent edits: a stale update that only touches the metric collections is merged per metric uuid when `original_experiment` is also sent; anything else fails with HTTP 409. Omit to skip the check.
+         * Optimistic-concurrency token. Reads return the experiment's current version, bumped on every update. Send the version you last read with an update to detect concurrent edits: a stale update merges concurrent changes where safe — metric collections per metric uuid, other fields per field — using the base values sent in `original_experiment`, and fails with HTTP 409 only when the same metric or field changed on both sides (or no base value was sent for a changed field). Omit to skip the check.
          * @nullable
          */
       version?: number | null;
       /**
-         * The metric collections as the client last read them, used together with `version` to resolve concurrent metric edits: changes made by other users are merged per metric uuid where safe instead of failing. Relevant keys are metrics, metrics_secondary, and saved_metrics_ids; unknown keys are ignored. Without it, any version mismatch fails with HTTP 409.
+         * The experiment state as the client last read it, used together with `version` to resolve concurrent edits: metric collections merge per metric uuid, and any other field the update carries merges per field against its base value here (only a same-field double edit fails). Relevant keys are metrics, metrics_secondary, saved_metrics_ids, plus the last-read values of whichever scalar fields the update writes; unknown keys are ignored. Changed fields without a base value — and, without this object, any version mismatch — fail with HTTP 409.
          * @nullable
          */
       original_experiment?: ExperimentOriginalExperiment;
@@ -29583,7 +29586,7 @@ export namespace Schemas {
     }
 
     /**
-     * The metric collections as the client last read them, used together with `version` to resolve concurrent metric edits: changes made by other users are merged per metric uuid where safe instead of failing. Relevant keys are metrics, metrics_secondary, and saved_metrics_ids; unknown keys are ignored. Without it, any version mismatch fails with HTTP 409.
+     * The experiment state as the client last read it, used together with `version` to resolve concurrent edits: metric collections merge per metric uuid, and any other field the update carries merges per field against its base value here (only a same-field double edit fails). Relevant keys are metrics, metrics_secondary, saved_metrics_ids, plus the last-read values of whichever scalar fields the update writes; unknown keys are ignored. Changed fields without a base value — and, without this object, any version mismatch — fail with HTTP 409.
      * @nullable
      */
     export type ExperimentWriteOriginalExperiment = { [key: string]: unknown } | null;
@@ -29691,12 +29694,12 @@ export namespace Schemas {
       /** When true, sync the flag config sent in this request (via the `feature_flag` object) to the linked feature flag. Draft experiments always sync regardless. On a running experiment, `feature_flag` config without this flag is rejected. */
       update_feature_flag_params?: boolean;
       /**
-         * Optimistic-concurrency token. Reads return the experiment's current version, bumped on every update. Send the version you last read with an update to detect concurrent edits: a stale update that only touches the metric collections is merged per metric uuid when `original_experiment` is also sent; anything else fails with HTTP 409. Omit to skip the check.
+         * Optimistic-concurrency token. Reads return the experiment's current version, bumped on every update. Send the version you last read with an update to detect concurrent edits: a stale update merges concurrent changes where safe — metric collections per metric uuid, other fields per field — using the base values sent in `original_experiment`, and fails with HTTP 409 only when the same metric or field changed on both sides (or no base value was sent for a changed field). Omit to skip the check.
          * @nullable
          */
       version?: number | null;
       /**
-         * The metric collections as the client last read them, used together with `version` to resolve concurrent metric edits: changes made by other users are merged per metric uuid where safe instead of failing. Relevant keys are metrics, metrics_secondary, and saved_metrics_ids; unknown keys are ignored. Without it, any version mismatch fails with HTTP 409.
+         * The experiment state as the client last read it, used together with `version` to resolve concurrent edits: metric collections merge per metric uuid, and any other field the update carries merges per field against its base value here (only a same-field double edit fails). Relevant keys are metrics, metrics_secondary, saved_metrics_ids, plus the last-read values of whichever scalar fields the update writes; unknown keys are ignored. Changed fields without a base value — and, without this object, any version mismatch — fail with HTTP 409.
          * @nullable
          */
       original_experiment?: ExperimentWriteOriginalExperiment;
@@ -36684,6 +36687,14 @@ export namespace Schemas {
       Service: 'service',
     } as const;
 
+    export type LogsSparklineRankBy = typeof LogsSparklineRankBy[keyof typeof LogsSparklineRankBy];
+
+
+    export const LogsSparklineRankBy = {
+      Count: 'count',
+      Bytes: 'bytes',
+    } as const;
+
     export interface LogsQuery {
       /** Cursor for fetching the next page of results */
       after?: string | null;
@@ -36709,6 +36720,8 @@ export namespace Schemas {
       severityLevels: LogSeverityLevel[];
       /** Field to break down sparkline data by (used only by sparkline endpoint) */
       sparklineBreakdownBy?: LogsSparklineBreakdownBy | null;
+      /** Metric used to rank breakdown values before the tail is collapsed into a single "other" bucket, so the returned row count stays bounded (used only by sparkline endpoint). Defaults to ranking by log count. */
+      sparklineRankBy?: LogsSparklineRankBy | null;
       tags?: QueryLogTags | null;
       /** version of the node, used for schema migrations */
       version?: number | null;
@@ -52562,7 +52575,7 @@ export namespace Schemas {
     }
 
     /**
-     * The metric collections as the client last read them, used together with `version` to resolve concurrent metric edits: changes made by other users are merged per metric uuid where safe instead of failing. Relevant keys are metrics, metrics_secondary, and saved_metrics_ids; unknown keys are ignored. Without it, any version mismatch fails with HTTP 409.
+     * The experiment state as the client last read it, used together with `version` to resolve concurrent edits: metric collections merge per metric uuid, and any other field the update carries merges per field against its base value here (only a same-field double edit fails). Relevant keys are metrics, metrics_secondary, saved_metrics_ids, plus the last-read values of whichever scalar fields the update writes; unknown keys are ignored. Changed fields without a base value — and, without this object, any version mismatch — fail with HTTP 409.
      * @nullable
      */
     export type PatchedExperimentWriteOriginalExperiment = { [key: string]: unknown } | null;
@@ -52670,12 +52683,12 @@ export namespace Schemas {
       /** When true, sync the flag config sent in this request (via the `feature_flag` object) to the linked feature flag. Draft experiments always sync regardless. On a running experiment, `feature_flag` config without this flag is rejected. */
       update_feature_flag_params?: boolean;
       /**
-         * Optimistic-concurrency token. Reads return the experiment's current version, bumped on every update. Send the version you last read with an update to detect concurrent edits: a stale update that only touches the metric collections is merged per metric uuid when `original_experiment` is also sent; anything else fails with HTTP 409. Omit to skip the check.
+         * Optimistic-concurrency token. Reads return the experiment's current version, bumped on every update. Send the version you last read with an update to detect concurrent edits: a stale update merges concurrent changes where safe — metric collections per metric uuid, other fields per field — using the base values sent in `original_experiment`, and fails with HTTP 409 only when the same metric or field changed on both sides (or no base value was sent for a changed field). Omit to skip the check.
          * @nullable
          */
       version?: number | null;
       /**
-         * The metric collections as the client last read them, used together with `version` to resolve concurrent metric edits: changes made by other users are merged per metric uuid where safe instead of failing. Relevant keys are metrics, metrics_secondary, and saved_metrics_ids; unknown keys are ignored. Without it, any version mismatch fails with HTTP 409.
+         * The experiment state as the client last read it, used together with `version` to resolve concurrent edits: metric collections merge per metric uuid, and any other field the update carries merges per field against its base value here (only a same-field double edit fails). Relevant keys are metrics, metrics_secondary, saved_metrics_ids, plus the last-read values of whichever scalar fields the update writes; unknown keys are ignored. Changed fields without a base value — and, without this object, any version mismatch — fail with HTTP 409.
          * @nullable
          */
       original_experiment?: PatchedExperimentWriteOriginalExperiment;
@@ -71127,6 +71140,18 @@ export namespace Schemas {
     } as const;
 
     /**
+     * * `count` - count
+     * * `bytes` - bytes
+     */
+    export type SparklineRankByEnum = typeof SparklineRankByEnum[keyof typeof SparklineRankByEnum];
+
+
+    export const SparklineRankByEnum = {
+      Count: 'count',
+      Bytes: 'bytes',
+    } as const;
+
+    /**
      * Raw cached payload as stored in Redis, or null on a miss.
      * @nullable
      */
@@ -76204,6 +76229,11 @@ export namespace Schemas {
        * * `severity` - severity
        * * `service` - service */
       sparklineBreakdownBy?: SparklineBreakdownByEnum;
+      /** Rank breakdown values by "count" (default) or "bytes" before collapsing the tail into "other".
+       *
+       * * `count` - count
+       * * `bytes` - bytes */
+      sparklineRankBy?: SparklineRankByEnum;
       /** Scope results to one person (UUID or numeric ID). Expanded server-side to the person's distinct IDs and matched against the team's configured distinct-id log attribute keys. */
       personId?: string;
     }
