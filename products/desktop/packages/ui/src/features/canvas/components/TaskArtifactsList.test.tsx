@@ -174,7 +174,7 @@ describe("TaskArtifactsList", () => {
   });
 
   // Agents revise a deliverable and upload it again under the same name.
-  it("keeps only the newest upload of a repeatedly revised file", () => {
+  it("shows the newest upload of a repeatedly revised file, with the rest behind a picker", () => {
     mocks.runs = [
       run("run-1", {
         artifacts: [
@@ -196,7 +196,35 @@ describe("TaskArtifactsList", () => {
     render(<TaskArtifactsList task={task} timeline={[]} />);
 
     expect(screen.getAllByText("report.md")).toHaveLength(1);
-    expect(screen.getByText("File · 2 KB")).toBeTruthy();
+    expect(screen.getByText(/^File · 2 KB · /)).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Choose a version of report.md"));
+    fireEvent.click(screen.getByText("Version 1"));
+    fireEvent.click(screen.getByText("report.md"));
+
+    expect(mocks.openArtifactTab).toHaveBeenCalledWith("task-1", {
+      runId: "run-1",
+      artifactId: "a",
+      name: "report.md",
+    });
+  });
+
+  it("leaves out a file whose every version was dismissed", () => {
+    mocks.runs = [
+      run("run-1", {
+        artifacts: [
+          outputFile({
+            id: "a",
+            uploaded_at: "2026-07-27T08:00:00+00:00",
+            dismissed_at: "2026-07-27T10:00:00+00:00",
+          }),
+        ],
+      }),
+    ];
+
+    render(<TaskArtifactsList task={task} timeline={[]} />);
+
+    expect(screen.queryByText("report.md")).toBeNull();
   });
 
   it.each([

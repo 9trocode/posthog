@@ -1,22 +1,32 @@
 import {
   ArrowSquareOutIcon,
+  CaretDownIcon,
   PackageIcon,
   SlackLogoIcon,
 } from "@phosphor-icons/react";
 import {
+  groupRunArtifactVersions,
   OUTPUT_ARTIFACT_TYPES,
   parseRunArtifacts,
   type RunArtifact,
-} from "@posthog/core/canvas/runArtifactSchemas";
+  type RunArtifactVersions,
+  runArtifactVersionKey,
+  runArtifactVersionLabel,
+} from "@posthog/core/artifacts/runArtifactSchemas";
 import type { ThreadTimelineRow } from "@posthog/core/canvas/threadTimeline";
 import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
 } from "@posthog/quill";
-import { readPrUrls } from "@posthog/shared";
+import { formatRelativeTimeLong, readPrUrls } from "@posthog/shared";
 import type {
   Task,
   TaskRun,
@@ -35,17 +45,12 @@ import { openExternalUrl } from "@posthog/ui/shell/openExternal";
 import { formatFileSize } from "@posthog/ui/utils/formatFileSize";
 import { type ReactNode, useMemo, useState } from "react";
 
+type RunFile = RunArtifact & { runId: string };
+
 type ArtifactRow =
   | { kind: "pr"; key: string; url: string }
   | { kind: "canvas"; key: string; name: string; url: string | null }
-  | {
-      kind: "file";
-      key: string;
-      artifactId: string | null;
-      name: string;
-      runId: string | null;
-      size: number | undefined;
-    }
+  | { kind: "file"; key: string; group: RunArtifactVersions<RunFile> }
   | { kind: "slack"; key: string; url: string };
 
 function readRunOutputs(run: TaskRun): RunArtifact[] {
@@ -86,32 +91,18 @@ function buildRows(
   const allRuns =
     runs.length > 0 ? runs : task.latest_run ? [task.latest_run] : [];
 
-  // Re-uploading a file replaces it rather than adding a second one: agents
-  // revise a deliverable and upload it again under the same name, so keeping
-  // every copy would bury the current one under its own drafts.
-  const newestByName = new Map<string, { file: RunArtifact; runId: string }>();
+  const files: RunFile[] = [];
   for (const run of allRuns) {
     for (const outputPr of readPrUrls(run.output)) {
       addPr(outputPr, `output-pr:${outputPr}`);
     }
-    for (const file of readRunOutputs(run)) {
-      if (!file.name) continue;
-      const previous = newestByName.get(file.name);
-      const isNewer =
-        !previous ||
-        (file.uploaded_at ?? "") >= (previous.file.uploaded_at ?? "");
-      if (isNewer) newestByName.set(file.name, { file, runId: run.id });
-    }
+    files.push(
+      ...readRunOutputs(run).map((file) => ({ ...file, runId: run.id })),
+    );
   }
-  for (const [name, { file, runId }] of newestByName) {
-    rows.push({
-      kind: "file",
-      key: `file:${file.id ?? file.storage_path ?? name}`,
-      artifactId: file.id ?? null,
-      name,
-      runId,
-      size: file.size,
-    });
+  for (const group of groupRunArtifactVersions(files)) {
+    if (group.dismissed) continue;
+    rows.push({ kind: "file", key: `file:${group.name}`, group });
   }
 
   const slackUrl = task.latest_run?.state?.slack_thread_url;
@@ -130,6 +121,7 @@ function ArtifactListRow({
   onOpen,
   onOpenExternal,
   onHoverStart,
+  trailing,
 }: {
   icon: ReactNode;
   title: string;
@@ -140,6 +132,7 @@ function ArtifactListRow({
    *  artifact in place. Absent when there is nowhere safe to send the user. */
   onOpenExternal?: () => void;
   onHoverStart?: () => void;
+  trailing?: ReactNode;
 }) {
   return (
     // overflow-hidden so each half's hover fill is clipped to the row's radius.
@@ -161,6 +154,7 @@ function ArtifactListRow({
           <ArrowSquareOutIcon size={12} className="shrink-0 text-gray-9" />
         )}
       </button>
+      {trailing}
       {onOpenExternal && (
         <button
           type="button"
@@ -241,34 +235,69 @@ function CanvasRow({ name, url }: { name: string; url: string | null }) {
 
 function FileRow({
   taskId,
-  runId,
-  artifactId,
-  name,
-  size,
+  group,
 }: {
   taskId: string;
-  runId: string | null;
-  artifactId: string | null;
-  name: string;
-  size: number | undefined;
+  group: RunArtifactVersions<RunFile>;
 }) {
   const openArtifactTab = usePanelLayoutStore((state) => state.openArtifactTab);
-  const canOpen = !!runId && !!artifactId;
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const selected = group.versions[selectedIndex] ?? group.latest;
+  const canOpen = !!selected.id;
   const onOpen = canOpen
     ? () => {
         openArtifactTab(taskId, {
-          runId: runId as string,
-          artifactId: artifactId as string,
-          name,
+          runId: selected.runId,
+          artifactId: selected.id as string,
+          name: group.name,
         });
       }
     : undefined;
+  const detail = [
+    "File",
+    formatFileSize(selected.size),
+    selected.uploaded_at ? formatRelativeTimeLong(selected.uploaded_at) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <ArtifactListRow
-      icon={<FileIcon filename={name} size={14} />}
-      title={name}
-      detail={["File", formatFileSize(size)].filter(Boolean).join(" · ")}
+      icon={<FileIcon filename={group.name} size={14} />}
+      title={group.name}
+      detail={detail}
       onOpen={onOpen}
+      trailing={
+        group.versions.length > 1 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="link-muted"
+                  size="sm"
+                  aria-label={`Choose a version of ${group.name}`}
+                >
+                  {runArtifactVersionLabel(
+                    selectedIndex,
+                    group.versions.length,
+                  )}
+                  <CaretDownIcon size={12} />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end">
+              {group.versions.map((version, index) => (
+                <DropdownMenuItem
+                  key={runArtifactVersionKey(version)}
+                  onClick={() => setSelectedIndex(index)}
+                >
+                  {runArtifactVersionLabel(index, group.versions.length)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : undefined
+      }
     />
   );
 }
@@ -319,14 +348,7 @@ export function TaskArtifactsList({
         ) : row.kind === "canvas" ? (
           <CanvasRow key={row.key} name={row.name} url={row.url} />
         ) : row.kind === "file" ? (
-          <FileRow
-            key={row.key}
-            taskId={task.id}
-            runId={row.runId}
-            artifactId={row.artifactId}
-            name={row.name}
-            size={row.size}
-          />
+          <FileRow key={row.key} taskId={task.id} group={row.group} />
         ) : (
           <ArtifactListRow
             key={row.key}
