@@ -134,6 +134,22 @@ describe("announcements schema", () => {
     ],
     ["empty hero hedgehog", { ...validAnnouncement, hero: { hedgehog: "" } }],
     [
+      "inverted schedule window",
+      {
+        ...validAnnouncement,
+        startsAt: "2026-08-12T10:00:00Z",
+        endsAt: "2026-08-05T10:00:00Z",
+      },
+    ],
+    [
+      "zero-length schedule window",
+      {
+        ...validAnnouncement,
+        startsAt: "2026-08-05T10:00:00Z",
+        endsAt: "2026-08-05T10:00:00Z",
+      },
+    ],
+    [
       "non-hex hero color",
       { ...validAnnouncement, hero: { hedgehog: "happy", color: "blue" } },
     ],
@@ -157,6 +173,23 @@ describe("announcements schema", () => {
       announcements: [validAnnouncement, { garbage: true }],
     });
     expect(result.success).toBe(false);
+  });
+
+  it("strict payload rejects duplicate ids across kinds", () => {
+    const result = announcementsPayloadSchema.safeParse({
+      announcements: [
+        validAnnouncement,
+        { ...validRequiredUpdate, id: validAnnouncement.id },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("strict payload accepts distinct ids", () => {
+    const result = announcementsPayloadSchema.safeParse({
+      announcements: [validAnnouncement, validRequiredUpdate],
+    });
+    expect(result.success).toBe(true);
   });
 
   it.each([

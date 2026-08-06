@@ -11,7 +11,7 @@ import {
 import { track } from "@posthog/ui/shell/analytics";
 import { openExternalUrl } from "@posthog/ui/shell/openExternal";
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const MANUAL_DOWNLOAD_URL = "https://github.com/PostHog/code/releases/latest";
 
@@ -23,22 +23,48 @@ const MANUAL_DOWNLOAD_URL = "https://github.com/PostHog/code/releases/latest";
 export function UpdateAction({
   analytics,
   showProgress = false,
-  onActivated,
+  onInstallHandoff,
 }: {
   analytics: AnnouncementProperties;
   showProgress?: boolean;
-  /** Fired when the user takes an update action (download/restart/manual). */
-  onActivated?: () => void;
+  /**
+   * Fired when the restart-to-install handoff begins — the last point before
+   * the app quits to apply the update. Blocking announcements record their
+   * acknowledgement here, not on earlier clicks: a failed or abandoned
+   * download must keep the announcement blocking. The manual-download link
+   * never fires this — a browser download can't confirm an install, so
+   * retirement is left to the version gate after relaunch.
+   */
+  onInstallHandoff?: () => void;
 }) {
   const { status, isEnabled, downloadPercent } = useUpdateView();
   const installUpdate = useInstallUpdate();
   const hostTRPC = useHostTRPC();
-  const { mutate: runCheck, isPending: isCheckPending } = useMutation(
-    hostTRPC.updates.check.mutationOptions(),
-  );
-  const { mutate: runDownload, isPending: isDownloadPending } = useMutation(
-    hostTRPC.updates.download.mutationOptions(),
-  );
+  // The updater's async failures aren't exposed through useUpdateView (a
+  // failed download collapses back to idle), so failures are tracked here:
+  // mutation errors directly, stream failures via the downloading→idle
+  // transition below. Without this a failed download silently re-renders
+  // the ordinary "Check for updates" state.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const { mutate: runCheck, isPending: isCheckPending } = useMutation({
+    ...hostTRPC.updates.check.mutationOptions(),
+    onError: () => setActionError("Couldn't check for updates."),
+  });
+  const { mutate: runDownload, isPending: isDownloadPending } = useMutation({
+    ...hostTRPC.updates.download.mutationOptions(),
+    onError: () => setActionError("The download failed."),
+  });
+
+  const previousStatus = useRef(status);
+  useEffect(() => {
+    const previous = previousStatus.current;
+    previousStatus.current = status;
+    if (previous === "downloading" && status === "idle") {
+      setActionError("The download didn't finish.");
+    } else if (status !== "idle") {
+      setActionError(null);
+    }
+  }, [status]);
 
   // This surface exists because an update is wanted, so make the state
   // actionable immediately instead of waiting for the hourly poll.
@@ -54,7 +80,6 @@ export function UpdateAction({
       ...analytics,
       cta_type: "update",
     });
-    onActivated?.();
   };
 
   if (!isEnabled) {
@@ -80,6 +105,7 @@ export function UpdateAction({
         disabled={status === "installing"}
         onClick={() => {
           trackClick();
+          onInstallHandoff?.();
           void installUpdate();
         }}
       >
@@ -132,10 +158,22 @@ export function UpdateAction({
   }
 
   // Idle after the kicked check means it found nothing or failed — leave the
-  // user a way to retry.
+  // user a way to retry, and say so when we know something went wrong.
   return (
-    <Button variant="outline" size="sm" onClick={() => runCheck(undefined)}>
-      Check for updates
-    </Button>
+    <div className="flex flex-col items-end gap-1">
+      {actionError && (
+        <span className="text-(--red-11) text-[11px]">{actionError}</span>
+      )}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setActionError(null);
+          runCheck(undefined);
+        }}
+      >
+        {actionError ? "Try again" : "Check for updates"}
+      </Button>
+    </div>
   );
 }

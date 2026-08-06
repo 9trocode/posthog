@@ -79,7 +79,8 @@ export const announcementSchema = z
       /**
        * Blocks until explicitly acknowledged: no dismiss, no Esc — only the
        * ack button, or the update action when the app is below minVersion
-       * (updating counts as acknowledging). Modal style only.
+       * (the ack records at the restart-to-install handoff). Modal style
+       * only.
        */
       requiresAck: z.boolean().default(false),
       /** Ack button label; the app defaults it to "OK". */
@@ -107,6 +108,19 @@ export const announcementSchema = z
         message: 'requiresAck announcements must use style: "modal"',
       });
     }
+    // An inverted window passes per-field validation but can never become
+    // eligible — the announcement would silently never show.
+    if (
+      item.startsAt &&
+      item.endsAt &&
+      Date.parse(item.startsAt) >= Date.parse(item.endsAt)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["endsAt"],
+        message: "endsAt must be after startsAt",
+      });
+    }
   });
 
 /**
@@ -118,14 +132,31 @@ export const announcementsEnvelopeSchema = z.object({
 });
 
 /** Strict payload shape — what authoring tools validate before publishing. */
-export const announcementsPayloadSchema = z.object({
-  announcements: z.array(announcementSchema),
-  /**
-   * An on-stage announcement cancels the auto-opened What's New changelog.
-   * Set false to defer it instead, showing both back to back.
-   */
-  suppressChangelog: z.boolean().default(true),
-});
+export const announcementsPayloadSchema = z
+  .object({
+    announcements: z.array(announcementSchema),
+    /**
+     * An on-stage announcement cancels the auto-opened What's New changelog.
+     * Set false to defer it instead, showing both back to back.
+     */
+    suppressChangelog: z.boolean().default(true),
+  })
+  .superRefine((payload, ctx) => {
+    // Dismissals persist per id, so a duplicate would let dismissing one
+    // item silently hide the other.
+    const seenAt = new Map<string, number>();
+    payload.announcements.forEach((item, index) => {
+      if (seenAt.has(item.id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["announcements", index, "id"],
+          message: `duplicate id "${item.id}": dismissals are keyed per id, so ids must be unique`,
+        });
+        return;
+      }
+      seenAt.set(item.id, index);
+    });
+  });
 
 const changelogInterplaySchema = z.object({
   suppressChangelog: z.boolean().default(true),

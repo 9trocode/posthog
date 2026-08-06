@@ -51,7 +51,10 @@ AGENTS.md. `LoopsPromoCard`, `UsageBillingAnnouncementModal`, and
     until the user explicitly acts: no dismiss, no Esc. Up-to-date users get
     the ack button (`ackLabel`, default "OK"); users below `minVersion` get
     the update action instead, and **updating counts as acknowledging** — the
-    ack records on the update click, so nobody re-sees it after restarting.
+    ack records when the restart-to-install handoff begins, so a failed or
+    abandoned download keeps the announcement blocking. The manual-download
+    link (updater-less platforms) never acknowledges; after relaunching on a
+    new-enough version the ack button shows instead.
 - `kind: "required-update"` — shown **only** to apps below its required
   `minVersion`: a blocking, non-dismissible modal (`RequiredUpdateModal`)
   that drives the existing update flow. Users already up to date never see

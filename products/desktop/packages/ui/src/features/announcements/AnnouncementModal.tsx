@@ -1,4 +1,12 @@
-import { Button, Dialog, DialogContent, DialogTitle } from "@posthog/quill";
+import {
+  Button,
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "@posthog/quill";
 import {
   ANALYTICS_EVENTS,
   type AnnouncementProperties,
@@ -72,56 +80,60 @@ export function AnnouncementModal({
             }
       }
     >
+      {/* DialogBody caps and scrolls the remote-length body so the actions in
+          DialogFooter stay reachable on short windows — essential when the
+          modal is blocking and the footer is the only way out. */}
       <DialogContent className="sm:max-w-md" showCloseButton={!blocking}>
         <AnnouncementHero hero={announcement.hero} defaultHedgehog="happy" />
-        <div className="flex flex-col gap-4 px-5 pt-4 pb-5">
-          <div className="flex flex-col gap-1.5">
-            <DialogTitle className="font-semibold text-[17px] text-gray-12 tracking-tight">
-              {announcement.title}
-            </DialogTitle>
-            <div className="text-[13px] text-gray-11 leading-relaxed">
-              <MarkdownRenderer content={announcement.body} />
-            </div>
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            {blocking ? (
-              needsUpdate ? (
-                <UpdateAction
-                  analytics={analytics}
-                  showProgress
-                  onActivated={() => acknowledge("update")}
-                />
-              ) : (
+        <DialogBody>
+          <DialogTitle className="font-semibold text-[17px] text-gray-12 tracking-tight">
+            {announcement.title}
+          </DialogTitle>
+          <DialogDescription
+            render={<div />}
+            className="mt-1.5 text-[13px] text-gray-11 leading-relaxed"
+          >
+            <MarkdownRenderer content={announcement.body} />
+          </DialogDescription>
+        </DialogBody>
+        <DialogFooter>
+          {blocking ? (
+            needsUpdate ? (
+              <UpdateAction
+                analytics={analytics}
+                showProgress
+                onInstallHandoff={() => acknowledge("update")}
+              />
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => acknowledge("ok")}
+              >
+                {announcement.ackLabel ?? "OK"}
+              </Button>
+            )
+          ) : (
+            <>
+              <Button variant="outline" size="sm" onClick={handleClose}>
+                Dismiss
+              </Button>
+              {needsUpdate ? (
+                <UpdateAction analytics={analytics} showProgress />
+              ) : announcement.cta ? (
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={() => acknowledge("ok")}
+                  onClick={() =>
+                    announcement.cta && handleCta(announcement.cta.url)
+                  }
                 >
-                  {announcement.ackLabel ?? "OK"}
+                  {announcement.cta.label}
                 </Button>
-              )
-            ) : (
-              <>
-                <Button variant="outline" size="sm" onClick={handleClose}>
-                  Dismiss
-                </Button>
-                {needsUpdate ? (
-                  <UpdateAction analytics={analytics} showProgress />
-                ) : announcement.cta ? (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() =>
-                      announcement.cta && handleCta(announcement.cta.url)
-                    }
-                  >
-                    {announcement.cta.label}
-                  </Button>
-                ) : null}
-              </>
-            )}
-          </div>
-        </div>
+              ) : null}
+            </>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

@@ -127,6 +127,68 @@ function HoggieImage({
   );
 }
 
+/** The colored band with pattern and hoggie — also the landing spot when a
+ * remote hero image fails to load. */
+function HedgehogBand({
+  hedgehog,
+  fallbackHedgehog,
+  color,
+}: {
+  hedgehog: string;
+  fallbackHedgehog: HedgehogName;
+  color: string;
+}) {
+  return (
+    <div
+      className="relative flex h-40 items-center justify-center"
+      style={{ backgroundColor: color }}
+    >
+      <GeometricPattern />
+      <HoggieImage key={hedgehog} slug={hedgehog} fallback={fallbackHedgehog} />
+      <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-(--background)" />
+    </div>
+  );
+}
+
+/**
+ * Remote hero image with the same graceful degradation as remote hoggies: an
+ * expired URL or offline session falls back to the default hedgehog band
+ * instead of a broken-image glyph. Keyed on the URL by the caller so the
+ * failure state resets when the payload changes.
+ */
+function ImageHero({
+  url,
+  fallbackHedgehog,
+  fallbackColor,
+}: {
+  url: string;
+  fallbackHedgehog: HedgehogName;
+  fallbackColor: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <HedgehogBand
+        hedgehog={fallbackHedgehog}
+        fallbackHedgehog={fallbackHedgehog}
+        color={fallbackColor}
+      />
+    );
+  }
+  return (
+    <div className="relative h-40 overflow-hidden">
+      <img
+        src={url}
+        alt=""
+        referrerPolicy="no-referrer"
+        className="h-full w-full object-cover"
+        onError={() => setFailed(true)}
+      />
+      <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-(--background)" />
+    </div>
+  );
+}
+
 /**
  * Modal hero band, styled after the Loops promo dialog: a colored band with a
  * hedgehog by default, a remote image when the payload provides one, nothing
@@ -145,15 +207,12 @@ export function AnnouncementHero({
 
   if (hero && "imageUrl" in hero) {
     return (
-      <div className="relative h-40 overflow-hidden">
-        <img
-          src={hero.imageUrl}
-          alt=""
-          referrerPolicy="no-referrer"
-          className="h-full w-full object-cover"
-        />
-        <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-(--background)" />
-      </div>
+      <ImageHero
+        key={hero.imageUrl}
+        url={hero.imageUrl}
+        fallbackHedgehog={defaultHedgehog}
+        fallbackColor={defaultColor}
+      />
     );
   }
 
@@ -161,13 +220,10 @@ export function AnnouncementHero({
   const color =
     (hero && "hedgehog" in hero ? hero.color : undefined) ?? defaultColor;
   return (
-    <div
-      className="relative flex h-40 items-center justify-center"
-      style={{ backgroundColor: color }}
-    >
-      <GeometricPattern />
-      <HoggieImage key={hedgehog} slug={hedgehog} fallback={defaultHedgehog} />
-      <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-(--background)" />
-    </div>
+    <HedgehogBand
+      hedgehog={hedgehog}
+      fallbackHedgehog={defaultHedgehog}
+      color={color}
+    />
   );
 }
