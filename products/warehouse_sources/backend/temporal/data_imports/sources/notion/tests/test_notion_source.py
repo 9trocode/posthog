@@ -150,16 +150,29 @@ class TestNotionSource:
             for pattern in non_retryable
         )
 
-    def test_retryable_marker_matches_raised_message(self) -> None:
-        # notion.py's _request raises this exact message on a 5xx after tenacity's internal
-        # retries exhaust; matching it here keeps that self-recovering failure out of error
-        # tracking as noise instead of being logged as an unclassified exception.
+    @parameterized.expand(
+        [
+            (
+                "5xx_after_tenacity_exhausts",
+                "Notion API error (retryable): status=522, url=https://api.notion.com/v1/comments",
+            ),
+            (
+                "ssl_eof_after_tenacity_exhausts",
+                "HTTPSConnectionPool(host='api.notion.com', port=443): Max retries exceeded with "
+                "url: /v1/blocks/abc123/children?page_size=100 (Caused by SSLError(SSLEOFError(8, "
+                "'[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol "
+                "(_ssl.c:1032)')))",
+            ),
+        ]
+    )
+    def test_retryable_marker_matches_raised_message(self, _name: str, error_message: str) -> None:
+        # notion.py's _request raises these exact messages after tenacity's internal retries
+        # exhaust (5xx, or a connection-level drop like an SSL EOF); matching them here keeps
+        # that self-recovering failure out of error tracking as noise instead of being logged
+        # as an unclassified exception.
         markers = self.source.get_retryable_errors()
         assert markers
-        assert any(
-            marker in "Notion API error (retryable): status=522, url=https://api.notion.com/v1/comments"
-            for marker in markers
-        )
+        assert any(marker in error_message for marker in markers)
 
 
 @pytest.mark.parametrize("status_code", [500, 503])

@@ -54,7 +54,13 @@ class NotionSource(ResumableSource[NotionSourceConfig, NotionResumeConfig]):
         # A 5xx is already retried internally with backoff (see notion.py's tenacity-wrapped
         # _request); if those retries still exhaust, the failure is transient and self-recovering,
         # so let Temporal retry the activity without surfacing it as tracked exception noise.
-        return {"Notion API error (retryable)"}
+        #
+        # The same tenacity retry also covers requests.ConnectionError (which SSLError subclasses)
+        # and requests.ReadTimeout. A mid-TLS-handshake drop surfaces as an SSLEOFError once that
+        # budget exhausts too — the same self-recovering condition ClickHouse already classifies
+        # this way for its own connections. Match the stable OpenSSL wording, not the url/block id
+        # it's embedded in.
+        return {"Notion API error (retryable)", "UNEXPECTED_EOF_WHILE_READING", "EOF occurred in violation of protocol"}
 
     @property
     def get_source_config(self) -> SourceConfig:
