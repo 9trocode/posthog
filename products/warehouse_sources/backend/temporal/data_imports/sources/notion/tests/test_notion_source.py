@@ -150,16 +150,35 @@ class TestNotionSource:
             for pattern in non_retryable
         )
 
-    def test_retryable_marker_matches_raised_message(self) -> None:
-        # notion.py's _request raises this exact message on a 5xx after tenacity's internal
-        # retries exhaust; matching it here keeps that self-recovering failure out of error
-        # tracking as noise instead of being logged as an unclassified exception.
+    @parameterized.expand(
+        [
+            (
+                "5xx_after_tenacity_exhausted",
+                "Notion API error (retryable): status=522, url=https://api.notion.com/v1/comments",
+            ),
+            (
+                "ssl_error_after_tenacity_exhausted",
+                "HTTPSConnectionPool(host='api.notion.com', port=443): Max retries exceeded with url: "
+                "/v1/search (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] "
+                "EOF occurred in violation of protocol (_ssl.c:1032)')))",
+            ),
+            (
+                "read_timeout_after_tenacity_exhausted",
+                "HTTPSConnectionPool(host='api.notion.com', port=443): Max retries exceeded with url: "
+                "/v1/search (Caused by ReadTimeoutError(\"HTTPSConnectionPool(host='api.notion.com', "
+                'port=443): Read timed out."))',
+            ),
+        ]
+    )
+    def test_retryable_marker_matches_raised_message(self, _name: str, error_message: str) -> None:
+        # notion.py's _request lets requests.ConnectionError (which SSLError subclasses) and
+        # requests.ReadTimeout through its tenacity retry loop; once that budget exhausts, urllib3
+        # wraps them the same way it wraps an exhausted 5xx. Matching both keeps these
+        # self-recovering failures out of error tracking as noise instead of being logged as an
+        # unclassified exception.
         markers = self.source.get_retryable_errors()
         assert markers
-        assert any(
-            marker in "Notion API error (retryable): status=522, url=https://api.notion.com/v1/comments"
-            for marker in markers
-        )
+        assert any(marker in error_message for marker in markers)
 
 
 @pytest.mark.parametrize("status_code", [500, 503])
